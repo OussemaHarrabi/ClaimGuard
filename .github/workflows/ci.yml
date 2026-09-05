@@ -109,7 +109,10 @@ jobs:
 
       - name: Audit locked dependencies (pip-audit)
         run: |
-          uv export --frozen --all-extras -o requirements-ci.txt
+          # --no-emit-project: pip-audit cannot hash the editable project line
+          # (-e .) that uv export emits by default; the project itself is not a
+          # third-party dependency to audit.
+          uv export --frozen --all-extras --no-emit-project -o requirements-ci.txt
           uvx pip-audit -r requirements-ci.txt
 
       - name: Secret scan (gitleaks)
