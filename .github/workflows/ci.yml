@@ -67,7 +67,10 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
-      DATABASE_URL: postgresql+psycopg://claimguard:claimguard@localhost:5432/claimguard
+      # claimguard.config reads the CLAIMGUARD_ prefix. DATABASE_URL is the raw
+      # DSN the integration tests connect with.
+      CLAIMGUARD_DATABASE_URL: postgresql+psycopg://claimguard:claimguard@localhost:5432/claimguard
+      DATABASE_URL: postgresql://claimguard:claimguard@localhost:5432/claimguard
     steps:
       - uses: actions/checkout@v7.0.1
 
@@ -77,6 +80,9 @@ jobs:
 
       - name: Install dependencies (locked)
         run: uv sync --all-extras
+
+      - name: Apply database migrations
+        run: uv run alembic upgrade head
 
       - name: Run tests (LLM/e2e are opt-in markers, excluded here)
         run: uv run pytest -m "not llm and not e2e" --cov=claimguard --cov-report=xml:coverage.xml --cov-report=term-missing

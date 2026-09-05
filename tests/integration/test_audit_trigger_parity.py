@@ -64,14 +64,26 @@ INSERT_SQL = """
 """
 
 
-def _db_available() -> bool:
-    try:
-        with psycopg.connect(RAW_DSN, connect_timeout=3) as conn:
-            conn.execute("SELECT 1")
-    except psycopg.OperationalError:
-        # Server unreachable / not listening — the expected "no DB" case.
-        return False
-    return True
+def _db_available(retries: int = 5, delay: float = 1.0) -> bool:
+    """Probe for a reachable Postgres, with retries.
+
+    Retries matter: in CI the service container reports 'running' before
+    Postgres has finished initialising, so a single fast probe fails and every
+    integration test silently skips — or this module errors during collection
+    because the probe raised.
+    """
+    import time
+
+    for attempt in range(retries):
+        try:
+            with psycopg.connect(RAW_DSN, connect_timeout=3) as conn:
+                conn.execute("SELECT 1")
+            return True
+        except psycopg.Error:
+            if attempt == retries - 1:
+                return False
+            time.sleep(delay)
+    return False
 
 
 pytestmark = [
