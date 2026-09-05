@@ -1,0 +1,65 @@
+# ---------------------------------------------------------------------------
+# ClaimGuard AI — repository hygiene
+# Note: uv.lock IS committed (it pins the whole environment) — deliberately
+# not ignored. .env.example is committed as the template — see the negation
+# below.
+# ---------------------------------------------------------------------------
+
+# ----- Python -------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.pyright/
+dist/
+build/
+*.egg-info/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.mutmut-cache/
+
+# ----- uv -----------------------------------------------------------------
+.uv/
+
+# ----- Node / Next.js -----------------------------------------------------
+node_modules/
+.next/
+out/
+.turbo/
+.pnpm-store/
+npm-debug.log*
+yarn-error.log*
+
+# ----- Secrets (never commit) --------------------------------------------
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.jks
+*.keystore
+
+# ----- Artifacts / benchmarks ---------------------------------------------
+artifacts/
+docs/benchmark/*.json
+
+# ----- OS -----------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*~
+
+# ----- IDE / editors ------------------------------------------------------
+.idea/
+.vscode/*
+!.vscode/settings.json.example

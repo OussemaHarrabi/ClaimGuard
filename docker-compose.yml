@@ -1,0 +1,133 @@
+# ---------------------------------------------------------------------------
+# ClaimGuard AI — local / demo stack
+#
+#   cp .env.example .env            # once (compose reads it below)
+#   docker compose up -d db otel-lgtm          # infra only (fast daily loop;
+#                                              #   run the API on the host via
+#                                              #   `uv run uvicorn claimguard.api.main:app --reload`)
+#   docker compose up -d --build               # full stack: db + otel-lgtm + api + web
+#   docker compose --profile temporal up -d    # ...plus Temporal (opt-in)
+#
+# Windows note: keep API hot-reload on the host (Docker file sharing slows
+# watch loops); Compose is for the demo / production-shaped run.
+# ---------------------------------------------------------------------------
+name: claimguard
+
+services:
+  # --- PostgreSQL 16: claims data + append-only audit log ------------------
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-claimguard}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-claimguard}
+      POSTGRES_DB: ${POSTGRES_DB:-claimguard}
+    ports:
+      - "5432:5432"
+    volumes:
+      # Named volume so data survives `docker compose down`.
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-claimguard} -d ${POSTGRES_DB:-claimguard}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # --- OpenTelemetry backend: single-container Grafana + Loki + Mimir + Tempo
+  # Grafana UI on :3000 (default admin/admin), OTLP/HTTP receiver on :4318
+  # (matches OTEL_EXPORTER_OTLP_ENDPOINT in .env.example).
+  otel-lgtm:
+    image: grafana/otel-lgtm:0.32.1
+    ports:
+      - "3000:3000"
+      - "4318:4318"
+    volumes:
+      - lgtm_data:/data
+    restart: unless-stopped
+
+  # --- FastAPI application -------------------------------------------------
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file: .env
+    environment:
+      # Container-to-container overrides: host values from `.env` would point
+      # the container at itself instead of at the `db` / `otel-lgtm` services.
+      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-claimguard}:${POSTGRES_PASSWORD:-claimguard}@db:5432/${POSTGRES_DB:-claimguard}
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+    depends_on:
+      db:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # --- Next.js frontend (under development — needs web/ + its own Dockerfile)
+  web:
+    build:
+      context: ./web
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+
+  # -------------------------------------------------------------------------
+  # Optional profile: Temporal (durable workflows) — NOT started by default.
+  # Enable with: docker compose --profile temporal up -d
+  # -------------------------------------------------------------------------
+  temporal-postgresql:
+    profiles: ["temporal"]
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: temporal
+      POSTGRES_DB: temporal
+    volumes:
+      - temporal_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U temporal"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  temporal:
+    profiles: ["temporal"]
+    image: temporalio/auto-setup:1.23.1.1
+    depends_on:
+      temporal-postgresql:
+        condition: service_healthy
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: temporal
+      POSTGRES_SEEDS: temporal-postgresql
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      SERVICES: history,matching,worker,frontend
+      LOG_LEVEL: warn
+    ports:
+      - "7233:7233"
+
+  temporal-ui:
+    profiles: ["temporal"]
+    image: temporalio/ui:2.53.3
+    depends_on:
+      - temporal
+    environment:
+      TEMPORAL_ADDRESS: temporal:7233
+      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+    ports:
+      - "8080:8080"
+
+volumes:
+  postgres_data:
+  lgtm_data:
+  temporal_postgres_data:

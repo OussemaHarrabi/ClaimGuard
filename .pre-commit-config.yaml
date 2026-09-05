@@ -1,0 +1,42 @@
+# ---------------------------------------------------------------------------
+# ClaimGuard AI — pre-commit hooks
+#
+# One-time setup:   uv run pre-commit install
+# Run on everything: uv run pre-commit run --all-files
+#
+# Python hooks use `language: system` with a `uv run` entry so they execute
+# against the project venv. The ruff version is therefore pinned by uv.lock
+# (currently ruff==0.16.6) — bump it in pyproject.toml + uv.lock, not here.
+# ---------------------------------------------------------------------------
+
+repos:
+  # --- Python quality, run through uv against the project venv -------------
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff — lint + autofix
+        entry: uv run ruff check --fix
+        language: system
+        types: [python]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff — format
+        entry: uv run ruff format
+        language: system
+        types: [python]
+        require_serial: true
+
+  # --- Generic hygiene hooks ------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        # --unsafe: allow custom YAML tags in CI / compose files
+        args: [--unsafe]
+      - id: check-json
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: detect-private-key

@@ -1,0 +1,112 @@
+# ---------------------------------------------------------------------------
+# ClaimGuard AI — CI
+#   quality  : lint (ruff) + format check (ruff) + typecheck (pyright strict)
+#   test     : pytest without the opt-in `llm` / `e2e` markers, with coverage
+#   security : locked-dependency audit (pip-audit) + secret scan (gitleaks)
+# ---------------------------------------------------------------------------
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  # Cancel superseded runs for the same branch/PR to save CI minutes.
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: quality (lint + typecheck)
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        run: uv sync --all-extras
+
+      - name: Lint — ruff check
+        run: uv run ruff check .
+
+      - name: Format — ruff format --check
+        run: uv run ruff format --check .
+
+      - name: Typecheck — pyright (strict)
+        run: uv run pyright
+
+  test:
+    name: test (unit + integration)
+    needs: quality
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+    services:
+      # Integration tests that need PostgreSQL run against this container.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: claimguard
+          POSTGRES_PASSWORD: claimguard
+          POSTGRES_DB: claimguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U claimguard -d claimguard"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql+psycopg://claimguard:claimguard@localhost:5432/claimguard
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: astral-sh/setup-uv@v10
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install dependencies (locked)
+        run: uv sync --all-extras
+
+      - name: Run tests (LLM/e2e are opt-in markers, excluded here)
+        run: uv run pytest -m "not llm and not e2e" --cov=claimguard --cov-report=xml:coverage.xml --cov-report=term-missing
+
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-python${{ matrix.python-version }}
+          path: coverage.xml
+          if-no-files-found: error
+
+  security:
+    name: security (deps + secrets)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Full history so gitleaks can scan every commit, not just HEAD.
+          fetch-depth: 0
+
+      - uses: astral-sh/setup-uv@v10
+
+      - name: Audit locked dependencies (pip-audit)
+        run: |
+          uv export --frozen --all-extras -o requirements-ci.txt
+          uvx pip-audit -r requirements-ci.txt
+
+      - name: Secret scan (gitleaks)
+        uses: gitleaks/gitleaks-action@v3
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
