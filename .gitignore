@@ -63,3 +63,5 @@ Desktop.ini
 .idea/
 .vscode/*
 !.vscode/settings.json.example
+# Local-only planning workspace (retired per-task planning docs)
+claimguard-plans-local/
