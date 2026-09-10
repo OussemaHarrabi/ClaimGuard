@@ -43,8 +43,8 @@ Read in order.
 | 04 | [`docs/04-Architecture.md`](docs/04-Architecture.md) | Architecture, ADRs, tech choices | Head + Senior dev |
 | 05 | [`docs/05-System-Design-Data-Model.md`](docs/05-System-Design-Data-Model.md) | Data model, SQL, rule YAML, API, benchmark | Implementers |
 | 06 | [`docs/06-Cahier-Des-Charges.md`](docs/06-Cahier-Des-Charges.md) | FR-001–105, NFR-001–020, UC-01–10 | Head + reviewers |
-| 07 | [`docs/07-Spec-Plan-Tasks.md`](docs/07-Spec-Plan-Tasks.md) | 104 tasks, 13 epics, cut list | Whole team |
-| 08 | [`docs/08-Team-Roles-Sprints-Backlog.md`](docs/08-Team-Roles-Sprints-Backlog.md) | Roles, RACI, sprints, per-person roadmap | Whole team |
+| 09 | [`docs/09-ARCHITECTURE-V2-Decisions.md`](docs/09-ARCHITECTURE-V2-Decisions.md) | Architecture v2 decisions, ADRs, cut list | Head + Senior dev |
+| — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | **Team plan**: the three work streams, methodology, ground rules | **Whole team — start here** |
 
 ---
 
