@@ -1,0 +1,155 @@
+"""Unit tests for the review API's configuration surface.
+
+No database and no network: this module always runs (CI included). It pins the
+three things about :mod:`claimguard.review.app` that are decided before any claim
+is evaluated — where the rule catalogue comes from, what an unmigrated database
+reports, and the input digest that identifies a claim version.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import cast
+
+import httpx
+import pytest
+from claimguard.review import app as review_app
+from claimguard.review.store import ReviewStore, SchemaNotMigratedError, envelope_digest
+from fastapi.routing import APIRoute
+
+from tests.edu import RULES_DIR
+
+pytestmark = pytest.mark.unit
+
+#: This module is otherwise pack-independent (it uses the vendored catalogue via
+#: ``tests.edu.RULES_DIR``). Only the discovery-default check below needs the real
+#: delivered pack on disk, so it carries its own guard instead of skipping the file.
+_PACK_RULES = (
+    Path(__file__).resolve().parents[2]
+    / "ClaimGuardAI_Student_Starter_Pack"
+    / "ClaimGuardAI_Student_Starter_Pack"
+    / "rules"
+)
+requires_pack = pytest.mark.skipif(
+    not (_PACK_RULES / "rules.json").is_file(),
+    reason="mentor starter pack absent (delivered reference material, not tracked in git)",
+)
+
+
+@requires_pack
+def test_the_rules_directory_defaults_to_the_pack_catalogue() -> None:
+    """With no override, the delivered pack catalogue is discovered on disk."""
+    found = review_app.resolve_rules_dir()
+    assert (found / "rules.json").is_file()
+    assert (found / "services.json").is_file()
+
+
+def test_the_rules_directory_honours_the_explicit_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(review_app.RULES_DIR_ENV, str(RULES_DIR))
+    monkeypatch.delenv(review_app.PACK_ROOT_ENV, raising=False)
+    assert review_app.resolve_rules_dir() == RULES_DIR.resolve()
+
+
+def test_the_rules_directory_honours_the_pack_root_convention(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """``CLAIMGUARD_PACK_ROOT`` is the same variable ``scripts/edu_conformance.py`` reads."""
+    rules = tmp_path / "rules"
+    rules.mkdir()
+    (rules / "rules.json").write_text("[]", encoding="utf-8")
+    monkeypatch.delenv(review_app.RULES_DIR_ENV, raising=False)
+    monkeypatch.setenv(review_app.PACK_ROOT_ENV, str(tmp_path))
+    assert review_app.resolve_rules_dir() == rules.resolve()
+
+
+def test_a_misconfigured_rules_directory_says_so(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv(review_app.RULES_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(review_app.PACK_ROOT_ENV, raising=False)
+    from claimguard.edu.policy import RuleDirError
+
+    with pytest.raises(RuleDirError):
+        review_app.resolve_rules_dir()
+
+
+def test_the_input_digest_is_canonical_but_content_sensitive() -> None:
+    """Key order and whitespace must not create a second version of the same claim."""
+    envelope = {"claim_id": "CG-1", "total_amount": 190, "notes": "synthetic"}
+    reordered = {"notes": "synthetic", "total_amount": 190, "claim_id": "CG-1"}
+    assert envelope_digest(envelope) == envelope_digest(reordered)
+    assert len(envelope_digest(envelope)) == 64
+    assert envelope_digest(envelope) != envelope_digest({**envelope, "total_amount": 191})
+    assert envelope_digest(envelope) != envelope_digest({**envelope, "notes": "Synthetic"})
+
+
+class _UnmigratedStore(ReviewStore):
+    """A store whose database has no review tables (0002 not applied)."""
+
+    def __init__(self) -> None:
+        pass
+
+    def schema_revision(self) -> str | None:
+        return None
+
+    def ensure_schema(self) -> None:
+        raise SchemaNotMigratedError(
+            "the review tables are missing: run `uv run alembic upgrade head` (migration 0002)"
+        )
+
+
+async def _client(store: ReviewStore) -> httpx.AsyncClient:
+    app = review_app.create_app(store=store, rules_dir=RULES_DIR)
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://review.test")
+
+
+async def test_an_unmigrated_database_is_reported_not_crashed() -> None:
+    """Every data route answers 503 with the command that fixes it; health stays honest."""
+    store = cast(ReviewStore, _UnmigratedStore())
+    async with await _client(store) as client:
+        health = await client.get("/v1/health")
+        assert health.status_code == 200
+        assert health.json()["status"] == "degraded"
+        assert health.json()["database"] == "schema-missing"
+        assert health.json()["rules_ready"] is True
+
+        for method, path, payload in (
+            ("get", "/v1/runs/RUN-x", None),
+            ("get", "/v1/runs/RUN-x/results", None),
+            ("get", "/v1/runs/RUN-x/decisions", None),
+            ("get", "/v1/queue", None),
+            (
+                "post",
+                "/v1/runs/RUN-x/decisions",
+                {"rule_id": "R003", "action": "confirm_issue", "actor": "r", "reason": "why"},
+            ),
+        ):
+            response = (
+                await getattr(client, method)(path, json=payload)
+                if payload
+                else await getattr(client, method)(path)
+            )
+            assert response.status_code == 503, path
+            assert "alembic upgrade head" in response.json()["detail"]
+            assert response.json()["error"] == "SchemaNotMigratedError"
+
+
+def test_the_documented_surface_is_what_is_mounted() -> None:
+    """The six operations this package promises, and no adjudication endpoint."""
+    paths = {route.path for route in review_app.app.routes if isinstance(route, APIRoute)}
+    assert paths >= {
+        "/v1/health",
+        "/v1/claims",
+        "/v1/claims/{claim_id}/recheck",
+        "/v1/runs/{run_id}",
+        "/v1/runs/{run_id}/results",
+        "/v1/runs/{run_id}/decisions",
+        "/v1/queue",
+    }
+
+
+def test_the_module_exposes_an_app_for_uvicorn() -> None:
+    assert isinstance(review_app.app, review_app.FastAPI)
+    assert review_app.app.state.store is not None

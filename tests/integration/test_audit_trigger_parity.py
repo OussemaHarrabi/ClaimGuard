@@ -124,6 +124,23 @@ def _cleanup(conn: psycopg.Connection) -> Iterator[None]:  # type: ignore[type-a
         logger.debug("audit parity cleanup failed: %s", exc)
 
 
+def _chain_head(conn: psycopg.Connection) -> str:  # type: ignore[type-arg]
+    """The ledger head right now — what the next insert must chain from.
+
+    The ledger is append-only and shared (CI's fresh database, a developer's
+    long-lived one, and the app writing real runs), so the head is a moving
+    target and asserting a literal "genesis" would only ever hold on a virgin
+    table. Reading it makes these checks test the trigger's contract instead of
+    the emptiness of the table.
+    """
+    row = conn.execute(
+        "SELECT COALESCE((SELECT chain_hash FROM claimguard.audit_events "
+        "ORDER BY at DESC, event_id DESC LIMIT 1), 'genesis')"
+    ).fetchone()
+    assert row is not None
+    return str(row[0])
+
+
 def test_python_hash_matches_trigger_hash(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
     """The core P0-3 assertion: both implementations produce the same digest."""
     at = datetime(2026, 9, 5, 12, 34, 56, 789012, tzinfo=UTC)
@@ -147,12 +164,17 @@ def test_python_hash_matches_trigger_hash(conn: psycopg.Connection) -> None:  # 
     )
 
     row = conn.execute(
-        "SELECT chain_hash FROM claimguard.audit_events WHERE event_id = %s", (event_id,)
+        "SELECT prev_hash, chain_hash FROM claimguard.audit_events WHERE event_id = %s", (event_id,)
     ).fetchone()
     assert row is not None, "trigger did not populate chain_hash"
+    stored_prev, stored_hash = str(row[0]), str(row[1])
 
+    # The trigger chains from whatever the current head is, so the expectation is
+    # seeded with the prev_hash the trigger actually stored. Asserting a literal
+    # "genesis" would only hold on a virgin table, which would couple this check to
+    # ledger emptiness instead of to the serialisation contract it exists to prove.
     expected = chain_hash(
-        prev_hash="genesis",
+        prev_hash=stored_prev,
         at=at,
         claim_ref="CLM-0042",
         trace_id="trace-parity-1",
@@ -162,9 +184,9 @@ def test_python_hash_matches_trigger_hash(conn: psycopg.Connection) -> None:  # 
         model_version="1.0",
     )
 
-    assert row[0] == expected, (
+    assert stored_hash == expected, (
         "P0-3 VIOLATION: the SQL trigger and Python chain_hash disagree.\n"
-        f"  trigger: {row[0]}\n"
+        f"  trigger: {stored_hash}\n"
         f"  python : {expected}\n"
         "Most likely cause is at::text rendering — confirm the app connection "
         "sets TimeZone=UTC."
@@ -198,12 +220,12 @@ def test_whole_second_timestamp_also_matches(conn: psycopg.Connection) -> None: 
     )
 
     row = conn.execute(
-        "SELECT chain_hash FROM claimguard.audit_events WHERE event_id = %s", (event_id,)
+        "SELECT prev_hash, chain_hash FROM claimguard.audit_events WHERE event_id = %s", (event_id,)
     ).fetchone()
     assert row is not None
 
     expected = chain_hash(
-        prev_hash="genesis",
+        prev_hash=str(row[0]),
         at=at,
         claim_ref=None,
         trace_id="trace-parity-2",
@@ -212,19 +234,22 @@ def test_whole_second_timestamp_also_matches(conn: psycopg.Connection) -> None: 
         finding_ids=[],
         model_version=None,
     )
-    assert row[0] == expected
+    assert str(row[1]) == expected
 
 
 def test_trigger_chains_from_previous_row(conn: psycopg.Connection) -> None:  # type: ignore[type-arg]
     """The second insert must chain from the first insert's stored hash."""
-    base = datetime(2026, 3, 1, 9, 0, 0, tzinfo=UTC)
+    # Far-future timestamps: the trigger chains from the newest event in the
+    # ledger, so this keeps the module's own two events at the head regardless of
+    # what else the (shared, append-only) table contains. That makes the
+    # inter-event chaining assertion below a property of the trigger rather than of
+    # how empty the database happens to be.
+    base = datetime(2999, 3, 1, 9, 0, 0, tzinfo=UTC)
+    head_before: list[str] = []
 
     for i in range(2):
-        prev = conn.execute(
-            "SELECT COALESCE((SELECT chain_hash FROM claimguard.audit_events "
-            "WHERE trace_id = 'trace-chain' ORDER BY at, event_id DESC LIMIT 1), 'genesis')"
-        ).fetchone()
-        assert prev is not None
+        head = _chain_head(conn)
+        head_before.append(head)
         conn.execute(
             INSERT_SQL,
             (
@@ -238,7 +263,7 @@ def test_trigger_chains_from_previous_row(conn: psycopg.Connection) -> None:  # 
                 [],
                 None,
                 None,
-                prev[0],
+                head,
             ),
         )
 
@@ -247,7 +272,9 @@ def test_trigger_chains_from_previous_row(conn: psycopg.Connection) -> None:  # 
         "WHERE trace_id = 'trace-chain' ORDER BY at, event_id"
     ).fetchall()
     assert len(rows) == 2
-    assert rows[0][0] == "genesis"
+    # The first event links into whatever was already there...
+    assert rows[0][0] == head_before[0]
+    # ...and the second links to the first, which is the chaining contract.
     assert rows[1][0] == rows[0][1], "second event did not chain from the first"
 
 
