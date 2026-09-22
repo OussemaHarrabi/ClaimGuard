@@ -33,6 +33,7 @@ from tests.edu import (
     attachment,
     base_claim,
     imaging_claim,
+    requires_pack,
     rules_context,
 )
 
@@ -272,6 +273,7 @@ def _gold_index(path: Path) -> dict[tuple[str, str], str]:
     return {(entry["claim_id"], entry["rule_id"]): entry["status"] for entry in load_jsonl(path)}
 
 
+@requires_pack
 def test_engine_statuses_match_pack_gold_on_development_split() -> None:
     """Replay the public development split and compare with the pack labels."""
     claims: list[dict[str, Any]] = load_jsonl(DEVELOPMENT_DIR / "claims.jsonl")

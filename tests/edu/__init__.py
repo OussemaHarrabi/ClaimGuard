@@ -1,8 +1,13 @@
-"""Shared fixtures for the pack-conformance tests of ``claimguard.edu``.
+"""Shared fixtures for the ``claimguard.edu`` engine tests.
 
-The rule catalogues are read from the mentor pack (read-only input, not our
-code): the engine cannot be conformant without the pack's ``rules/`` JSON, so
-its absence is a hard test error rather than a silent skip.
+The rule catalogue is a small read-only *input* our engine needs, so it is
+vendored under ``fixtures/pack_reference/`` (12 KB, byte-identical to the mentor
+pack, checksums in ``PROVENANCE.json``). That keeps the engine's own tests
+runnable in CI, where the mentor pack itself — large delivered reference
+material — is deliberately absent.
+
+Tests that need the pack's gold labels say so with ``@requires_pack`` and skip
+when the pack is not checked out.
 """
 
 from __future__ import annotations
@@ -10,13 +15,22 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+import pytest
 from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.policy import RuleContext
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PACK_ROOT = REPO_ROOT / "ClaimGuardAI_Student_Starter_Pack" / "ClaimGuardAI_Student_Starter_Pack"
-RULES_DIR = PACK_ROOT / "rules"
+RULES_DIR = Path(__file__).resolve().parent / "fixtures" / "pack_reference"
 DEVELOPMENT_DIR = PACK_ROOT / "data" / "development"
+
+#: Gold labels and the strict scorer live in the mentor pack, which is not
+#: tracked in git. Those checks run locally (``make edu-conformance``) and as a
+#: pre-submission gate, not in CI.
+requires_pack = pytest.mark.skipif(
+    not (DEVELOPMENT_DIR / "expected_results.jsonl").is_file(),
+    reason="mentor starter pack absent (delivered reference material, not tracked in git)",
+)
 
 _context_cache: RuleContext | None = None
 

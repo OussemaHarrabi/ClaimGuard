@@ -1,0 +1,24 @@
+{
+  "diagnoses.json": {
+    "sha256": "16fb729732e67c0e2914a293402c2d7d351d22fcf7d9769b493e72cb21b46868",
+    "bytes": 621
+  },
+  "policies.json": {
+    "sha256": "fec1b06113ea03fe48a3e3d07ec1c6aa2472b65d84c61babf55e6a73dcbe7648",
+    "bytes": 1587
+  },
+  "providers.json": {
+    "sha256": "eca93936b05b28060b30ba5490eb30f87bfa58ca391a251d981b95775b887984",
+    "bytes": 267
+  },
+  "rules.json": {
+    "sha256": "9c7a1c2995be3b01bed429d82c9da68253bf5a24f4be1027109588bf057d60a8",
+    "bytes": 8875
+  },
+  "services.json": {
+    "sha256": "12df8d75640fed7ecbdbb247120666bd00a567db4b9bd2435bf0a0468cc8ba53",
+    "bytes": 836
+  },
+  "_source": "CSTAM-VELODOC ClaimGuardAI Student Starter Pack v1.0.0 (2026-09-17), rules/ \u2014 vendored verbatim as test fixtures",
+  "_note": "Read-only engine input (rule catalogue, policies, service/provider/diagnosis reference). Copied verbatim; verified against the pack SHA256SUMS manifest."
+}

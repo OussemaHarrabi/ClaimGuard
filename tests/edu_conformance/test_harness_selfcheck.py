@@ -39,6 +39,15 @@ BASELINE = BASELINE_DIR / "baseline_dev.jsonl"
 DEV_CLAIMS = PACK_ROOT / "data" / "development" / "claims.jsonl"
 EXPECTED_DEV_RESULTS = 400 * 15
 
+#: These self-checks exercise the mentor's own scorer and gold labels, which ship
+#: in the delivered pack and are not tracked in git. They therefore run locally
+#: (``make edu-conformance``) and as a pre-submission gate, not in CI. The
+#: pointer/equality primitives below stay unguarded so CI still covers them.
+requires_pack = pytest.mark.skipif(
+    not (PACK_ROOT / "src" / "evaluate.py").is_file(),
+    reason="mentor starter pack absent (delivered reference material, not tracked in git)",
+)
+
 
 def _mutated_baseline(lines: list[str], destination: Path, mutate: Any) -> Path:
     """Write a copy of the baseline lines with one JSON object remapped."""
@@ -113,6 +122,7 @@ def load_report(workdir: Path, split: str = "development") -> dict[str, Any]:
 # ---------------------------------------------------------------------------------------
 
 
+@requires_pack
 def test_harness_accepts_the_pack_baseline(baseline_lines: list[str], tmp_path: Path) -> None:
     completed = run_harness(BASELINE, tmp_path)
     assert completed.returncode == 0, completed.stdout + completed.stderr
@@ -152,6 +162,7 @@ def test_harness_accepts_the_pack_baseline(baseline_lines: list[str], tmp_path: 
 # ---------------------------------------------------------------------------------------
 
 
+@requires_pack
 def test_fabricated_evidence_value_is_rejected(baseline_lines: list[str], tmp_path: Path) -> None:
     def fabricate(rows: list[dict[str, Any]]) -> None:
         rows[0]["evidence"][0]["value"] = "INVENTED"
@@ -171,6 +182,7 @@ def test_fabricated_evidence_value_is_rejected(baseline_lines: list[str], tmp_pa
     assert any("independent admissibility" in reason for reason in report["failure_reasons"])
 
 
+@requires_pack
 def test_missing_claim_rule_pair_is_rejected(baseline_lines: list[str], tmp_path: Path) -> None:
     pred = tmp_path / "missing_pair.jsonl"
     pred.write_text("\n".join(baseline_lines[:-1]) + "\n", encoding="utf-8")
@@ -189,6 +201,7 @@ def test_missing_claim_rule_pair_is_rejected(baseline_lines: list[str], tmp_path
 # ---------------------------------------------------------------------------------------
 
 
+@requires_pack
 def test_independent_check_catches_a_contract_break_the_oracle_ignores(
     baseline_lines: list[str], tmp_path: Path
 ) -> None:
@@ -212,6 +225,7 @@ def test_independent_check_catches_a_contract_break_the_oracle_ignores(
 # ---------------------------------------------------------------------------------------
 
 
+@requires_pack
 def test_accuracy_gate_is_configurable(baseline_lines: list[str], tmp_path: Path) -> None:
     strict = run_harness(BASELINE, tmp_path / "strict", "--accuracy-scope", "total")
     assert strict.returncode != 0
@@ -227,6 +241,7 @@ def test_accuracy_gate_is_configurable(baseline_lines: list[str], tmp_path: Path
     assert disabled.returncode == 0, disabled.stdout + disabled.stderr
 
 
+@requires_pack
 def test_all_requires_one_predictions_file_per_split(tmp_path: Path) -> None:
     completed = run_harness(BASELINE, tmp_path, "--all", split=None)
     assert completed.returncode == 2
@@ -271,6 +286,7 @@ def test_json_equality_is_type_exact() -> None:
     assert not json_equal([1, 2], [2, 1])
 
 
+@requires_pack
 def test_independent_check_flags_contract_violations_on_real_pack_data() -> None:
     claim: dict[str, Any] = json.loads(DEV_CLAIMS.read_text(encoding="utf-8").splitlines()[0])
     line_ids = [line["line_id"] for line in claim["lines"]]
@@ -324,6 +340,7 @@ def test_independent_check_flags_contract_violations_on_real_pack_data() -> None
     assert independent_check(not_implemented, [claim]).ok is True
 
 
+@requires_pack
 def test_stale_oracle_metrics_are_caught_by_the_cross_check() -> None:
     problems: list[str] = []
     metrics: dict[str, Any] = {

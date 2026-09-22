@@ -165,3 +165,25 @@ stale-metrics cross-check).
 7. **Split selection is fixed** to the three shipped splits (`development|validation|stress`); the
    mentor's private 200 held-out claims (docs/07) are not reachable and cannot be substituted,
    which is exactly why an oracle-independent harness is the strongest available evidence today.
+
+## CI behaviour and vendored fixtures
+
+The mentor pack is delivered reference material: it is **not tracked in git** (`.gitignore`) and is
+**excluded from the lint/type gates** (`[tool.ruff]` / `[tool.pyright]` in `pyproject.toml`), because
+it ships its own formatting, its own tooling and its own `SHA256SUMS.json` manifest.
+
+That splits the suite into two tiers, so CI stays honest and green:
+
+| Tier | Needs the pack? | Where it runs |
+|---|---|---|
+| Engine logic and contract tests (`tests/edu`, 137 tests) | No — the rule catalogue is vendored | CI **and** locally |
+| Pack-graded checks: gold-label replay and every harness self-check (`tests/edu_conformance`, 8 tests + 1 engine test) | Yes — gold labels and the strict scorer | Locally and as a pre-submission gate (`make edu-conformance`); they report **skipped** in CI |
+
+The catalogue our engine needs is a 12 KB read-only input, so it is vendored verbatim under
+`tests/edu/fixtures/pack_reference/` with checksums in `PROVENANCE.json`. Vendoring was verified:
+running the engine against the vendored catalogue reproduces the same oracle result as running it
+against the pack's own `rules/` directory (`status_accuracy 1.0000`, `fp 0`, `fn 0`).
+
+**Consequence to state plainly:** CI green does *not* prove mentor-scorer conformance. The
+oracle-graded run is a mandatory local step before any submission — `make edu-conformance` must be
+part of the freeze checklist.
