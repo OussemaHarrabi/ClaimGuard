@@ -17,7 +17,13 @@ from collections.abc import Mapping, Sequence
 from decimal import Decimal
 from typing import Any
 
-from claimguard.edu.emit import NOT_APPLICABLE, SATISFIED, format_findings, make_result
+from claimguard.edu.emit import (
+    NOT_APPLICABLE,
+    SATISFIED,
+    format_findings,
+    format_findings_with_uncertainty,
+    make_result,
+)
 from claimguard.edu.envelope import (
     MONEY_TOLERANCE,
     Claim,
@@ -34,6 +40,9 @@ from claimguard.edu.policy import RuleContext
 
 UNKNOWN_AUTH_SERVICE = "Unknown service prevents authorization requirement lookup"
 UNKNOWN_DOCUMENT_SERVICE = "Unknown service prevents document requirement lookup"
+#: R013's abstention reason, used both when the rule abstains and when it reports
+#: FAIL while another line's limits are unknowable (docs/04_Rulebook.md:10).
+UNKNOWN_SERVICE_LIMITS = "Unknown service limits"
 NO_POLICY = "No policy is supplied for this policy_id."
 
 
@@ -63,9 +72,10 @@ def r008(claim: Claim, ctx: RuleContext) -> Result:
             for pointer in (f"/lines/{index}/service_code", f"/lines/{index}/authorization_id")
         ]
         line_ids = [line["line_id"] for _, line in missing]
-        return make_result(
-            claim, meta, Status.FAIL, "Required authorization ID missing", pointers, line_ids
-        )
+        message = "Required authorization ID missing"
+        if unknown:
+            message += "; Additional unknown inputs: " + UNKNOWN_AUTH_SERVICE
+        return make_result(claim, meta, Status.FAIL, message, pointers, line_ids)
     if not required:
         if unknown:
             unknown_pointers = [f"/lines/{index}/service_code" for index in unknown]
@@ -152,7 +162,14 @@ def r009(claim: Claim, ctx: RuleContext) -> Result:
                 findings.append("Aggregate quantity exceeds authorization")
                 line_ids.append(line["line_id"])
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers, line_ids)
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+            line_ids,
+        )
     if not required:
         if unknown:
             pointers.extend(f"/lines/{index}/service_code" for index in unknown)
@@ -223,7 +240,14 @@ def r010(claim: Claim, ctx: RuleContext) -> Result:
         elif not any(attachment["document_status"] == "final" for attachment in matching):
             unknowns.append("Only draft or uncertain matching documentation")
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers, line_ids)
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+            line_ids,
+        )
     if not required:
         if unknown:
             pointers.extend(f"/lines/{index}/service_code" for index in unknown)
@@ -256,7 +280,14 @@ def r011(claim: Claim, ctx: RuleContext) -> Result:
             findings.append("Service code not in fictional catalogue")
             line_ids.append(line["line_id"])
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers, line_ids)
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+            line_ids,
+        )
     if unknowns:
         return make_result(
             claim, meta, Status.UNABLE_TO_ASSESS, format_findings(unknowns), pointers
@@ -311,7 +342,7 @@ def r013(claim: Claim, ctx: RuleContext) -> Result:
     line_ids: list[str] = []
     for index, line in enumerate(lines):
         if index in unknown:
-            unknowns.append("Unknown service limits")
+            unknowns.append(UNKNOWN_SERVICE_LIMITS)
             continue
         quantity = line["quantity"]
         unit_price = line["unit_price"]
@@ -321,7 +352,7 @@ def r013(claim: Claim, ctx: RuleContext) -> Result:
         max_quantity = policy.max_quantity_for(line["service_code"])
         max_price = policy.max_price_for(line["service_code"])
         if max_quantity is None or max_price is None:
-            unknowns.append("Unknown service limits")
+            unknowns.append(UNKNOWN_SERVICE_LIMITS)
             continue
         line_findings: list[str] = []
         if to_decimal(quantity) > to_decimal(max_quantity):
@@ -336,7 +367,14 @@ def r013(claim: Claim, ctx: RuleContext) -> Result:
             findings.extend(line_findings)
             line_ids.append(line["line_id"])
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers, line_ids)
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+            line_ids,
+        )
     if unknowns:
         return make_result(
             claim, meta, Status.UNABLE_TO_ASSESS, format_findings(unknowns), pointers

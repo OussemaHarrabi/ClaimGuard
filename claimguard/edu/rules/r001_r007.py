@@ -15,7 +15,12 @@ from __future__ import annotations
 
 from typing import Any, Final
 
-from claimguard.edu.emit import SATISFIED, format_findings, make_result
+from claimguard.edu.emit import (
+    SATISFIED,
+    format_findings,
+    format_findings_with_uncertainty,
+    make_result,
+)
 from claimguard.edu.envelope import (
     MONEY_TOLERANCE,
     Claim,
@@ -40,6 +45,10 @@ REQUIRED_LINE_FIELDS: Final = (
 )
 #: The duplicate key triple of R006 (docs/04_Rulebook.md:82).
 DUPLICATE_KEY_FIELDS: Final = ("service_code", "service_date", "modifier")
+
+#: R007's abstention reason, used both when the rule abstains and when it reports
+#: FAIL while another line's arithmetic input is missing (docs/04_Rulebook.md:10).
+ARITHMETIC_INPUT_MISSING: Final = "Arithmetic input missing"
 
 
 def r001(claim: Claim, ctx: RuleContext) -> Result:
@@ -90,7 +99,14 @@ def r002(claim: Claim, ctx: RuleContext) -> Result:
             findings.append("Service occurs after submission")
             line_ids.append(line["line_id"])
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers, line_ids)
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+            line_ids,
+        )
     if unknowns:
         return make_result(
             claim, meta, Status.UNABLE_TO_ASSESS, format_findings(unknowns), pointers
@@ -135,7 +151,18 @@ def r003(claim: Claim, ctx: RuleContext) -> Result:
             findings.append("service outside coverage period")
             line_ids.append(line["line_id"])
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers, line_ids)
+        # A proven violation gives FAIL, but the concurrent abstention reasons are
+        # preserved in the explanation (docs/04_Rulebook.md:10). The wording mirrors
+        # the mentor reference, which appends "Additional unknown inputs: ..."
+        # (pack src/engine_core.py, R003).
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+            line_ids,
+        )
     if unknowns:
         return make_result(
             claim, meta, Status.UNABLE_TO_ASSESS, format_findings(unknowns), pointers
@@ -175,7 +202,13 @@ def r004(claim: Claim, ctx: RuleContext) -> Result:
         elif claimed != recorded:
             findings.append("Patient or member identifier mismatch")
     if findings:
-        return make_result(claim, meta, Status.FAIL, format_findings(findings), pointers)
+        return make_result(
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(findings, unknowns),
+            pointers,
+        )
     if unknowns:
         return make_result(
             claim, meta, Status.UNABLE_TO_ASSESS, format_findings(unknowns), pointers
@@ -235,9 +268,13 @@ def r006(claim: Claim, ctx: RuleContext) -> Result:
             f"/lines/{index}/{field}" for index in indices for field in DUPLICATE_KEY_FIELDS
         ]
         line_ids = [claim["lines"][index]["line_id"] for index in indices]
-        return make_result(
-            claim, meta, Status.FAIL, "Possible duplicate lines require review.", pointers, line_ids
-        )
+        # Preserve the concurrent uncertainty even though a duplicate was proven
+        # (docs/04_Rulebook.md:10); wording mirrors the mentor reference
+        # (pack src/engine_core.py, R006).
+        message = "Possible duplicate lines require review."
+        if incomplete:
+            message += " Additional lines have missing inputs."
+        return make_result(claim, meta, Status.FAIL, message, pointers, line_ids)
     if incomplete:
         return make_result(
             claim,
@@ -284,10 +321,21 @@ def r007(claim: Claim, ctx: RuleContext) -> Result:
             line_ids.append(line["line_id"])
     if findings:
         return make_result(
-            claim, meta, Status.FAIL, format_findings(findings), pointers or ["/lines"], line_ids
+            claim,
+            meta,
+            Status.FAIL,
+            format_findings_with_uncertainty(
+                findings, [ARITHMETIC_INPUT_MISSING] if incomplete else []
+            ),
+            pointers or ["/lines"],
+            line_ids,
         )
     if incomplete:
         return make_result(
-            claim, meta, Status.UNABLE_TO_ASSESS, "Arithmetic input missing", pointers or ["/lines"]
+            claim,
+            meta,
+            Status.UNABLE_TO_ASSESS,
+            ARITHMETIC_INPUT_MISSING,
+            pointers or ["/lines"],
         )
     return make_result(claim, meta, Status.PASS, SATISFIED, pointers or ["/lines"])

@@ -52,6 +52,25 @@ def format_findings(messages: Iterable[str]) -> str:
     return "; ".join(sorted(set(messages)))
 
 
+def format_findings_with_uncertainty(findings: Iterable[str], unknowns: Iterable[str]) -> str:
+    """Join proven findings, keeping concurrent abstention reasons visible.
+
+    The rulebook's precedence convention ends with: *"Preserve uncertainty in the
+    explanation even when a different line proves a failure"*
+    (docs/04_Rulebook.md:10). A rule that returns FAIL while another line is
+    merely unknown must therefore still say what it could not assess — otherwise
+    the reviewer cannot tell a clean FAIL from an incomplete one. The wording
+    mirrors the mentor's own reference implementation (pack ``src/engine_core.py``,
+    R003), which appends ``"; Additional unknown inputs: ..."`` to the failing
+    message.
+    """
+    message = format_findings(findings)
+    extra = sorted(set(unknowns))
+    if extra:
+        message += "; Additional unknown inputs: " + ", ".join(extra)
+    return message
+
+
 def make_result(
     claim: Claim,
     meta: RuleMeta,
