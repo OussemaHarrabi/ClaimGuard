@@ -44,6 +44,8 @@ Read in order.
 | 05 | [`docs/05-System-Design-Data-Model.md`](docs/05-System-Design-Data-Model.md) | Data model, SQL, rule YAML, API, benchmark | Implementers |
 | 06 | [`docs/06-Cahier-Des-Charges.md`](docs/06-Cahier-Des-Charges.md) | FR-001–105, NFR-001–020, UC-01–10 | Head + reviewers |
 | 09 | [`docs/09-ARCHITECTURE-V2-Decisions.md`](docs/09-ARCHITECTURE-V2-Decisions.md) | Architecture v2 decisions, ADRs, cut list | Head + Senior dev |
+| 10 | [`docs/10-ADR-Starter-Pack-Authority.md`](docs/10-ADR-Starter-Pack-Authority.md) | **Which contract is graded**: mentor pack R001–R015, and what it supersedes | **Whole team** |
+| — | [`docs/verification/EDU-PACK-CONFORMANCE.md`](docs/verification/EDU-PACK-CONFORMANCE.md) | How the pack-graded conformance run is verified (oracle + second opinion) | Reviewer |
 | — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | **Team plan**: the three work streams, methodology, ground rules | **Whole team — start here** |
 
 ---
