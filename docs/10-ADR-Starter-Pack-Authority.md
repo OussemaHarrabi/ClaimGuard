@@ -124,15 +124,29 @@ treated as proposals, exactly as the pack itself states.
 
 ## 7. Current compliance status
 
+Every row below was re-verified by the lead with pasted command output; nothing
+here is an agent's claim. Detail: `docs/verification/EDU-PACK-CONFORMANCE.md` and
+`docs/verification/EDU-EVALUATION-REPORT.md`.
+
 | Obligation | Status |
 |---|---|
 | Pack contract implemented (`claimguard/edu/`, 15 rules) | **Done** — verified |
-| Mentor scorer: development / validation / stress | **1.0000 / 1.0000 / 1.0000**, exit 0 |
-| Independent harness second opinion | **CONFORMANT**, 0 problems |
-| Ingestion-error quarantine path | **Done** — verified with an injected malformed line and a missing key |
-| Untrusted text cannot change a status | **Done** — 3 tests |
-| Edge-case suite (rulebook edges gold cannot reach) | **Outstanding** |
-| Minimal API + review flow + run-level audit events | **Outstanding** |
-| Bounded explanation layer + citation verification | **Outstanding** |
-| FHIR integration demonstration | **Outstanding** |
-| Evaluation report + reproducibility package | **Outstanding** |
+| Mentor scorer: development / validation / stress | **1.0000 / 1.0000 / 1.0000**, exit 0, fp 0, fn 0, 0 missed abstentions |
+| Independent harness second opinion | **CONFORMANT** × 3, 0 problems |
+| Ingestion-error quarantine path | **Done** — injected malformed line + missing key → structured errors, exit 2, no invented PASS |
+| Untrusted text cannot change a status | **Done** — notes and attachment text proven inert |
+| Edge-case suite (rulebook edges gold cannot reach) | **Done** — 38 tests, all 14 edges, 16 mutation probes proving they discriminate |
+| CSV intake (MVP behaviour 1) | **Done** — rebuild is byte-equal to the pack JSONL; 0 status mismatches on all splits |
+| FHIR mapping demonstration (MVP behaviour 1) | **Done** — 30 of 41 leaf paths projected; the other 11 reported as unsupported, never invented |
+| Review queue + four decisions (MVP behaviours 4, 5) | **Done** — verified end to end; malformed decisions 422, valid 201 |
+| Run-level audit of checks and decisions (MVP behaviour 7) | **Done** — new tables + events in the existing hash-chained ledger |
+| Bounded AI explanation + citation verification (MVP behaviour 6) | **Done** — adversarial outputs rejected; model failure changes 0 statuses |
+| Evaluation report (MVP behaviour 8) | **Done** — refuses to report a rejected run; baseline ablation included |
+| Reproducibility package (README, diagrams, demo video, pitch) | **Outstanding** — due at the Phase-1/Phase-3 gates |
+| Held-out assessment (the mentor's 200 claims) | **Outstanding** — not reachable by us by design |
+
+**Honest limits carried forward:** the public labels cannot discriminate several
+rulebook edges, so a wrong implementation could still score 1.0000; evidence-value
+checks do not prove the cited field is *relevant*; explanation quality is scored by
+hand; and CI green does not prove mentor-scorer conformance, which is why
+`make edu-conformance` is a mandatory step in the freeze checklist.
