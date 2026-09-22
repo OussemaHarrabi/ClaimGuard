@@ -77,7 +77,15 @@ packages = ["claimguard"]
 target-version = "py311"
 line-length = 100
 src = ["claimguard", "tests"]
-exclude = [".venv", "web", "alembic_versions_archive"]
+# The mentor-delivered benchmark pack is third-party material (its own formatting
+# and its own SHA256SUMS manifest). It is reference data, never our source — so
+# it is excluded from our gates rather than reformatted.
+exclude = [
+    ".venv",
+    "web",
+    "alembic_versions_archive",
+    "ClaimGuardAI_Student_Starter_Pack",
+]
 
 [tool.ruff.lint]
 select = [
@@ -116,7 +124,7 @@ docstring-code-format = true
 # ---------------------------------------------------------------------------
 [tool.pyright]
 include = ["claimguard", "tests"]
-exclude = ["**/__pycache__", "web", ".venv"]
+exclude = ["**/__pycache__", "web", ".venv", "ClaimGuardAI_Student_Starter_Pack"]
 pythonVersion = "3.11"
 typeCheckingMode = "strict"
 reportMissingTypeStubs = false      # many deps ship no stubs; don't fail the build

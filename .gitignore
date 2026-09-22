@@ -52,6 +52,13 @@ yarn-error.log*
 artifacts/
 docs/benchmark/*.json
 
+# ----- Mentor-delivered material (reference only, never our source) -------
+# The CSTAM-VELODOC starter pack ships its own tooling, formatting and
+# SHA256SUMS manifest. It is the grading oracle we run locally; it is not part
+# of our product source, so it is not tracked and not linted/typed.
+ClaimGuardAI_Student_Starter_Pack/
+ClaimGuardAI_Student_Starter_Pack.zip
+
 # ----- OS -----------------------------------------------------------------
 .DS_Store
 Thumbs.db

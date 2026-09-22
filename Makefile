@@ -8,7 +8,14 @@
 UV      ?= uv
 COMPOSE ?= docker compose
 
-.PHONY: install lint typecheck test test-all migrate seed demo-smoke up down
+# Mentor-delivered benchmark pack (reference material — gitignored, not our source).
+# It is the grading oracle: `make conformance` grades our engine with the mentor's
+# own strict scorer plus an independently implemented second opinion.
+PACK ?= ClaimGuardAI_Student_Starter_Pack/ClaimGuardAI_Student_Starter_Pack
+OUT  ?= artifacts/edu
+
+.PHONY: install lint typecheck test test-all migrate \
+        edu-run edu-conformance up down
 
 install: ## Install all dependencies (project + extras) into the project venv
 	$(UV) sync --all-extras
@@ -29,11 +36,14 @@ test-all: ## Full suite — requires live infra (DB, and LLM for e2e/llm markers
 migrate: ## Apply Alembic migrations to the local database
 	$(UV) run alembic upgrade head
 
-seed: ## Load synthetic (Velodoc) demo data into the local database
-	$(UV) run claimguard seed
+edu-run: ## Run our 15-rule engine over all three mentor-pack splits
+	@mkdir -p "$(OUT)"
+	$(UV) run python -m claimguard.edu.run --claims "$(PACK)/data/development/claims.jsonl" --rules-dir "$(PACK)/rules" --output "$(OUT)/development.jsonl"
+	$(UV) run python -m claimguard.edu.run --claims "$(PACK)/data/validation/claims.jsonl"  --rules-dir "$(PACK)/rules" --output "$(OUT)/validation.jsonl"
+	$(UV) run python -m claimguard.edu.run --claims "$(PACK)/data/stress/claims.jsonl"      --rules-dir "$(PACK)/rules" --output "$(OUT)/stress.jsonl"
 
-demo-smoke: ## End-to-end smoke run of the demo pipeline (no LLM)
-	$(UV) run claimguard demo-smoke
+edu-conformance: edu-run ## Grade our output with the mentor's scorer + an independent second opinion
+	$(UV) run python scripts/edu_conformance.py --pred "$(OUT)/{split}.jsonl" --all
 
 up: ## Build and start the full stack — db, otel-lgtm, api, web
 	$(COMPOSE) up --build -d
