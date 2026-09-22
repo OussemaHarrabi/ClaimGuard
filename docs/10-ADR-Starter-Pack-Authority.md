@@ -1,6 +1,6 @@
 # 10 — ADR: Mentor starter pack is the assessment contract (and how it coexists with our build)
 
-> **Status:** Proposed — awaiting Head-of-Project sign-off.
+> **Status:** **Accepted** — signed off by the Head-of-Project, 2026-09-22.
 > **Date:** 2026-09-22 · **Owner:** HeadOfProject
 > **Supersedes:** the rule-catalogue and output-contract assumptions in `03` §2 (`COV-001…ENV-001`,
 > merged 16-entry table), `05` §5–§7 (YAML+CEL catalogue, self-built mutation benchmark) and
