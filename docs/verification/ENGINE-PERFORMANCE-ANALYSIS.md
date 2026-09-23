@@ -26,7 +26,9 @@ what the mentor's 200 held-out claims would settle.
 The number that counts is produced by the mentor pack's own strict scorer,
 `<pack>/src/evaluate.py`. It is executed as a subprocess and its exit code is the verdict
 (0 = the predictions are admissible). We do not re-implement the metric and call it a result.
-Its comparison logic, verbatim from the shipped file (`<pack>/src/evaluate.py`, `score()`), is:
+Its comparison logic, quoted from the shipped file (`<pack>/src/evaluate.py`, `score()`) — the
+statements are unchanged, only reformatted by our formatter so the document passes the same gate as
+our code — is:
 
 ```python
 tp = sum(g[k]["status"] == "FAIL" and p[k]["status"] == "FAIL" for k in keys)
