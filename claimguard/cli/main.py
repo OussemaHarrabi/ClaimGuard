@@ -11,7 +11,7 @@ import argparse
 from collections.abc import Callable, Sequence
 from typing import cast
 
-from claimguard.cli import evaluate, report, serve, status
+from claimguard.cli import evaluate, judge, report, serve, status
 from claimguard.cli.evaluate import DEFAULT_WORKDIR as EVALUATE_WORKDIR
 from claimguard.cli.serve import DEFAULT_HOST, DEFAULT_PORT
 from claimguard.cli.tooling import SPLITS
@@ -23,6 +23,7 @@ COMMANDS: dict[str, Callable[[argparse.Namespace], int]] = {
     "serve": serve.run,
     "evaluate": evaluate.run,
     "report": report.run,
+    "judge": judge.run,
 }
 
 EPILOG = """\
@@ -30,6 +31,7 @@ exit codes
   status    0 ready, 1 degraded (a check failed; the reason is printed)
   evaluate  0 conformant, 1 non-conformant, 2 refused (missing pack, or the engine failed)
   report    0 written and conformant, 1 written but non-conformant, 2 refused
+  judge     0 ran, 1 the judge was configured and failed, 2 refused (no key, no catalogue)
   serve     uvicorn's own
 
 examples
@@ -37,6 +39,9 @@ examples
   claimguard serve --reload
   claimguard evaluate --split all
   claimguard report --split development --output docs/verification/EDU-EVALUATION-REPORT.md
+  claimguard judge probe
+  claimguard judge assess --results artifacts/edu/development.jsonl \\
+      --claims <pack>/data/development/claims.jsonl --output artifacts/edu/judge.jsonl
 """
 
 
@@ -137,6 +142,48 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="also score the pack's own baseline for the reference comparison",
+    )
+
+    judge_parser = subparsers.add_parser(
+        "judge",
+        help="advisory second opinion: probe the TypeSafe Jev credential, or judge results",
+        description=(
+            "Run the advisory judge layer. It is OUTSIDE the graded contract: it reads "
+            "validated result records, asks Jev three bounded questions about each finding, "
+            "and writes its own sidecar keyed by (claim_id, rule_id). It never changes a "
+            "status, a severity, an evidence pointer, a corrective action or any routing. "
+            "With no CLAIMGUARD_TYPESAFE_API_KEY configured it makes no request at all and "
+            "records every assessment as skipped."
+        ),
+    )
+    judge_actions = judge_parser.add_subparsers(dest="action", metavar="<action>", required=True)
+    judge_actions.add_parser(
+        "probe",
+        help="verify access and list the models this credential can use (GET /v1/models)",
+        description=(
+            "The first command to run once the key arrives: it proves the credential works "
+            "and shows the model names that actually exist, so CLAIMGUARD_JEV_MODEL can be "
+            "set to a real one instead of the jev-latest default."
+        ),
+    )
+    assess_parser = judge_actions.add_parser(
+        "assess",
+        help="judge validated result records and write the advisory sidecar",
+        description=(
+            "Judge every record of --results, which must be validated 15-key records, and "
+            "write one assessment per record to --output. Evidence is re-resolved against "
+            "--claims first: a finding whose evidence does not verify is skipped, never sent."
+        ),
+    )
+    assess_parser.add_argument("--results", required=True, help="engine results JSONL")
+    assess_parser.add_argument(
+        "--claims", required=True, help="the claim envelopes those results describe"
+    )
+    assess_parser.add_argument("--output", required=True, help="advisory sidecar JSONL")
+    assess_parser.add_argument(
+        "--rules-dir",
+        default=None,
+        help="rule catalogue directory (default: CLAIMGUARD_RULES_DIR, then the pack)",
     )
     return parser
 
