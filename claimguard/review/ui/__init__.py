@@ -33,8 +33,15 @@ WHAT THE PAGE IS NOT
     without one.
 *   It is **not an adjudication surface**. There is no approve, deny, pay or
     submit-to-payer control, because the API has no such operation.
+*   It **marks the wording, never the verdict**. Each explanation carries the
+    provenance the API serves beside the record
+    (``GET /v1/runs/{run_id}/results`` → ``explanations``): deterministic text,
+    model-assisted wording, or a fallback where the deterministic text stands
+    because the model path did not deliver. The marker says nothing about the
+    status above it, which is the engine's and always was.
 *   It is **not a rendering surface for HTML**. Claim text (``notes``), attachment
-    ``text``, rule ``explanation``/``corrective_action`` and API error bodies are
+    ``text``, rule ``explanation``/``corrective_action``, explanation-provenance
+    values (which can quote a model's malformed output) and API error bodies are
     untrusted data: ``render.mjs`` writes them with ``textContent`` only, never as
     markup (see that file's untrusted-data policy comment).
 *   It **cannot show the submitted envelope**, because no endpoint returns it.

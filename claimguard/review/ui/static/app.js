@@ -95,6 +95,13 @@ async function openClaim(runId, claimId) {
   const history = await api(`/v1/runs/${encodeURIComponent(runId)}/decisions`);
   const entries = history.ok ? history.body : { run_id: runId, entries: [] };
   const reviews = render.latestReviewByRule(entries);
+  // The API's own provenance for each explanation, served beside the records
+  // (`explanations`), keyed here by rule id so a finding can show whether the
+  // text a reviewer is reading is deterministic or model-assisted.
+  const provenanceByRule = {};
+  for (const entry of results.body.explanations || []) {
+    provenanceByRule[entry.rule_id] = entry;
+  }
 
   byId("detail-meta").replaceChildren(
     render.renderRunHeader(document, run),
@@ -109,7 +116,13 @@ async function openClaim(runId, claimId) {
   const findings = document.createElement("div");
   findings.className = "findings";
   for (const record of results.body.results) {
-    findings.append(render.renderFinding(document, record, { review: reviews[record.rule_id], onDecide: decide }));
+    findings.append(
+      render.renderFinding(document, record, {
+        review: reviews[record.rule_id],
+        explanation: provenanceByRule[record.rule_id],
+        onDecide: decide,
+      }),
+    );
   }
   byId("detail-findings").replaceChildren(findings);
 

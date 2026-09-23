@@ -342,6 +342,37 @@ th {
   margin: 8px 0 4px;
 }
 
+/*
+ * The provenance marker: it describes the WORDING of the explanation above, and
+ * is styled as a quiet annotation rather than a status badge, so it can never be
+ * mistaken for the engine's verdict.
+ */
+.provenance {
+  font-size: 12px;
+  margin: 0 0 8px;
+}
+
+.provenance-marker {
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.provenance-deterministic {
+  background: #eef4fb;
+  color: var(--muted);
+  border: 1px solid var(--line);
+}
+
+.provenance-model {
+  background: #fff4e5;
+  color: #8a5300;
+  border: 1px solid #f0d3a8;
+}
+
+.provenance-fallback {
+  color: var(--fail);
+}
+
 .corrective {
   margin: 0 0 8px;
 }

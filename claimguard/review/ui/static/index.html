@@ -108,6 +108,13 @@
 
       <section class="panel">
         <h2>2. Claim detail — all 15 checks</h2>
+        <p class="muted">
+          Each explanation carries a provenance marker. <em>Deterministic wording</em> means no
+          model was used at all; <em>model-assisted wording</em> means a model drafted the
+          sentence, and the status above it is still the engine's. Where a marker says
+          <em>fallback</em>, the deterministic text is what is being shown, because the model path
+          did not deliver it — a model failure never removes a finding and never changes a status.
+        </p>
         <div id="detail-error"></div>
         <div id="detail-meta"></div>
         <label class="actor-field">

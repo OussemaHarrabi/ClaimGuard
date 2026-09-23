@@ -6,17 +6,25 @@ rewrite a check result:
 
 *   :mod:`claimguard.review.models` — the reviewer contracts. The 15-key engine
     record (validated by the engine's own model), a run's identity and versions,
-    the finding view with its review state, and exactly the pack's 7-key
-    ``review_event`` decided by a four-action state machine.
+    the finding view with its review state, exactly the pack's 7-key
+    ``review_event`` decided by a four-action state machine, and the provenance
+    of each reviewer-facing explanation (which travels *beside* the 15-key
+    record, never inside it).
 *   :mod:`claimguard.review.store` — PostgreSQL persistence for runs, the 15
-    records per run and the append-only decision ledger, over migration
-    ``0002_review_workflow.sql`` (additive; migration 0001 is untouched).
+    records per run, the explanation-provenance sidecar and the append-only
+    decision ledger, over migrations ``0002_review_workflow.sql`` and
+    ``0003_explanation_provenance.sql`` (additive; migration 0001 is untouched).
+*   :mod:`claimguard.review.explanations` — the reviewer layer's use of the
+    bounded explanation layer (``claimguard.edu.explain``): deterministic text by
+    default, a configured model when there is one, and the deterministic text
+    again whenever a model path fails. It owns the language only; every status
+    stays the engine's.
 *   :mod:`claimguard.review.audit_events` — run-level and decision-level events
     appended to the EXISTING hash-chained ``claimguard.audit_events`` table. The
     0001 trigger remains the single owner of the chain hash.
 *   :mod:`claimguard.review.app` — the FastAPI surface: submit, read a run's 15
-    results, list the queue with unresolved counts, record a decision, recheck a
-    corrected claim as a new version.
+    results with their explanation provenance, list the queue with unresolved
+    counts, record a decision, recheck a corrected claim as a new version.
 
 Two invariants hold everywhere in the package: a correction is a **new run
 version** (the original run, its records and its decisions are never mutated, and

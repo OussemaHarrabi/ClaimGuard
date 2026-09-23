@@ -8,7 +8,9 @@
 //     engine's evidence values, e.g. `/attachments/0/text` or `/notes`),
 //   * rule `explanation` and `corrective_action`,
 //   * evidence `path` / `value`, claim ids, rule ids, actor and reason strings
-//     typed by a reviewer, and every API error body.
+//     typed by a reviewer, and every API error body,
+//   * explanation-provenance values: the provider name and the rejection reasons,
+//     which can quote a model's malformed output verbatim.
 //
 // Every one of them is written with `document.createTextNode` (via `el` below),
 // so a payload such as `<script>alert(1)</script>` is displayed as those
@@ -136,6 +138,7 @@ export function renderFinding(doc, record, options) {
   article.append(head);
 
   article.append(el(doc, "p", "explanation", record.explanation));
+  article.append(renderExplanationProvenance(doc, settings.explanation));
   article.append(
     el(doc, "p", "corrective", `Corrective action: ${record.corrective_action || "none supplied"}`),
   );
@@ -158,6 +161,61 @@ export function renderFinding(doc, record, options) {
 
   article.append(renderDecisionForm(doc, record, settings.onDecide));
   return article;
+}
+
+/**
+ * How the explanation above was produced, stated in one line.
+ *
+ * The marker is about the WORDING only, and it says so: the status, severity and
+ * evidence of the record came from the deterministic engine and no model can
+ * change them. `provenance` is the API's own entry for this record
+ * (`/v1/runs/{id}/results` → `explanations`); a run stored without provenance
+ * shows no marker rather than an invented one.
+ *
+ * Every value here — provider names, rejection reasons, which can quote a
+ * model's malformed output — is written with `el`, i.e. as text.
+ */
+export function renderExplanationProvenance(doc, provenance) {
+  const box = el(doc, "p", "provenance");
+  if (!provenance) {
+    box.append(el(doc, "span", "muted", "explanation provenance: not recorded for this run."));
+    return box;
+  }
+  const modelAssisted = provenance.source === "model";
+  const marker = modelAssisted
+    ? "model-assisted wording (a model drafted this text; the engine's status is unchanged)"
+    : "deterministic wording (no model wrote this text; the engine's own text path)";
+  box.append(
+    el(
+      doc,
+      "span",
+      `provenance-marker provenance-${modelAssisted ? "model" : "deterministic"}`,
+      marker,
+    ),
+  );
+  if (provenance.fallback_used) {
+    box.append(
+      el(
+        doc,
+        "span",
+        "provenance-fallback",
+        " fallback: the deterministic text is being shown, because the model path did not deliver it.",
+      ),
+    );
+  }
+  if (!provenance.rewritten) {
+    box.append(el(doc, "span", "muted", " The engine's own explanation is shown, unrewritten."));
+  }
+  box.append(el(doc, "span", "muted", ` configured provider: ${provenance.provider}`));
+  if (provenance.declined_reason) {
+    box.append(el(doc, "span", "muted", ` not rewritten: ${provenance.declined_reason}`));
+  }
+  if (provenance.rejection_reasons && provenance.rejection_reasons.length > 0) {
+    box.append(
+      el(doc, "span", "muted", ` rejected: ${provenance.rejection_reasons.join("; ")}`),
+    );
+  }
+  return box;
 }
 
 /** The four decision buttons plus the reason box for one finding. */

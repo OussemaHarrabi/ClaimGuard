@@ -29,9 +29,9 @@ The number that counts is produced by the mentor pack's own strict scorer,
 Its comparison logic, verbatim from the shipped file (`<pack>/src/evaluate.py`, `score()`), is:
 
 ```python
-tp=sum(g[k]['status']=='FAIL' and p[k]['status']=='FAIL' for k in keys)
-fp=sum(g[k]['status']!='FAIL' and p[k]['status']=='FAIL' for k in keys)
-fn=sum(g[k]['status']=='FAIL' and p[k]['status']!='FAIL' for k in keys)
+tp = sum(g[k]["status"] == "FAIL" and p[k]["status"] == "FAIL" for k in keys)
+fp = sum(g[k]["status"] != "FAIL" and p[k]["status"] == "FAIL" for k in keys)
+fn = sum(g[k]["status"] == "FAIL" and p[k]["status"] != "FAIL" for k in keys)
 ```
 
 Before scoring anything it also rejects the submission outright unless every result carries the
@@ -42,7 +42,8 @@ that matters for honesty — **every evidence entry must re-resolve by JSON poin
 original claim and equal the claimed value exactly**:
 
 ```python
-if pointer(c,e['path'])!=e['value']:raise ValueError(f'Evidence value mismatch: {key} {e["path"]}')
+if pointer(c, e["path"]) != e["value"]:
+    raise ValueError(f"Evidence value mismatch: {key} {e['path']}")
 ```
 
 Two further opinions are run beside it, and they are deliberately not the same opinion:

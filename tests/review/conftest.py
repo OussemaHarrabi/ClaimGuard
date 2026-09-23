@@ -2,9 +2,9 @@
 
 DATABASE POLICY
 ---------------
-The unit tests (``test_models.py``, ``test_app_config.py``) need nothing and
-always run. The integration tests need PostgreSQL; they carry ``requires_db``
-(below) and skip automatically when it is unreachable, so a default
+The unit tests (``test_models.py``, ``test_app_config.py``, ``test_explanations.py``)
+need nothing and always run. The integration tests need PostgreSQL; they carry
+``requires_db`` (below) and skip automatically when it is unreachable, so a default
 ``uv run pytest`` stays fast and green on a laptop with no database.
 
 When the database IS reachable, the ``store`` fixture applies pending migrations
@@ -27,7 +27,7 @@ import json
 import os
 import time
 import uuid
-from collections.abc import AsyncIterator, Iterator, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Final
@@ -38,9 +38,21 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from claimguard.config import get_settings
+from claimguard.edu.explain import (
+    ModelExplanationProvider,
+    ModelSettings,
+    ProviderError,
+    TemplateExplanationProvider,
+)
 from claimguard.review import audit_events
 from claimguard.review.app import create_app
-from claimguard.review.store import DECISIONS, RUNS, ReviewStore, build_engine
+from claimguard.review.store import (
+    DECISIONS,
+    RUNS,
+    SCHEMA_REVISION,
+    ReviewStore,
+    build_engine,
+)
 from sqlalchemy import Engine, delete, select
 from sqlalchemy.engine import Connection
 
@@ -109,7 +121,7 @@ def engine() -> Iterator[Engine]:
 def store(engine: Engine) -> ReviewStore:
     """A store whose tables exist (applying pending migrations when needed)."""
     review_store = ReviewStore(engine)
-    if review_store.schema_revision() is None:
+    if review_store.schema_revision() != SCHEMA_REVISION:
         _apply_migrations()
     review_store.ensure_schema()
     return review_store
@@ -225,8 +237,66 @@ def purge_claims(engine: Engine, claim_ids: Sequence[str]) -> None:
 
 @pytest.fixture
 async def client(store: ReviewStore) -> AsyncIterator[httpx.AsyncClient]:
-    """An in-process HTTP client for the review API (no server, no network)."""
-    app = create_app(store=store, rules_dir=RULES_DIR)
+    """An in-process HTTP client for the review API (no server, no network).
+
+    The explanation provider is pinned to the deterministic template, so a
+    developer with ``CLAIMGUARD_EXPLAIN_MODEL`` exported runs the same suite CI
+    runs: no test here reaches a network or depends on a model's wording.
+    """
+    app = create_app(
+        store=store, rules_dir=RULES_DIR, explain_provider=TemplateExplanationProvider()
+    )
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://review.test") as http:
         yield http
+
+
+# ---------------------------------------------------------------------------
+# The scripted model path (a model, without a model)
+# ---------------------------------------------------------------------------
+
+#: The model identifier the scripted transport pretends to serve.
+TEST_MODEL_NAME: Final = "test-model"
+
+
+class ScriptedModelTransport:
+    """A model transport that answers from the request and records what it saw.
+
+    The explanation layer's provider seam is a plain callable, so "a model is
+    configured" is testable without a model, an API key or a socket. ``fail=True``
+    makes every call raise, which is the fallback path.
+    """
+
+    def __init__(self, *, fail: bool = False) -> None:
+        self.calls: list[Mapping[str, Any]] = []
+        self._fail = fail
+
+    def __call__(
+        self,
+        url: str,
+        headers: Mapping[str, str],
+        payload: Mapping[str, Any],
+        timeout: float,
+    ) -> str:
+        self.calls.append(payload)
+        if self._fail:
+            raise ProviderError("endpoint refused the connection")
+        user = json.loads(str(payload["messages"][1]["content"]))
+        finding = user["finding"]
+        draft = {
+            "explanation": (
+                f"A model drafted this sentence for {finding['rule_id']}, whose status "
+                f"{finding['status']} came from the rule engine."
+            ),
+            "cited_evidence_paths": [entry["path"] for entry in user["evidence"]][:1],
+            "cited_rule_ids": [finding["rule_id"]],
+            "needs_human_review": finding["requires_human_review"],
+        }
+        return json.dumps({"choices": [{"message": {"content": json.dumps(draft)}}]})
+
+
+def model_provider(transport: ScriptedModelTransport) -> ModelExplanationProvider:
+    """A model explanation provider pointed at a fictional endpoint."""
+    return ModelExplanationProvider(
+        ModelSettings(base_url="http://model.test/v1", model=TEST_MODEL_NAME), transport=transport
+    )

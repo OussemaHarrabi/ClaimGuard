@@ -45,6 +45,7 @@ from typing import Any, Final
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
 from claimguard.edu.envelope import RULE_IDS, ResultRecord, Severity, Status
+from claimguard.edu.explain import SOURCE_DETERMINISTIC, SOURCE_MODEL
 
 # ---------------------------------------------------------------------------
 # Contract constants (mirrors schemas/review_event.schema.json)
@@ -298,6 +299,65 @@ class ClaimQueueSummary(BaseModel):
     latest_decision_at: datetime | None = None
 
 
+#: Provenance sources an explanation can declare (the explain layer's own markers).
+EXPLANATION_SOURCES: Final[tuple[str, ...]] = (SOURCE_DETERMINISTIC, SOURCE_MODEL)
+
+
+class ExplanationProvenance(BaseModel):
+    """How one record's reviewer-facing explanation was produced.
+
+    This is the *provenance* of the wording, never a statement about the check:
+    the status, severity and evidence of the record it belongs to came from the
+    deterministic engine and are unchanged by anything recorded here. It travels
+    beside the 15-key record (``RunResultsResponse.explanations``, one entry per
+    record, in R001..R015 order) because the frozen result contract forbids a
+    sixteenth key.
+
+    ``source`` is the provenance the provider declared (``deterministic`` when no
+    model was used), ``rewritten`` says whether the record's ``explanation`` was
+    replaced by this layer, ``fallback_used`` says the deterministic text stands
+    because the model path did not deliver, and ``rejection_reasons`` /
+    ``declined_reason`` say why — so a reviewer can tell model-assisted wording
+    from deterministic text without trusting a marker inside the text itself.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    rule_id: str
+    seq: int = Field(ge=1, le=15)
+    source: str
+    provider: str
+    rewritten: bool
+    fallback_used: bool
+    rejection_reasons: list[str] = Field(default_factory=list)
+    declined_reason: str | None = None
+
+    @field_validator("rule_id")
+    @classmethod
+    def _rule_is_known(cls, value: str) -> str:
+        if value not in RULE_IDS:
+            raise ValueError(f"unknown rule id: {value!r}")
+        return value
+
+    @field_validator("source")
+    @classmethod
+    def _source_is_known(cls, value: str) -> str:
+        if value not in EXPLANATION_SOURCES:
+            raise ValueError(f"unknown explanation source: {value!r}")
+        return value
+
+    @field_validator("provider")
+    @classmethod
+    def _provider_is_present(cls, value: str) -> str:
+        return _non_blank(value)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def model_assisted(self) -> bool:
+        """True when a model drafted the text the reviewer is reading."""
+        return self.source == SOURCE_MODEL
+
+
 class QueueFilters(BaseModel):
     """The filters that produced a queue listing (echoed, so a reviewer can see them)."""
 
@@ -504,12 +564,24 @@ class RunResponse(BaseModel):
 
 
 class RunResultsResponse(BaseModel):
-    """One run's 15 records, in R001..R015 order, exactly as the CLI emits them."""
+    """One run's 15 records, in R001..R015 order, exactly as the CLI emits them.
+
+    ``explanations`` carries the provenance of each record's ``explanation``
+    text beside the records — one entry per record, same order, same rule ids.
+    It is deliberately *not* inside a record: the frozen result contract is
+    exactly 15 keys, and the scorer rejects a sixteenth.
+
+    Required rather than defaulted: a reader of this response always learns how
+    the text they are about to read was produced. A run persisted without
+    provenance (a direct store call, not the submission surface) answers with an
+    empty list, which is the honest answer — not a marker invented from nothing.
+    """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     run: RuleRun
     results: list[ResultRecord]
+    explanations: list[ExplanationProvenance]
 
 
 class DecisionResponse(BaseModel):

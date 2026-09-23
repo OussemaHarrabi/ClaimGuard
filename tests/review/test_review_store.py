@@ -18,8 +18,10 @@ import pytest
 from claimguard.edu.emit import serialize
 from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.envelope import RULE_VERSION, ResultRecord, Severity, Status
+from claimguard.edu.explain import TemplateExplanationProvider
 from claimguard.edu.policy import RuleContext
 from claimguard.review import audit_events
+from claimguard.review.explanations import explain_run
 from claimguard.review.models import (
     ClaimQueueSummary,
     DecisionRequest,
@@ -33,6 +35,7 @@ from claimguard.review.store import (
     FindingNotFoundError,
     NoCorrectionError,
     ReviewStore,
+    ReviewStoreError,
     RunNotFoundError,
     RunSupersededError,
     envelope_digest,
@@ -40,7 +43,7 @@ from claimguard.review.store import (
 from sqlalchemy import Engine, text
 from sqlalchemy.exc import DBAPIError
 
-from tests.edu import RULES_DIR
+from tests.edu import RULES_DIR, rules_context
 from tests.review.conftest import FAILING_RULE, Sandbox, requires_db
 
 pytestmark = [pytest.mark.integration, requires_db]
@@ -179,6 +182,36 @@ def test_a_recheck_needs_a_real_correction(store: ReviewStore, sandbox: Sandbox)
 def test_a_recheck_of_an_unknown_claim_is_refused(store: ReviewStore, sandbox: Sandbox) -> None:
     with pytest.raises(RunNotFoundError):
         recheck(store, sandbox.corrected(sandbox.coverage_lapse()))
+
+
+def test_a_run_refuses_provenance_that_does_not_cover_its_records(
+    store: ReviewStore, sandbox: Sandbox
+) -> None:
+    """The sidecar has to answer for every record, so a partial set is refused.
+
+    A run stored with provenance for the wrong rule set would leave "was this
+    text model-assisted?" unanswerable for the records it missed, which is the
+    only reason the sidecar exists — so the store refuses the write rather than
+    storing a gap.
+    """
+    envelope = sandbox.coverage_lapse()
+    explained = explain_run(
+        records_for(envelope),
+        rules_context(),
+        envelope,
+        provider=TemplateExplanationProvider(),
+    )
+    with pytest.raises(ReviewStoreError):
+        store.record_run(
+            envelope,
+            explained.records,
+            rule_version=RULE_VERSION,
+            model_version=MODEL_VERSION,
+            prompt_version=PROMPT_VERSION,
+            initiated_by="test-submit",
+            explanations=explained.provenance[:1],
+        )
+    assert store.latest_run(envelope["claim_id"]) is None, "the refused run was written anyway"
 
 
 # ---------------------------------------------------------------------------

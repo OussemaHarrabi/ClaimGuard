@@ -9,15 +9,21 @@ reports, and the input digest that identifies a claim version.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import httpx
 import pytest
+from claimguard.edu.explain import TemplateExplanationProvider
 from claimguard.review import app as review_app
-from claimguard.review.store import ReviewStore, SchemaNotMigratedError, envelope_digest
+from claimguard.review.store import (
+    SCHEMA_REVISION,
+    ReviewStore,
+    SchemaNotMigratedError,
+    envelope_digest,
+)
 from fastapi.routing import APIRoute
 
-from tests.edu import RULES_DIR
+from tests.edu import RULES_DIR, base_claim
 
 pytestmark = pytest.mark.unit
 
@@ -100,15 +106,77 @@ class _UnmigratedStore(ReviewStore):
         )
 
 
-async def _client(store: ReviewStore) -> httpx.AsyncClient:
-    app = review_app.create_app(store=store, rules_dir=RULES_DIR)
+class _ReadyStore(ReviewStore):
+    """A store whose schema check passes without a database.
+
+    These tests exercise the rule catalogue, which is loaded *after* the store's
+    readiness check and *before* any query: the submission must fail on the
+    catalogue, so nothing here ever reaches a connection.
+    """
+
+    def __init__(self) -> None:
+        pass
+
+    def schema_revision(self) -> str | None:
+        return SCHEMA_REVISION
+
+    def ensure_schema(self) -> None:
+        """Nothing to check: no query is ever issued."""
+
+
+async def _client(store: ReviewStore, rules_dir: str | Path) -> httpx.AsyncClient:
+    app = review_app.create_app(
+        store=store, rules_dir=rules_dir, explain_provider=TemplateExplanationProvider()
+    )
     return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://review.test")
+
+
+async def _assert_catalogue_503(client: httpx.AsyncClient, envelope: dict[str, Any]) -> None:
+    """A submission the catalogue cannot serve is a structured 503, never a 500."""
+    response = await client.post("/v1/claims", json={"claim": envelope})
+    assert response.status_code == review_app.RULES_UNAVAILABLE_STATUS
+    assert response.status_code != 500
+    assert response.headers["content-type"].startswith("application/json")
+    body = response.json()
+    assert body["error"] == "RuleDirError"
+    assert review_app.RULES_DIR_ENV in body["detail"]
+    assert review_app.PACK_ROOT_ENV in body["detail"]
+
+
+async def test_a_missing_rule_catalogue_is_a_structured_503(tmp_path: Path) -> None:
+    """The measured defect: a valid envelope reached a bare 500 when no catalogue resolved.
+
+    A submission is the one request that cannot be answered without the rulebook,
+    and the catalogue is a dependency the service either has or has not been
+    configured with. That is a 503 naming the setting to fix — the same shape an
+    unmigrated database gets — and never an unhandled 5xx with a non-JSON body.
+    """
+    store = cast(ReviewStore, _ReadyStore())
+    async with await _client(store, tmp_path) as client:
+        health = await client.get("/v1/health")
+        assert health.status_code == 200
+        assert health.json()["rules_ready"] is False
+        await _assert_catalogue_503(client, base_claim())
+
+
+async def test_an_env_configured_but_unusable_catalogue_is_also_a_structured_503(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The same answer when the setting exists and points somewhere without a catalogue."""
+    monkeypatch.setenv(review_app.RULES_DIR_ENV, str(tmp_path))
+    monkeypatch.delenv(review_app.PACK_ROOT_ENV, raising=False)
+    store = cast(ReviewStore, _ReadyStore())
+    app = review_app.create_app(store=store, explain_provider=TemplateExplanationProvider())
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+    ) as client:
+        await _assert_catalogue_503(client, base_claim())
 
 
 async def test_an_unmigrated_database_is_reported_not_crashed() -> None:
     """Every data route answers 503 with the command that fixes it; health stays honest."""
     store = cast(ReviewStore, _UnmigratedStore())
-    async with await _client(store) as client:
+    async with await _client(store, RULES_DIR) as client:
         health = await client.get("/v1/health")
         assert health.status_code == 200
         assert health.json()["status"] == "degraded"

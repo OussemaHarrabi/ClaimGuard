@@ -8,7 +8,8 @@ Seven honest operations, and nothing that decides anything about a claim:
 ``POST /v1/claims``                    validate the envelope, run the 15 checks,
                                        persist the run and its audit event
 ``GET  /v1/runs/{run_id}``             one run's identity, versions and provenance
-``GET  /v1/runs/{run_id}/results``     the 15 records, exactly as the CLI emits them
+``GET  /v1/runs/{run_id}/results``     the 15 records, exactly as the CLI emits them,
+                                       plus each explanation's provenance
 ``GET  /v1/runs/{run_id}/decisions``   the run's decision history with review states
 ``GET  /v1/queue``                     the review queue: filters, original values
                                        and unresolved-check counts
@@ -31,10 +32,21 @@ BOUNDARIES THE SURFACE KEEPS
 *   **Nothing about a run is mutable.** A correction is a new version; the old
     run, its 15 records and its decisions stay readable through the run
     endpoints, and the database refuses to update them.
+*   **Explanations are language, not judgement.** The reviewer-facing
+    ``explanation`` is produced through the bounded explanation layer
+    (:mod:`claimguard.review.explanations`): the deterministic template by
+    default, a configured model when one is, and the deterministic text whenever
+    a model path fails. Which of those happened is recorded per record in the
+    ``run_explanations`` sidecar and served beside the records by
+    ``GET /v1/runs/{run_id}/results`` — never inside the 15-key record, whose
+    key set is frozen.
 *   **Errors are explicit.** An unknown run or finding is 404, a decision the
     state machine forbids (or a recheck with nothing corrected, or a decision on a
     superseded version) is 409, a transport defect is 422 carrying the engine's
-    own message, and a missing migration is 503 with the command that fixes it.
+    own message, and an unready service is 503 with the command or the setting
+    that fixes it — a missing migration (``alembic upgrade head``) or an
+    unresolvable rule catalogue (``CLAIMGUARD_RULES_DIR`` /
+    ``CLAIMGUARD_PACK_ROOT``).
 
 The engine runs in-process rather than through a subprocess: the CLI in
 :mod:`claimguard.edu.run` is the frozen entry point for batch scoring, and
@@ -73,6 +85,12 @@ from claimguard.edu.envelope import (
 )
 from claimguard.edu.policy import RuleContext, RuleDirError
 from claimguard.review import ui as review_ui
+from claimguard.review.explanations import (
+    ExplainedRun,
+    ExplanationProvider,
+    explain_run,
+    explanation_provider,
+)
 from claimguard.review.models import (
     AuditStamp,
     DecisionHistory,
@@ -101,13 +119,6 @@ from claimguard.review.store import (
     build_engine,
 )
 
-#: Model/prompt identity of the deterministic engine. The rule path uses no prompt,
-#: and this records that fact instead of inventing a version for one that does not
-#: exist; a bounded explanation layer that does use a prompt records its own
-#: version here (pack behaviour 6 + 7).
-ENGINE_MODEL_VERSION: Final = "deterministic-engine/1.0.0"
-ENGINE_PROMPT_VERSION: Final = "none"
-
 #: Who initiated a run when the caller is the submission surface itself.
 SUBMIT_ACTOR: Final = "api-submit"
 
@@ -116,6 +127,15 @@ RULES_DIR_ENV: Final = "CLAIMGUARD_RULES_DIR"
 PACK_ROOT_ENV: Final = "CLAIMGUARD_PACK_ROOT"
 _PACK_DIR_NAMES: Final = ("ClaimGuardAI_Student_Starter_Pack",)
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
+
+#: Status for a claim that cannot be checked because the catalogue cannot be
+#: loaded. 503 Service Unavailable is what a temporarily unavailable dependency
+#: is: the submission is not at fault, the service is not ready, and the same
+#: request can succeed once the deployment is configured. It is the same answer
+#: an unmigrated database gets, so "the service is not ready yet" has exactly one
+#: shape on this surface — a structured JSON body naming the fix, never a bare
+#: 500.
+RULES_UNAVAILABLE_STATUS: Final = status.HTTP_503_SERVICE_UNAVAILABLE
 
 
 def resolve_rules_dir() -> Path:
@@ -177,17 +197,36 @@ class _RulesLoader:
             return self._context
 
 
+def rules_unavailable_detail(exc: RuleDirError) -> str:
+    """The body of a catalogue failure: what is wrong, and which setting fixes it.
+
+    The ``RuleDirError`` message names the path that failed; it does not always
+    name the environment setting a deployment has to change (a "no rules.json in
+    <path>" says nothing about which variable pointed there). This adds that, so
+    the operator is never left guessing which variable to set.
+    """
+    return (
+        f"the rule catalogue is unavailable, so this claim cannot be checked: {exc}. "
+        f"Point {RULES_DIR_ENV} (or {PACK_ROOT_ENV}) at the pack directory that contains "
+        "rules.json, then retry: this is a dependency the service has not been configured "
+        "with, not a defect in the submitted claim."
+    )
+
+
 def create_app(
     *,
     store: ReviewStore | None = None,
     rules_dir: str | Path | None = None,
+    explain_provider: ExplanationProvider | None = None,
 ) -> FastAPI:
     """Build the review API.
 
-    ``store`` and ``rules_dir`` are injectable so tests never depend on process
-    environment; in production both resolve from configuration
-    (:func:`claimguard.review.store.resolve_dsn`, which reads
-    ``claimguard.config``, for the DSN).
+    ``store``, ``rules_dir`` and ``explain_provider`` are injectable so tests
+    never depend on process environment; in production all three resolve from
+    configuration (:func:`claimguard.review.store.resolve_dsn`, which reads
+    ``claimguard.config``, for the DSN). ``explain_provider`` defaults to the
+    provider the environment configures — the deterministic template when no
+    model is configured.
 
     The handlers themselves are module-level functions that read their
     collaborators from ``request.app.state``, rather than closures registered as
@@ -204,10 +243,12 @@ def create_app(
     )
     app.state.store = store if store is not None else ReviewStore(build_engine())
     app.state.rules = _RulesLoader(None if rules_dir is None else Path(rules_dir))
+    app.state.explain = explanation_provider() if explain_provider is None else explain_provider
     app.state.schema_checked = False
 
     app.add_exception_handler(ReviewStoreError, review_error_handler)
     app.add_exception_handler(IllegalReviewTransitionError, review_error_handler)
+    app.add_exception_handler(RuleDirError, review_error_handler)
     app.add_api_route("/v1/health", health, methods=["GET"], response_model=HealthResponse)
     app.add_api_route(
         "/v1/claims",
@@ -256,10 +297,15 @@ def create_app(
 def review_error_handler(request: Request, exc: Exception) -> JSONResponse:
     """Map a review failure to an HTTP status, with the failure named in the body.
 
-    Registered for :class:`ReviewStoreError` and
-    :class:`IllegalReviewTransitionError`; the ``else`` arm cannot be reached
-    through routing but keeps the function total.
+    Registered for :class:`ReviewStoreError`,
+    :class:`IllegalReviewTransitionError` and :class:`RuleDirError`; the ``else``
+    arm cannot be reached through routing but keeps the function total.
     """
+    if isinstance(exc, RuleDirError):
+        return JSONResponse(
+            status_code=RULES_UNAVAILABLE_STATUS,
+            content={"detail": rules_unavailable_detail(exc), "error": type(exc).__name__},
+        )
     if isinstance(exc, IllegalReviewTransitionError):
         status_code = status.HTTP_409_CONFLICT
     elif isinstance(exc, ReviewStoreError):
@@ -275,7 +321,7 @@ def review_error_handler(request: Request, exc: Exception) -> JSONResponse:
 def health(request: Request) -> HealthResponse:
     """Readiness: which schema the store sees and whether the catalogue loaded."""
     review_store = _store_of(request)
-    rules = _rules_of(request)
+    rules = _rules_of(request.app)
     revision: str | None = None
     database = "unreachable"
     try:
@@ -302,13 +348,15 @@ def submit_claim(request: Request, payload: SubmitClaimRequest) -> RunResponse:
     """Validate one envelope, run the 15 checks and persist the run."""
     review_store = _migrated_store(request.app)
     records = _evaluate(request.app, payload.claim)
+    explained = _explain(request.app, records, payload.claim)
     recorded = review_store.record_run(
         dict(payload.claim),
-        records,
+        explained.records,
         rule_version=RULE_VERSION,
-        model_version=ENGINE_MODEL_VERSION,
-        prompt_version=ENGINE_PROMPT_VERSION,
+        model_version=explained.model_version,
+        prompt_version=explained.prompt_version,
         initiated_by=SUBMIT_ACTOR,
+        explanations=explained.provenance,
     )
     return _run_response(recorded)
 
@@ -325,12 +373,16 @@ def get_run(request: Request, run_id: str) -> RunResponse:
 
 
 def get_results(request: Request, run_id: str) -> RunResultsResponse:
-    """The run's 15 records, exactly as the CLI emits them."""
+    """The run's 15 records, exactly as the CLI emits them, with their provenance."""
     review_store = _migrated_store(request.app)
     run = review_store.get_run(run_id)
     if run is None:
         raise RunNotFoundError(f"unknown run: {run_id}")
-    return RunResultsResponse(run=run, results=review_store.get_results(run_id))
+    return RunResultsResponse(
+        run=run,
+        results=review_store.get_results(run_id),
+        explanations=review_store.get_explanations(run_id),
+    )
 
 
 def get_queue(
@@ -382,13 +434,15 @@ def recheck(request: Request, claim_id: str, payload: RecheckRequest) -> RunResp
             detail=f"the corrected envelope is for {envelope.get('claim_id')!r}, not {claim_id!r}",
         )
     records = _evaluate(request.app, envelope)
+    explained = _explain(request.app, records, envelope)
     recorded = review_store.record_recheck(
         dict(envelope),
-        records,
+        explained.records,
         rule_version=RULE_VERSION,
-        model_version=ENGINE_MODEL_VERSION,
-        prompt_version=ENGINE_PROMPT_VERSION,
+        model_version=explained.model_version,
+        prompt_version=explained.prompt_version,
         initiated_by=payload.actor,
+        explanations=explained.provenance,
     )
     return _run_response(recorded)
 
@@ -403,9 +457,37 @@ def _store_of(request: Request) -> ReviewStore:
     return cast(ReviewStore, request.app.state.store)
 
 
-def _rules_of(request: Request) -> _RulesLoader:
+def _rules_of(app: FastAPI) -> _RulesLoader:
     """The app's lazily-loaded rule catalogue loader."""
-    return cast(_RulesLoader, request.app.state.rules)
+    return cast(_RulesLoader, app.state.rules)
+
+
+def _provider_of(app: FastAPI) -> ExplanationProvider:
+    """The app's explanation provider (``create_app`` always installs one)."""
+    return cast(ExplanationProvider, app.state.explain)
+
+
+def _explain(
+    app: FastAPI, records: Sequence[ResultRecord], envelope: Mapping[str, Any]
+) -> ExplainedRun:
+    """Produce the reviewer-facing explanations for a run, with their provenance.
+
+    The engine's records go in and the same 15 records come back with
+    ``explanation`` replaced where the bounded explanation layer rewrote it;
+    everything else is copied through and re-validated against the engine's own
+    15-key model (see :func:`claimguard.review.explanations.explain_run`). The
+    claim's untrusted free text is deliberately not forwarded to a model.
+
+    The catalogue is read through the same loader the engine uses, so a
+    misconfigured deployment fails here exactly as it does a few lines earlier —
+    with the structured 503 that names the setting to fix.
+    """
+    return explain_run(
+        records,
+        _rules_of(app).context(),
+        envelope,
+        provider=_provider_of(app),
+    )
 
 
 def _migrated_store(app: FastAPI) -> ReviewStore:

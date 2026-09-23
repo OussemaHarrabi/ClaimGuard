@@ -13,15 +13,38 @@ version.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any
 
 import httpx
 import pytest
+from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.envelope import RESULT_KEYS, RULE_VERSION
+from claimguard.edu.explain import (
+    DETERMINISTIC_PREFIX,
+    MODEL_PREFIX,
+    PROMPT_VERSION,
+    SOURCE_DETERMINISTIC,
+    SOURCE_MODEL,
+)
+from claimguard.review.app import create_app
+from claimguard.review.explanations import (
+    ENGINE_MODEL_VERSION,
+    ENGINE_PROMPT_VERSION,
+    MODEL_VERSION_PREFIX,
+)
 from claimguard.review.models import ReviewAction
 from claimguard.review.store import ReviewStore
 
-from tests.review.conftest import FAILING_RULE, Sandbox, requires_db
+from tests.edu import RULES_DIR, rules_context
+from tests.review.conftest import (
+    FAILING_RULE,
+    TEST_MODEL_NAME,
+    Sandbox,
+    ScriptedModelTransport,
+    model_provider,
+    requires_db,
+)
 
 pytestmark = [pytest.mark.integration, requires_db]
 
@@ -50,7 +73,7 @@ async def test_health_reports_the_schema_and_the_rule_catalogue(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["schema_revision"] == "0002"
+    assert body["schema_revision"] == "0003"
     assert body["database"] == "ready"
     assert body["rules_ready"] is True
     assert body["engine_rule_version"] == RULE_VERSION
@@ -322,3 +345,144 @@ async def test_a_recheck_needs_a_claim_that_was_submitted(
         f"/v1/claims/{envelope['claim_id']}/recheck", json={"claim": sandbox.corrected(envelope)}
     )
     assert no_actor.status_code == 422
+
+
+# ---------------------------------------------------------------------------
+# Explanation provenance (the bounded explanation layer, wired in)
+# ---------------------------------------------------------------------------
+
+
+def without_explanation(record: Mapping[str, Any]) -> dict[str, Any]:
+    """Every key of a result record except ``explanation``."""
+    return {key: value for key, value in record.items() if key != "explanation"}
+
+
+def engine_by_rule(envelope: Mapping[str, Any]) -> dict[str, Any]:
+    """The engine's own records for ``envelope``, keyed by rule id."""
+    return {record["rule_id"]: record for record in evaluate_claim(envelope, rules_context())}
+
+
+async def test_a_submission_serves_the_provenance_of_every_explanation(
+    client: httpx.AsyncClient, store: ReviewStore, sandbox: Sandbox
+) -> None:
+    """The reviewer can tell deterministic text from model-assisted text.
+
+    The ``client`` fixture pins the deterministic provider — what a deployment
+    with no model configured resolves to — so every explanation here is the
+    template's own text, marked as such, and the run records the engine's
+    identity rather than a model's.
+    """
+    envelope = sandbox.coverage_lapse()
+    created = (await submit(client, envelope)).json()
+    run_id = created["run"]["run_id"]
+    assert created["run"]["model_version"] == ENGINE_MODEL_VERSION
+    assert created["run"]["prompt_version"] == ENGINE_PROMPT_VERSION
+
+    payload = (await client.get(f"/v1/runs/{run_id}/results")).json()
+    provenance = payload["explanations"]
+    assert [entry["rule_id"] for entry in provenance] == [
+        record["rule_id"] for record in payload["results"]
+    ]
+    assert [entry["seq"] for entry in provenance] == list(range(1, 16))
+    assert all(entry["source"] == SOURCE_DETERMINISTIC for entry in provenance)
+    assert all(entry["provider"] == "template" for entry in provenance)
+    assert all(entry["rewritten"] is True for entry in provenance)
+    assert not any(entry["fallback_used"] for entry in provenance)
+    assert not any(entry["model_assisted"] for entry in provenance)
+    assert all(entry["rejection_reasons"] == [] for entry in provenance)
+
+    # The provenance is stored beside the records, and the records keep 15 keys.
+    stored = store.get_explanations(run_id)
+    assert [entry.rule_id for entry in stored] == [entry["rule_id"] for entry in provenance]
+    assert all(set(record) == set(RESULT_KEYS) for record in payload["results"])
+
+
+async def test_the_explanation_replacement_kept_the_fourteen_other_keys(
+    client: httpx.AsyncClient, sandbox: Sandbox
+) -> None:
+    """No model configured: every key but ``explanation`` is the engine's own output.
+
+    This is the contract the mentor's scorer reads. The explanation is
+    reviewer-facing text produced by the explanation layer, so it may differ in
+    wording — and this test proves the difference is confined to that one field
+    by comparing all fourteen others, value for value, against a fresh run of the
+    engine over the same envelope.
+    """
+    envelope = sandbox.coverage_lapse()
+    run_id = (await submit(client, envelope)).json()["run"]["run_id"]
+    served = (await client.get(f"/v1/runs/{run_id}/results")).json()["results"]
+    engine = engine_by_rule(envelope)
+
+    assert len(served) == 15
+    for record in served:
+        assert set(record) == set(RESULT_KEYS), record["rule_id"]
+        assert without_explanation(record) == without_explanation(engine[record["rule_id"]])
+    assert any(
+        record["explanation"] != engine[record["rule_id"]]["explanation"] for record in served
+    ), "the comparison above must not be vacuous: the wording is the layer's"
+    failing = next(record for record in served if record["rule_id"] == FAILING_RULE)
+    assert failing["explanation"].startswith(DETERMINISTIC_PREFIX)
+    assert failing["status"] == engine[FAILING_RULE]["status"] == "FAIL"
+
+
+async def test_a_configured_model_drafts_the_text_and_the_run_says_so(
+    store: ReviewStore, sandbox: Sandbox
+) -> None:
+    """With a model configured the reviewer reads model-assisted wording, and the
+    statuses are still the engine's."""
+    transport = ScriptedModelTransport()
+    app = create_app(store=store, rules_dir=RULES_DIR, explain_provider=model_provider(transport))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+    ) as http:
+        envelope = sandbox.coverage_lapse()
+        created = await submit(http, envelope)
+        assert created.status_code == 201, created.text
+        run = created.json()["run"]
+        assert run["model_version"] == f"{MODEL_VERSION_PREFIX}{TEST_MODEL_NAME}"
+        assert run["prompt_version"] == PROMPT_VERSION
+        payload = (await http.get(f"/v1/runs/{run['run_id']}/results")).json()
+
+    assert transport.calls, "the model path was configured but never used"
+    record = next(item for item in payload["results"] if item["rule_id"] == FAILING_RULE)
+    provenance = next(item for item in payload["explanations"] if item["rule_id"] == FAILING_RULE)
+    assert provenance["source"] == SOURCE_MODEL
+    assert provenance["model_assisted"] is True
+    assert provenance["provider"] == "model"
+    assert provenance["fallback_used"] is False
+    assert record["explanation"].startswith(MODEL_PREFIX)
+    engine = engine_by_rule(envelope)
+    assert without_explanation(record) == without_explanation(engine[FAILING_RULE])
+    assert record["status"] == "FAIL"
+
+
+async def test_a_model_failure_still_creates_the_run_with_deterministic_text(
+    store: ReviewStore, sandbox: Sandbox
+) -> None:
+    """A model failure never removes a finding, never fails the submission, and
+    never changes a status: the run is created, with the reason recorded."""
+    app = create_app(
+        store=store,
+        rules_dir=RULES_DIR,
+        explain_provider=model_provider(ScriptedModelTransport(fail=True)),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+    ) as http:
+        envelope = sandbox.coverage_lapse()
+        created = await submit(http, envelope)
+        assert created.status_code == 201, created.text
+        run_id = created.json()["run"]["run_id"]
+        payload = (await http.get(f"/v1/runs/{run_id}/results")).json()
+
+    record = next(item for item in payload["results"] if item["rule_id"] == FAILING_RULE)
+    provenance = next(item for item in payload["explanations"] if item["rule_id"] == FAILING_RULE)
+    assert provenance["source"] == SOURCE_DETERMINISTIC
+    assert provenance["fallback_used"] is True
+    assert provenance["model_assisted"] is False
+    assert provenance["rejection_reasons"], "a fallback has to say why"
+    assert "endpoint refused the connection" in provenance["rejection_reasons"][0]
+    assert record["explanation"].startswith(DETERMINISTIC_PREFIX)
+    engine = engine_by_rule(envelope)
+    assert without_explanation(record) == without_explanation(engine[FAILING_RULE])
+    assert record["status"] == "FAIL"

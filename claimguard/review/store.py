@@ -2,20 +2,31 @@
 
 WHAT THIS MODULE OWNS
 ---------------------
-The three tables migration ``0002_review_workflow.sql`` creates, and the queries
-the reviewer surface needs over them:
+The four tables migration ``0002_review_workflow.sql`` and ``0003`` create, and
+the queries the reviewer surface needs over them:
 
 *   :meth:`ReviewStore.record_run` — persist one engine run (claim version, input
-    hash, versions, the 15 records) **and** its audit event, in one transaction.
+    hash, versions, the 15 records, the explanation provenance) **and** its audit
+    event, in one transaction.
 *   :meth:`ReviewStore.record_recheck` — persist a correction as a NEW claim
     version that supersedes the previous run. The previous run's row, records and
     decisions are untouched, and the database refuses to update them
     (``trg_rule_runs_no_update`` / ``trg_rule_results_no_update``).
+*   :meth:`ReviewStore.get_explanations` — how each record's reviewer-facing
+    explanation was produced, from the ``run_explanations`` sidecar. The 15-key
+    record has no room for a sixteenth key, so provenance lives beside it.
 *   :meth:`ReviewStore.queue` — the current review queue, with filters and
     unresolved-check counts.
 *   :meth:`ReviewStore.record_decision` — append a reviewer decision (the pack's
     four actions), checking the decision state machine, the 7-key event contract
     and the audit chain, in one transaction.
+
+WHAT THIS MODULE DOES NOT DO
+----------------------------
+It stores exactly the records it is handed. Producing the reviewer-facing
+explanation — and the provenance that goes with it — is the API's job
+(:mod:`claimguard.review.explanations`); a store that rewrote a record on the way
+in would make "the engine's output" unverifiable, so it never does.
 
 CONVENTIONS IT RESPECTS
 -----------------------
@@ -73,6 +84,7 @@ from claimguard.review.models import (
     DecisionHistory,
     DecisionHistoryEntry,
     DecisionRequest,
+    ExplanationProvenance,
     FindingView,
     QueueCounts,
     QueueFilters,
@@ -87,7 +99,7 @@ from claimguard.review.models import (
 )
 
 #: The Alembic revision this module's tables come from.
-SCHEMA_REVISION: Final = "0002"
+SCHEMA_REVISION: Final = "0003"
 
 #: ``run_id`` prefix (opaque; deliberately carries no claim identifier).
 RUN_ID_PREFIX: Final = "RUN-"
@@ -185,6 +197,56 @@ DECISIONS = Table(
     schema="claimguard",
 )
 
+#: The explanation-provenance sidecar (migration 0003). One row per result
+#: record of a run: the 15-key record itself has no room for a sixteenth key, so
+#: "which text was model-assisted, and why did a fallback stand in" lives here,
+#: keyed by the same ``(run_id, rule_id)`` the results use.
+EXPLANATIONS = Table(
+    "run_explanations",
+    _REVIEW_METADATA,
+    Column("run_id", Text, nullable=False),
+    Column("rule_id", Text, nullable=False),
+    Column("seq", INTEGER, nullable=False),
+    Column("source", Text, nullable=False),
+    Column("provider", Text, nullable=False),
+    Column("rewritten", BOOLEAN, nullable=False),
+    Column("fallback_used", BOOLEAN, nullable=False),
+    Column("rejection_reasons", JSONB, nullable=False),
+    Column("declined_reason", Text),
+    schema="claimguard",
+)
+
+#: The provenance columns, in the order the API serves them.
+_EXPLANATION_COLUMNS: Final[tuple[str, ...]] = (
+    "rule_id",
+    "seq",
+    "source",
+    "provider",
+    "rewritten",
+    "fallback_used",
+    "rejection_reasons",
+    "declined_reason",
+)
+
+#: Every table this module reads or writes (migrations 0002 and 0003).
+#: ``ensure_schema`` refuses to serve a database missing any of them.
+_REQUIRED_TABLES: Final[tuple[str, ...]] = (
+    "rule_runs",
+    "rule_results",
+    "review_decisions",
+    "run_explanations",
+)
+
+
+def _table_present(connection: Connection, name: str) -> bool:
+    """True when ``claimguard.<name>`` exists in the connected database."""
+    return bool(
+        connection.execute(
+            text("SELECT to_regclass(:qualified) IS NOT NULL"), {"qualified": f"claimguard.{name}"}
+        ).scalar()
+    )
+
+
 #: The result columns, in the pack's key order (record reconstruction).
 _RESULT_COLUMNS: Final[tuple[str, ...]] = (
     "claim_id",
@@ -266,6 +328,12 @@ def _record_from_row(row: Any) -> ResultRecord:
     return ResultRecord.model_validate(values)
 
 
+def _explanation_from_row(row: Any) -> ExplanationProvenance:
+    """Rebuild one provenance row from the sidecar's columns."""
+    values = {name: row._mapping[name] for name in _EXPLANATION_COLUMNS}
+    return ExplanationProvenance.model_validate(values)
+
+
 def _order_records(records: Sequence[ResultRecord]) -> list[tuple[int, ResultRecord]]:
     """Number the records 1..15 and refuse anything that is not the full set."""
     expected = set(RULE_IDS)
@@ -275,6 +343,28 @@ def _order_records(records: Sequence[ResultRecord]) -> list[tuple[int, ResultRec
             f"a run must persist exactly the 15 documented rules; got {sorted(produced)}"
         )
     return [(index, record) for index, record in enumerate(records, start=1)]
+
+
+def _order_explanations(
+    explanations: Sequence[ExplanationProvenance],
+    numbered: Sequence[tuple[int, ResultRecord]],
+) -> list[tuple[int, ExplanationProvenance]]:
+    """Pair each provenance entry with its record's position, or refuse the run.
+
+    The sidecar must say exactly one thing about each of the run's records: a run
+    stored with provenance for the wrong rule set would leave "was this text
+    model-assisted?" unanswerable for the records it missed, which is the whole
+    reason the sidecar exists. The ``seq`` written is the record's own position,
+    so ``run_explanations.seq`` always lines up with ``rule_results.seq``.
+    """
+    by_rule = {entry.rule_id: entry for entry in explanations}
+    expected = {record.rule_id for _, record in numbered}
+    if len(by_rule) != len(explanations) or set(by_rule) != expected:
+        raise ReviewStoreError(
+            "explanation provenance must cover exactly the run's rules; got "
+            f"{sorted(by_rule)}, expected {sorted(expected)}"
+        )
+    return [(seq, by_rule[record.rule_id]) for seq, record in numbered]
 
 
 @dataclass(frozen=True)
@@ -317,20 +407,26 @@ class ReviewStore:
     def schema_revision(self) -> str | None:
         """Which migration revision the DB has applied (None when unreadable)."""
         with self._engine.connect() as connection:
-            present = connection.execute(
-                text("SELECT to_regclass('claimguard.rule_runs') IS NOT NULL")
-            ).scalar()
-            if not present:
+            if not _table_present(connection, "rule_runs"):
                 return None
             row = connection.execute(text("SELECT max(version_num) FROM alembic_version")).scalar()
             return str(row) if row is not None else None
 
     def ensure_schema(self) -> None:
-        """Raise :class:`SchemaNotMigratedError` unless migration 0002 has been applied."""
-        if self.schema_revision() is None:
+        """Raise :class:`SchemaNotMigratedError` unless every table this module reads exists.
+
+        Checked by table, not by revision string: a database left at an earlier
+        migration must fail with the command that fixes it, naming what is
+        missing, rather than 500 on the first query against a table that is not
+        there yet.
+        """
+        with self._engine.connect() as connection:
+            missing = [name for name in _REQUIRED_TABLES if not _table_present(connection, name)]
+        if missing:
             raise SchemaNotMigratedError(
                 "the review tables are missing: run `uv run alembic upgrade head` "
-                f"(migration {SCHEMA_REVISION}) against the configured database"
+                f"(migration {SCHEMA_REVISION}) against the configured database; "
+                f"absent: {', '.join(missing)}"
             )
 
     # -- runs -----------------------------------------------------------
@@ -357,6 +453,16 @@ class ReviewStore:
         """The run's 15 records in R001..R015 order."""
         with self._engine.connect() as connection:
             return self._get_results(connection, run_id)
+
+    def get_explanations(self, run_id: str) -> list[ExplanationProvenance]:
+        """How each of the run's explanations was produced, in R001..R015 order.
+
+        Empty for a run persisted without provenance (a direct store call): the
+        reviewer surface always records it, and an absent sidecar is reported as
+        absent rather than invented.
+        """
+        with self._engine.connect() as connection:
+            return self._get_explanations(connection, run_id)
 
     def get_decisions(self, run_id: str) -> list[StoredDecision]:
         """Every decision recorded against a run, oldest first."""
@@ -403,12 +509,18 @@ class ReviewStore:
         model_version: str,
         prompt_version: str,
         initiated_by: str,
+        explanations: Sequence[ExplanationProvenance] | None = None,
     ) -> RecordedRun:
         """Persist a first (or resubmitted) version of a claim and its audit event.
 
         A submission whose canonical bytes equal the claim's current version is
         **not** a new version: it returns that run with ``duplicate=True`` and
         writes nothing. Otherwise the new version is ``latest + 1``.
+
+        ``explanations`` is the per-record provenance of the reviewer-facing
+        explanations, one entry per record in R001..R015 order. Omitted, the run
+        is stored without provenance (the records are then stored exactly as
+        handed in); the reviewer surface always supplies it.
         """
         with self._engine.begin() as connection:
             claim_id = envelope.get("claim_id")
@@ -428,6 +540,7 @@ class ReviewStore:
                 connection,
                 envelope=envelope,
                 records=records,
+                explanations=explanations,
                 digest=digest,
                 version=version,
                 supersedes_run_id=None if latest is None else latest.run_id,
@@ -446,6 +559,7 @@ class ReviewStore:
         model_version: str,
         prompt_version: str,
         initiated_by: str,
+        explanations: Sequence[ExplanationProvenance] | None = None,
     ) -> RecordedRun:
         """Persist a corrected envelope as a NEW version that supersedes the old one.
 
@@ -472,6 +586,7 @@ class ReviewStore:
                 connection,
                 envelope=envelope,
                 records=records,
+                explanations=explanations,
                 digest=digest,
                 version=latest.version + 1,
                 supersedes_run_id=latest.run_id,
@@ -494,8 +609,9 @@ class ReviewStore:
         model_version: str,
         prompt_version: str,
         initiated_by: str,
+        explanations: Sequence[ExplanationProvenance] | None = None,
     ) -> RecordedRun:
-        """Write the run row, its 15 records and its audit event atomically."""
+        """Write the run row, its 15 records, its provenance and its audit event atomically."""
         numbered = _order_records(records)
         run_id = new_run_id()
         trace_id = new_trace_id()
@@ -558,6 +674,24 @@ class ReviewStore:
                 ],
             ),
         )
+        if explanations is not None:
+            connection.execute(
+                insert(EXPLANATIONS),
+                [
+                    {
+                        "run_id": run_id,
+                        "rule_id": provenance.rule_id,
+                        "seq": seq,
+                        "source": provenance.source,
+                        "provider": provenance.provider,
+                        "rewritten": provenance.rewritten,
+                        "fallback_used": provenance.fallback_used,
+                        "rejection_reasons": list(provenance.rejection_reasons),
+                        "declined_reason": provenance.declined_reason,
+                    }
+                    for seq, provenance in _order_explanations(explanations, numbered)
+                ],
+            )
         return RecordedRun(
             run=_run_from_row(run_row),
             results=[record for _, record in numbered],
@@ -589,6 +723,14 @@ class ReviewStore:
             .limit(1)
         ).one_or_none()
         return None if row is None else _record_from_row(row)
+
+    def _get_explanations(self, connection: Connection, run_id: str) -> list[ExplanationProvenance]:
+        rows = connection.execute(
+            select(*[EXPLANATIONS.c[name] for name in _EXPLANATION_COLUMNS])
+            .where(EXPLANATIONS.c.run_id == run_id)
+            .order_by(EXPLANATIONS.c.seq)
+        ).all()
+        return [_explanation_from_row(row) for row in rows]
 
     def _run_stamp(self, connection: Connection, run_id: str) -> AuditStamp:
         """The audit stamp of a run's own event (the first event for that reference)."""
