@@ -96,6 +96,12 @@ R002/R004/R005/R007-R015 are `NOT_IMPLEMENTED`.
 
 ### Our engine — `python -m claimguard.edu.run` (snapshot at verification time)
 
+> **Snapshot discipline.** These counts belong to a specific engine revision: the evidence-pointer
+> totals changed when the R008/R009/R010 unknown-service abstentions gained their extra service-code
+> pointers, so an older copy of this table read 20270 / 1477 / 467. Re-run the two commands below to
+> regenerate them rather than copying them; if a number here disagrees with a fresh run, the fresh
+> run wins and this table is the stale artifact.
+
 ```bash
 uv run python -m claimguard.edu.run --claims <pack>/data/development/claims.jsonl \
   --rules-dir <pack>/rules --output C:/tmp/packout/edu_dev.jsonl
@@ -104,9 +110,9 @@ uv run python scripts/edu_conformance.py --pred 'C:/tmp/packout/edu_{split}.json
 
 | split | claim-rule pairs | oracle `status_accuracy` | recomputed | claims with all 15 correct | evidence pointers | RESULT |
 |---|---|---|---|---|---|---|
-| development | 6000 | 1.0000 | 1.0000 | 400 / 400 | 20270 | CONFORMANT |
-| validation | 2250 | 1.0000 | 1.0000 | 150 / 150 | 1477 | CONFORMANT |
-| stress | 750 | 1.0000 | 1.0000 | 50 / 50 | 467 | CONFORMANT |
+| development | 6000 | 1.0000 | 1.0000 | 400 / 400 | 20300 | CONFORMANT |
+| validation | 2250 | 1.0000 | 1.0000 | 150 / 150 | 7536 | CONFORMANT |
+| stress | 750 | 1.0000 | 1.0000 | 50 / 50 | 2410 | CONFORMANT |
 
 Per-rule on development: all 15 rules `acc 1.0000`, precision/recall/F1 `1.0000`, false-alarm rate
 `0.0000`, `not_implemented 0`, `false_abstentions 0`, `missed_abstentions 0`; confusion shows only
