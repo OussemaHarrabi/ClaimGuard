@@ -1,0 +1,458 @@
+/* ClaimGuard AI — reviewer interface styles.
+ *
+ * The five rule statuses are deliberately given five distinct treatments, and
+ * PASS is the only one that reads as "clean". NOT_IMPLEMENTED is styled as a
+ * warning, never as a pass: the pack requires that an unimplemented check can
+ * never be mistaken for a passed one.
+ */
+
+:root {
+  --ink: #16283c;
+  --muted: #5b6d80;
+  --line: #cfd9e4;
+  --panel: #ffffff;
+  --page: #eef3f8;
+  --pass: #0c6b52;
+  --fail: #a92f22;
+  --unable: #8a5a06;
+  --na: #3d5a80;
+  --notimpl: #5c3d99;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--page);
+  color: var(--ink);
+  font: 15px/1.5 system-ui, "Segoe UI", sans-serif;
+}
+
+header {
+  background: #10263d;
+  color: #ffffff;
+  padding: 24px 5%;
+}
+
+header h1 {
+  margin: 0 0 6px;
+  font-size: 24px;
+}
+
+.subtitle {
+  margin: 0;
+  color: #c7d6e6;
+}
+
+main {
+  max-width: 1180px;
+  margin: 0 auto;
+  padding: 20px 16px 64px;
+}
+
+.panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 16px 18px;
+  margin: 16px 0;
+}
+
+.panel h2 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.panel h3 {
+  margin: 18px 0 8px;
+  font-size: 15px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* --- notices ------------------------------------------------------------ */
+
+.notice {
+  border-left: 5px solid var(--na);
+  background: #f4f8fc;
+  padding: 10px 14px;
+  margin: 12px 0;
+  border-radius: 4px;
+}
+
+.notice p {
+  margin: 6px 0;
+}
+
+.notice-warn {
+  border-color: var(--unable);
+  background: #fdf6e6;
+}
+
+.notice-ok {
+  border-color: var(--pass);
+  background: #eefaf5;
+}
+
+.notice-error {
+  border-color: var(--fail);
+  background: #fdeeec;
+}
+
+.notice-detail,
+.api-error-body {
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: #0f1c2b;
+  color: #e6eef7;
+  padding: 10px;
+  border-radius: 4px;
+  max-height: 340px;
+  overflow: auto;
+}
+
+/* --- the API's own refusals -------------------------------------------- */
+
+.api-error {
+  border: 2px solid var(--fail);
+  background: #fdeeec;
+  border-radius: 6px;
+  padding: 10px 14px;
+  margin: 12px 0;
+}
+
+.api-error-head {
+  margin: 0 0 8px;
+  font-weight: 700;
+  color: var(--fail);
+}
+
+/* --- status badges: five statuses, five treatments ---------------------- */
+
+.badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  border: 1px solid transparent;
+}
+
+.status-PASS {
+  background: #e3f6ee;
+  color: var(--pass);
+  border-color: var(--pass);
+}
+
+.status-FAIL {
+  background: #fbe3e0;
+  color: var(--fail);
+  border-color: var(--fail);
+}
+
+.status-UNABLE_TO_ASSESS {
+  background: #fdf0d2;
+  color: var(--unable);
+  border-color: var(--unable);
+}
+
+.status-NOT_APPLICABLE {
+  background: #e6ecf5;
+  color: var(--na);
+  border-color: var(--na);
+}
+
+.status-NOT_IMPLEMENTED {
+  background: #ece3fb;
+  color: var(--notimpl);
+  border-color: var(--notimpl);
+  text-decoration: underline dotted;
+}
+
+.status-UNKNOWN {
+  background: #f0f0f0;
+  color: #444444;
+  border-color: #444444;
+}
+
+.status-meaning,
+.legend-meaning {
+  color: var(--muted);
+  font-size: 13px;
+  margin-left: 8px;
+}
+
+.legend-row {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--line);
+}
+
+/* --- queue -------------------------------------------------------------- */
+
+form#filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: flex-end;
+  margin-bottom: 12px;
+}
+
+form#filters label {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  color: var(--muted);
+  gap: 4px;
+}
+
+form#filters label.checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+select,
+input,
+textarea,
+button {
+  font: inherit;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: #ffffff;
+  color: var(--ink);
+}
+
+button {
+  cursor: pointer;
+  background: #10395c;
+  color: #ffffff;
+  border-color: #10395c;
+}
+
+button:hover {
+  background: #17496f;
+}
+
+.counts-headline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 8px 0;
+}
+
+.counts-unresolved {
+  font-weight: 700;
+  color: var(--unable);
+}
+
+.counts-resolved {
+  color: var(--pass);
+}
+
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 8px 0;
+  font-size: 14px;
+}
+
+th,
+td {
+  border: 1px solid var(--line);
+  padding: 5px 8px;
+  text-align: left;
+  vertical-align: top;
+}
+
+th {
+  background: #f2f6fa;
+}
+
+.queue-item {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 6px 0;
+  border-bottom: 1px dotted var(--line);
+}
+
+/* --- findings ----------------------------------------------------------- */
+
+.finding {
+  border: 1px solid var(--line);
+  border-left: 6px solid var(--line);
+  border-radius: 6px;
+  padding: 12px 14px;
+  margin: 12px 0;
+}
+
+.finding.status-PASS {
+  border-left-color: var(--pass);
+}
+
+.finding.status-FAIL {
+  border-left-color: var(--fail);
+}
+
+.finding.status-UNABLE_TO_ASSESS {
+  border-left-color: var(--unable);
+}
+
+.finding.status-NOT_APPLICABLE {
+  border-left-color: var(--na);
+}
+
+.finding.status-NOT_IMPLEMENTED {
+  border-left-color: var(--notimpl);
+}
+
+.finding-head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.finding-rule {
+  font-size: 16px;
+}
+
+.severity-high {
+  color: var(--fail);
+}
+
+.severity-medium {
+  color: var(--unable);
+}
+
+.severity-low {
+  color: var(--muted);
+}
+
+.explanation {
+  margin: 8px 0 4px;
+}
+
+.corrective {
+  margin: 0 0 8px;
+}
+
+.meta {
+  font-size: 12px;
+  margin: 8px 0 0;
+}
+
+.evidence {
+  background: #f7fafd;
+  border: 1px dashed var(--line);
+  border-radius: 5px;
+  padding: 8px 10px;
+}
+
+.evidence-caption {
+  margin: 0 0 6px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.evidence-row {
+  font-size: 13px;
+  word-break: break-word;
+  padding: 2px 0;
+}
+
+.evidence-path {
+  color: var(--na);
+}
+
+.evidence-equals {
+  color: var(--muted);
+}
+
+.evidence-value {
+  color: var(--ink);
+}
+
+/* --- decisions ---------------------------------------------------------- */
+
+.decision-form {
+  margin-top: 10px;
+  border-top: 1px dotted var(--line);
+  padding-top: 8px;
+}
+
+.decision-reason {
+  width: 100%;
+  margin-bottom: 8px;
+}
+
+.decision-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.action-mark_corrected_for_recheck {
+  background: #5c3d99;
+  border-color: #5c3d99;
+}
+
+.actor-field {
+  display: block;
+  margin: 10px 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.actor-field input {
+  display: block;
+  margin-top: 4px;
+  width: 320px;
+  max-width: 100%;
+}
+
+.run-identity {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 2px 12px;
+  margin: 8px 0;
+  font-size: 13px;
+}
+
+.run-identity dt {
+  color: var(--muted);
+}
+
+.run-identity dd {
+  margin: 0;
+  word-break: break-all;
+}
+
+.version-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: center;
+  padding: 4px 0;
+  border-bottom: 1px dotted var(--line);
+}
+
+#recheck-claim {
+  width: 100%;
+  font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
+.unresolved-count {
+  font-weight: 700;
+}

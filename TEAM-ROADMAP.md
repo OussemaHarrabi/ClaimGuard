@@ -5,6 +5,8 @@
 > **Read together with:** `docs/01-DOMAIN-Gulf-Claims-101.md` (how healthcare
 > claims actually work) and `docs/03-Challenge-Decode-Requirements.md`
 > (exactly what the challenge grades).
+> **Your current sprint work is in [`TEAM-TASKS.md`](TEAM-TASKS.md)** — one lab per
+> person, in your own field, with a step-by-step list and a done-checklist.
 
 ---
 
@@ -102,6 +104,17 @@ Before implementing, write/describe the shape of the solution:
 ---
 
 ## 4. The three work streams
+
+> **Update — the mentor's data has arrived (17 Sep pack).** The streams below are
+> the original direction and they are still the right way to think about the
+> product, but **two things changed**: the labelled benchmark is supplied, so
+> Stream C's "build our own fixtures and a mutation generator" work is no longer
+> needed; and the engine now exists, so the streams become *measuring and
+> verifying* work rather than building from zero.
+>
+> **Your current sprint assignments are the three labs in
+> [`TEAM-TASKS.md`](TEAM-TASKS.md)** — read that first, and treat the sections
+> below as the background for why each field matters.
 
 ### Stream A — The Explainable AI layer
 

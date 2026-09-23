@@ -1,12 +1,26 @@
 # ---------------------------------------------------------------------------
 # ClaimGuard AI — local / demo stack
 #
-#   cp .env.example .env            # once (compose reads it below)
+#   cp .env.example .env                       # once (compose reads it below)
+#   docker compose up -d --build               # db + migrate + api  (the demo)
 #   docker compose up -d db otel-lgtm          # infra only (fast daily loop;
-#                                              #   run the API on the host via
-#                                              #   `uv run uvicorn claimguard.api.main:app --reload`)
-#   docker compose up -d --build               # full stack: db + otel-lgtm + api + web
+#                                              #   then run the API on the host:
+#                                              #   `uv run claimguard serve --reload`)
 #   docker compose --profile temporal up -d    # ...plus Temporal (opt-in)
+#
+# What `docker compose up -d --build` gives you, in order:
+#   db       PostgreSQL 16, healthy
+#   migrate  one-shot `alembic upgrade head` against that database
+#   api      the reviewer API and interface on http://localhost:8000
+#            reviewer interface  /review
+#            OpenAPI docs        /docs
+#            readiness           /v1/health
+#
+# The `api` service is the ONLY application service. The reviewer interface is
+# not a second server: it ships inside the `claimguard` package
+# (claimguard/review/ui/static/) and is served by the same FastAPI app, so the
+# old `web` service — which built a `./web` directory that does not exist in
+# this repository — was removed rather than left to fail the build.
 #
 # Windows note: keep API hot-reload on the host (Docker file sharing slows
 # watch loops); Compose is for the demo / production-shaped run.
@@ -34,9 +48,27 @@ services:
       start_period: 5s
     restart: unless-stopped
 
+  # --- One-shot schema migration -------------------------------------------
+  # The API reports 503 with the fix-it command when the review tables are
+  # missing, so the demo stack applies them itself and exits. `api` waits for
+  # this to complete, which is why `docker compose up` lands on a working API
+  # instead of a healthy-looking one that answers 503.
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      CLAIMGUARD_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-claimguard}:${POSTGRES_PASSWORD:-claimguard}@db:5432/${POSTGRES_DB:-claimguard}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   # --- OpenTelemetry backend: single-container Grafana + Loki + Mimir + Tempo
-  # Grafana UI on :3000 (default admin/admin), OTLP/HTTP receiver on :4318
-  # (matches OTEL_EXPORTER_OTLP_ENDPOINT in .env.example).
+  # Grafana UI on :3000 (default admin/admin), OTLP/HTTP receiver on :4318.
+  # Available for when an exporter is wired: no code constructs one today, so
+  # nothing is exported yet and the app runs identically without this service.
   otel-lgtm:
     image: grafana/otel-lgtm:0.32.1
     ports:
@@ -46,7 +78,7 @@ services:
       - lgtm_data:/data
     restart: unless-stopped
 
-  # --- FastAPI application -------------------------------------------------
+  # --- The application: review API + reviewer interface ---------------------
   api:
     build:
       context: .
@@ -54,33 +86,38 @@ services:
     env_file: .env
     environment:
       # Container-to-container overrides: host values from `.env` would point
-      # the container at itself instead of at the `db` / `otel-lgtm` services.
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-claimguard}:${POSTGRES_PASSWORD:-claimguard}@db:5432/${POSTGRES_DB:-claimguard}
-      OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-lgtm:4318
+      # the container at itself instead of at the `db` service.
+      CLAIMGUARD_DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-claimguard}:${POSTGRES_PASSWORD:-claimguard}@db:5432/${POSTGRES_DB:-claimguard}
+      # The rule catalogue. The mentor pack is gitignored reference data, so the
+      # container mounts the vendored, committed copy of its `rules/` catalogue
+      # (tests/edu/fixtures/pack_reference) instead of depending on a directory
+      # that a fresh clone does not have. To validate against the full pack,
+      # replace this mount with the pack's `rules/` directory.
+      CLAIMGUARD_RULES_DIR: /catalogue
+    volumes:
+      - ./tests/edu/fixtures/pack_reference:/catalogue:ro
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      # The endpoint that exists. The body carries readiness
+      # (database, schema_revision, rules_dir, rules_ready); read it, do not
+      # infer it from this status code.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=3)"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 10s
-
-  # --- Next.js frontend (under development — needs web/ + its own Dockerfile)
-  web:
-    build:
-      context: ./web
-    ports:
-      - "3000:3000"
-    depends_on:
-      api:
-        condition: service_healthy
+    restart: unless-stopped
 
   # -------------------------------------------------------------------------
   # Optional profile: Temporal (durable workflows) — NOT started by default.
+  # Nothing in the application enables it yet (no code reads
+  # CLAIMGUARD_TEMPORAL_*); this profile is the infrastructure spike only.
   # Enable with: docker compose --profile temporal up -d
   # -------------------------------------------------------------------------
   temporal-postgresql:
@@ -123,7 +160,7 @@ services:
       - temporal
     environment:
       TEMPORAL_ADDRESS: temporal:7233
-      TEMPORAL_CORS_ORIGINS: http://localhost:3000
+      TEMPORAL_CORS_ORIGINS: http://localhost:8000
     ports:
       - "8080:8080"
 

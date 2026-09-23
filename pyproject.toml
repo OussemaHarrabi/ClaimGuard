@@ -60,7 +60,7 @@ dev = [
 ]
 
 [project.scripts]
-claimguard = "claimguard.cli.main:app"
+claimguard = "claimguard.cli.main:main"
 
 [build-system]
 requires = ["hatchling"]

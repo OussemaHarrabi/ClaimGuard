@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ClaimGuard AI | Reviewer interface</title>
+    <link rel="stylesheet" href="/review/static/styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>ClaimGuard AI — reviewer interface</h1>
+      <p class="subtitle">
+        The deterministic 15-rule check results and the reviewer's decisions, side by side. Synthetic
+        claims only.
+      </p>
+    </header>
+
+    <main>
+      <!--
+        Honesty notices. These are static text on purpose: they must be readable
+        even if the script does not run.
+      -->
+      <section class="notice notice-warn" id="teaching-notice">
+        <p><strong>A PASS is not payer approval.</strong> The pack's rulebook states it plainly:</p>
+        <blockquote>PASS means this specific check passed on the supplied data. It does not mean payer approval or a clinically correct claim.</blockquote>
+        <p>
+          (fictional-rulebook, docs/04_Rulebook.md:16.) No claim is submitted to a payer from this
+          page, and NOT_IMPLEMENTED is never shown as a pass.
+        </p>
+        <p>
+          <strong>Reviewer identity is self-declared.</strong> This page has no login, no session
+          and no permission model: whoever types a name into the reviewer field is recorded as the
+          actor of the decision. Do not put personal data in it.
+        </p>
+        <p>
+          <strong>Instructional oracle, not ground truth.</strong> The claims, codes and policy are
+          invented for teaching. This interface is not clinical or reimbursement ground truth, and
+          it reports no real-world denial reduction. Every status shown here came from the
+          deterministic engine; every decision is recorded by the API in an append-only ledger.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>How to read a status</h2>
+        <p class="muted">
+          The five statuses below are not interchangeable. Only PASS means the check passed, and a
+          PASS is not payer approval.
+        </p>
+        <div id="legend"></div>
+      </section>
+
+      <section class="panel">
+        <h2>1. Review queue</h2>
+        <form id="filters">
+          <label>
+            Rule status
+            <select id="filter-status">
+              <option value="">all</option>
+              <option value="PASS">PASS</option>
+              <option value="FAIL">FAIL</option>
+              <option value="UNABLE_TO_ASSESS">UNABLE_TO_ASSESS</option>
+              <option value="NOT_APPLICABLE">NOT_APPLICABLE</option>
+              <option value="NOT_IMPLEMENTED">NOT_IMPLEMENTED</option>
+            </select>
+          </label>
+          <label>
+            Severity
+            <select id="filter-severity">
+              <option value="">all</option>
+              <option value="high">high</option>
+              <option value="medium">medium</option>
+              <option value="low">low</option>
+            </select>
+          </label>
+          <label>
+            Rule
+            <select id="filter-rule">
+              <option value="">all</option>
+              <option value="R001">R001</option>
+              <option value="R002">R002</option>
+              <option value="R003">R003</option>
+              <option value="R004">R004</option>
+              <option value="R005">R005</option>
+              <option value="R006">R006</option>
+              <option value="R007">R007</option>
+              <option value="R008">R008</option>
+              <option value="R009">R009</option>
+              <option value="R010">R010</option>
+              <option value="R011">R011</option>
+              <option value="R012">R012</option>
+              <option value="R013">R013</option>
+              <option value="R014">R014</option>
+              <option value="R015">R015</option>
+            </select>
+          </label>
+          <label class="checkbox">
+            <input type="checkbox" id="filter-include-all" />
+            include checks that do not need attention
+          </label>
+          <button type="submit" id="filter-apply">Apply filters</button>
+        </form>
+        <div id="queue-status"></div>
+        <div id="queue-error"></div>
+        <div id="queue-counts"></div>
+        <div id="queue-claims"></div>
+        <div id="queue-items"></div>
+      </section>
+
+      <section class="panel">
+        <h2>2. Claim detail — all 15 checks</h2>
+        <div id="detail-error"></div>
+        <div id="detail-meta"></div>
+        <label class="actor-field">
+          Reviewer (self-declared actor for every decision below)
+          <input id="detail-actor" placeholder="team or reviewer id" />
+        </label>
+        <div id="decision-result"></div>
+        <div id="detail-findings">
+          <p class="muted">Open a claim from the queue above to see its 15 check results.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>3. Decision history</h2>
+        <div id="decisions">
+          <p class="muted">Open a claim from the queue above to see its recorded decisions.</p>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>4. Correct the claim and recheck</h2>
+        <p class="muted">
+          A correction is a <strong>new version</strong>: the API re-runs the 15 checks over the
+          corrected envelope and leaves the original run, its results and its decisions untouched.
+          The API does not expose the submitted envelope, so this page cannot pre-fill it — paste
+          the corrected envelope as JSON below. It must carry the same
+          <code>claim_id</code> (<span id="recheck-claim-id">open a claim first</span>) or the API
+          answers 409.
+        </p>
+        <label class="actor-field">
+          Reviewer (self-declared actor for this recheck)
+          <input id="recheck-actor" placeholder="team or reviewer id" />
+        </label>
+        <textarea
+          id="recheck-claim"
+          rows="8"
+          spellcheck="false"
+          aria-label="Corrected claim envelope as JSON"
+          placeholder='{"schema_version": "1.0.0", "claim_id": "...", ...}'
+        ></textarea>
+        <button type="button" id="recheck-submit">Submit corrected claim for recheck</button>
+        <div id="recheck-result"></div>
+      </section>
+    </main>
+
+    <script type="module" src="/review/static/app.js"></script>
+  </body>
+</html>

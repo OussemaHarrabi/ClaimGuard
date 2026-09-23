@@ -72,6 +72,7 @@ from claimguard.edu.envelope import (
     validate_transport,
 )
 from claimguard.edu.policy import RuleContext, RuleDirError
+from claimguard.review import ui as review_ui
 from claimguard.review.models import (
     AuditStamp,
     DecisionHistory,
@@ -243,6 +244,7 @@ def create_app(
         response_model=RunResponse,
         status_code=status.HTTP_201_CREATED,
     )
+    app.include_router(review_ui.router)
     return app
 
 
