@@ -1,61 +1,61 @@
 # Team task sheets — Sprint 1 (mentor data has arrived)
 
-> **Who this is for:** B1, B2 and B3. You asked for real work in your own field now
-> that the mentor's data is here — this is it.
-> **Read this with:** `TEAM-ROADMAP.md` (how we work: branches, commits, PRs) and
-> `docs/01-Domain-Gulf-Claims-101.md` (the domain, if you have not read it yet).
+> **Who this is for:** B1, B2 and B3.
+> **Read this with:** `TEAM-ROADMAP.md` (how we work) and `docs/01-Domain-Gulf-Claims-101.md`
+> (the domain, if you have not read it yet).
 
 ---
 
 ## How this document works
 
-Each of you gets **one lab**: a small, self-contained piece of work in your own
-field that produces something real we can show the mentor and the jury.
+Each of you gets **one lab**: a self-contained piece of AI work in your own field that
+produces something real we can show the mentor and the jury.
 
-Rules of the game, so nobody feels lost:
+**These three labs are independent by construction.** You do not share files, you do not
+depend on each other's output, and no lab can break the product:
 
-1. **You work in your own folder.** B1 → `team/b1-explanations/`, B2 →
-   `team/b2-evaluation/`, B3 → `team/b3-documents/`. You will not touch shared
-   code and shared code will not touch you. Nothing you do can break the product.
-2. **You may READ everything, you may only WRITE in your folder.** Reading the
-   engine is encouraged — that is how you learn what a real codebase looks like.
-3. **One branch per lab:** `stream/<your-id>/<topic>`, e.g.
-   `stream/b1/explanation-scorecard`. Open a PR when your lab is done.
-4. **Progress is measured by artifacts, not by hours.** Every lab below ends with
-   files that a stranger could open and understand.
-5. **Stuck for more than 2 hours on the same thing? Ask.** Write down: what you
-   wanted, what you tried, the exact error, and what you think is wrong. Ask in the
-   team channel, not by DM — everyone learns from the answer.
-6. **Never invent a number.** If you did not measure it, do not write it. This is
-   the single most important rule in this project, because our whole pitch is
-   honesty about what the system can and cannot do.
+- you **write only** inside your own folder — B1 → `team/b1-grounding/`,
+  B2 → `team/b2-risk-model/`, B3 → `team/b3-retrieval/`;
+- you **read anything** — the engine, the data, the docs. Reading is how you learn what a
+  real codebase looks like;
+- the product code (`claimguard/**`) is **read-only** for you. Nothing you do can change
+  what the jury sees, and nothing the rest of us do can break your lab;
+- **one branch per lab:** `stream/<your-id>/<topic>` (e.g. `stream/b2/risk-model`), then a PR.
+
+Two rules that matter more than speed:
+
+1. **Never write a number you did not measure.** If you did not run it, do not state it.
+2. **Never let a label leak.** When you train or score anything, the rule is: fit on
+   **development**, evaluate on **validation**. The mentor's 200 held-out claims are not in
+   this repository — never pretend otherwise.
 
 ### The environment (do this once)
 
 ```bash
-uv sync --all-extras                 # install everything
-uv run pytest tests/ -q              # should pass; if some tests skip, that is fine
+uv sync --all-extras        # installs everything, including scikit-learn and numpy
+uv run pytest tests/ -q     # should pass; some tests skip without a database, that is fine
 ```
 
-The mentor's data ("the pack") lives at
-`ClaimGuardAI_Student_Starter_Pack/ClaimGuardAI_Student_Starter_Pack`.
-It is **not stored in git** (it is delivered reference material), so:
+The mentor's data ("the pack") is at
+`ClaimGuardAI_Student_Starter_Pack/ClaimGuardAI_Student_Starter_Pack`. It is **not stored in
+git** (delivered reference material), so:
 
-> **CI rule.** Any test you write that needs the pack must skip cleanly when the
-> pack is absent, or our pipeline goes red. Copy the pattern already used in
+> **CI rule.** Any test of yours that needs the pack must skip cleanly when it is absent, or
+> our pipeline goes red. Copy the pattern in
 > `tests/edu_conformance/test_harness_selfcheck.py`:
-> `pytest.mark.skipif(not PACK_PATH.is_file(), reason="mentor starter pack absent ...")`.
+> `pytest.mark.skipif(not PACK.is_file(), reason="mentor starter pack absent ...")`.
 
-### What already exists (so you know what to build on, not rebuild)
+### What already exists (build on it, do not rebuild it)
 
-| Piece | Path | What it does |
+| Piece | Path | What it gives you |
 |---|---|---|
-| Rules engine | `claimguard/edu/` | Runs the 15 rules, one verdict per rule per claim |
-| Bounded explanations | `claimguard/edu/explain/` | Deterministic explanation text + optional model rewrite, with citation guards |
-| Reviewer API | `claimguard/review/` | Submit a claim, read results, record a decision |
-| Verified numbers | `docs/verification/EDU-EVALUATION-REPORT.md` | The measured results (accuracy, F1, false alarms) |
+| Engine (15 rules) | `claimguard/edu/` | `evaluate_claim(claim, ctx)` → 15 result records |
+| Result records | — | 15 keys: `claim_id, rule_id, rule_version, status, severity, affected_line_ids, evidence, rule_source, explanation, corrective_action, confidence, confidence_kind, requires_human_review, method, review_status` |
+| Rule catalogue (committed) | `tests/edu/fixtures/pack_reference/` | `rules.json`, `policies.json`, `services.json` — works without the pack |
+| Explanation layer | `claimguard/edu/explain/` | deterministic + model-assisted explanations, citation checks |
+| Measured results | `docs/verification/EDU-EVALUATION-REPORT.md` | the numbers to compare against |
 
-Run one claim through the engine to see the shape of everything:
+Produce records for yourself in one command:
 
 ```bash
 uv run python -m claimguard.edu.run \
@@ -66,135 +66,155 @@ uv run python -m claimguard.edu.run \
 
 ---
 
-# B1 — The explanation quality lab (your field: AI / language)
+# B1 — The grounding and handover lab (your field: AI / language / agents)
 
-**Your mission.** We generate an explanation for every problem we find. Right now
-nobody has measured whether those explanations are actually *good*. You are going
-to build the measurement and report what you find.
+**Your mission.** Two things nobody has built: a **machine check that an explanation is
+actually grounded** in the evidence it cites, and a **bounded agent** that turns one finding
+into a reviewer handover using tools rather than guesswork.
 
-**Why this matters.** The mentor's assessment gives 20 of 100 points to "grounded
-AI explanations" and says plainly that explanation quality is scored by a human,
-not by a script. So a human scorecard is the only honest instrument. That is your
-tool to build.
+**Why it matters.** The mentor gives 20 of 100 points to grounded AI explanations and says
+plainly that explanation quality is *not* scored by any script — so today we cannot prove our
+explanations are honest, only that they are non-empty. And the pack asks for exactly this:
+*"Let the assistant select supplied rules, call read-only evidence tools, explain findings and
+request human review. Allow only named tools with typed inputs."* Your lab is that.
 
 **Read first (30 minutes):**
-- `ClaimGuardAI_Student_Starter_Pack/.../docs/05_Architecture_and_AI.md` — the
-  "AI exercise" section defines the contract.
-- `ClaimGuardAI_Student_Starter_Pack/.../prompts/explain_findings.md` — the prompt.
-- `ClaimGuardAI_Student_Starter_Pack/.../exercises/llm_explanation_cases.jsonl` —
-  the 25 cases you will score.
-- `claimguard/edu/explain/` — how explanations are produced today.
+- `claimguard/edu/explain/` — how explanations are produced today, and what a citation is.
+- `claimguard/edu/emit.py` — how evidence is built (`{path, value}` into the original claim).
+- The pack: `docs/05_Architecture_and_AI.md` ("AI exercise" and "Agent behaviour to
+  demonstrate") and `prompts/explain_findings.md`.
+- The pack's 25 explanation cases: `exercises/llm_explanation_cases.jsonl`.
 
-**Build (in this order):**
+**Build, in this order:**
 
-| Step | Deliverable in `team/b1-explanations/` |
+| Step | Deliverable in `team/b1-grounding/` |
 |---|---|
-| 1 | `scorecard.py` — for each of the 25 cases, print: the rule, the evidence (`path = value`), the explanation, and five 0/1 boxes: *correct finding / correct evidence / correct rule / appropriate action / honest uncertainty*, plus a free-text "unsupported statements" column. Output both a readable page and a CSV to fill in. |
-| 2 | `filled_scorecard.csv` — you actually score all 25 by hand. This is the point of the exercise. |
-| 3 | `score.py` — read the filled CSV and compute per-criterion totals, the rate of unsupported statements, and which explanation style scored best/worst. |
-| 4 | `FINDINGS.md` — half a page: what we do well, what we do badly, and **three concrete prompt improvements** you would try, each with the case that convinced you. |
+| 1 | `citation_check.py` — split an explanation into sentences and check each one against the finding's cited evidence: does every claim trace to a pointer, and does any sentence assert something the evidence cannot support (a decision, a clinical judgement, an invented value)? Report per-sentence verdicts and a per-finding score. |
+| 2 | `handover_agent.py` — a small bounded agent with a **fixed tool list**, each tool typed and read-only: `get_finding(claim_id, rule_id)`, `get_evidence(claim_id, rule_id)`, `get_rule(rule_id)`, `request_human_review(claim_id, rule_id, why)`. It runs the loop: read the finding → fetch the rule → fetch the evidence → produce a structured handover. No tool may write to the ledger and no tool may change a status. |
+| 3 | `scorecard.py` + `filled_scorecard.csv` — hand-score the pack's 25 cases on five 0/1 criteria (correct finding / correct evidence / correct rule / appropriate action / honest uncertainty) and compute the totals. This is the human baseline your automated checker is measured against. |
+| 4 | `FINDINGS.md` — does the automated checker agree with your human scores? Where does it over- or under-flag? What would you change? |
 
 **How you know you are done:**
-- [ ] All 25 cases appear in the scorecard, none skipped.
-- [ ] `uv run python team/b1-explanations/score.py` prints the totals.
-- [ ] Every number in `FINDINGS.md` comes from your own CSV.
-- [ ] `uv run pytest team/b1-explanations -q` passes (test your parser on a tiny
-      hand-written scorecard — do not test that the engine works, that is not yours).
-- [ ] The word "probably" appears nowhere as a substitute for a measurement.
+- [ ] All 25 cases appear in the scorecard and you scored every one by hand.
+- [ ] `citation_check.py` runs over a real results file and prints per-sentence verdicts.
+- [ ] The agent runs end-to-end with **no network and no API key** (tools are local; the
+      "model" step can be a deterministic policy you write).
+- [ ] `uv run pytest team/b1-grounding -q` passes, including a test that an ungrounded
+      sentence (one citing nothing) is caught.
+- [ ] Every number in `FINDINGS.md` comes from your own output.
 
-**If you get stuck:** the most likely snag is case number 14, where the
-deterministic path and the model path disagree about whether to escalate. That is
-real and interesting — record it as a finding rather than a bug.
+**If you get stuck:** the hard part is sentence splitting and deciding what "supported" means.
+Start naive (split on `.`), get the pipeline running end to end, then improve. A working
+naive checker beats a perfect unwritten one.
 
 ---
 
-# B2 — The uncertainty and calibration lab (your field: deep learning / statistics)
+# B2 — The risk model lab (your field: deep learning)
 
-**Your mission.** Two questions nobody has answered yet: *how much can we trust our
-own accuracy number*, and *when the system says "I can't tell", is it right to
-abstain there?*
+**Your mission.** Train a model that predicts, from the **claim alone**, whether a claim will
+have at least one failing check — a fast triage model for the queue — and evaluate it honestly.
 
-**Why this matters.** We report accuracy on 400 claims. A single number on a sample
-is not a measurement — it is a measurement **with an interval**. The mentor asks for
-false alarms, missed issues and uncertainty handling reported *separately*, and
-Phase 2 is entirely about detection quality. You are building the instrument that
-will carry Phase 2.
+**Why it matters.** Today the queue is ordered by nothing. A model that says "this claim
+probably has a problem" lets a reviewer look at the risky claims first. It is also the first
+machine-learning component in the project, so it must demonstrate the discipline that makes
+ML trustworthy: a real split, no leakage, honest metrics, and calibration.
 
 **Read first (30 minutes):**
-- `ClaimGuardAI_Student_Starter_Pack/.../docs/07_Evaluation_and_Acceptance.md` —
-  the metric definitions are all here; do not invent your own.
-- `ClaimGuardAI_Student_Starter_Pack/.../data/dataset_manifest.json` — the declared
-  counts, so you can check your own arithmetic against theirs.
-- `docs/verification/EDU-EVALUATION-REPORT.md` — the numbers you are going to put
-  intervals around.
+- The pack's `docs/07_Evaluation_and_Acceptance.md` — the metric philosophy.
+- `ClaimGuardAI_Student_Starter_Pack/.../data/dataset_manifest.json` — the declared counts and
+  the public/per-split labels.
+- `docs/verification/EDU-EVALUATION-REPORT.md` — our measured engine results, your baseline.
+- `claimguard/edu/envelope.py` — the exact 17-key claim shape you will featurise.
 
-**Build (in this order):**
+**Build, in this order:**
 
-| Step | Deliverable in `team/b2-evaluation/` |
+| Step | Deliverable in `team/b2-risk-model/` |
 |---|---|
-| 1 | `load_results.py` — load a predictions file and the matching gold file, and build the claim × rule table. Sanity-check it against `dataset_manifest.json`. |
-| 2 | `bootstrap.py` — resample **claims with replacement** 2000 times and report, for issue precision, issue recall, issue F1, false-alarm rate and status accuracy: the point estimate, the 2.5th and 97.5th percentiles. Also per rule. |
-| 3 | `abstention_analysis.py` — take apart every `UNABLE_TO_ASSESS` and `NOT_APPLICABLE`: which rules, which claims, what evidence was missing, and cross-tabulate against the confusion matrix. Answer in one sentence where the system abstains and whether that is the right place. |
-| 4 | `FINDINGS.md` — the intervals as a table, the three most uncertain rules, and an explicit statement of what an interval does *not* prove. |
+| 1 | `build_dataset.py` — turn the development and validation splits into a feature table: one row per claim, features from the envelope only (counts, nulls, dates as day offsets, amounts, code presence, provider/policy membership), and the label "has at least one FAIL among the 15 checks". Print the class balance. |
+| 2 | `baseline.py` — the honest baselines first: majority class, and a single-feature rule. A model that cannot beat these is not a result. |
+| 3 | `model.py` — train at least two models: a logistic regression (interpretable) and a small neural network (`sklearn.neural_network.MLPClassifier`). **Fit on development, evaluate on validation.** Report precision, recall, F1, ROC-AUC, and the confusion matrix. |
+| 4 | `calibration.py` — plot/print a reliability table: when the model says 0.8, is it right about 80% of the time? Report Brier score and a calibration curve. This is the part that separates a demo from a model. |
+| 5 | `FINDINGS.md` — what the model can and cannot do, which features matter, where it fails, and why it must **never** replace the rules (it predicts a probability; the rules produce the verdicts the jury grades). |
+
+**The discipline that earns the marks:**
+- **Never** train and test on rows from the same claim or split — say in your report exactly
+  which split you fitted on and which you evaluated on.
+- **Never** touch the mentor's held-out set (it is not here — do not invent numbers for it).
+- Compare against the deterministic engine: the engine is the reference, your model is a
+  triage aid. Say so.
 
 **How you know you are done:**
-- [ ] The point estimates your bootstrap produces match
-      `docs/verification/EDU-EVALUATION-REPORT.md` exactly. If they do not, you
-      have a bug — find it before writing anything else.
-- [ ] `uv run pytest team/b2-evaluation -q` passes, including a test where the
-      bootstrap is run on a hand-built tiny table where you know the answer.
-- [ ] No interval is reported from fewer than 100 resamples, and you say how many
-      you used.
-- [ ] `FINDINGS.md` states that a narrow interval on a synthetic set does not mean
-      the system is correct on real claims.
+- [ ] The label is derived by actually running the engine (`python -m claimguard.edu.run`), not
+      by copying `expected_results.jsonl` — or if you do use the gold file, say so and explain
+      why it is equivalent.
+- [ ] Metrics reported on the **validation** split, with the class balance shown.
+- [ ] A calibration table with real numbers.
+- [ ] `uv run pytest team/b2-risk-model -q` passes, including a test that your feature builder
+      never reads a field that only exists *after* the rules run (that would be leakage).
+- [ ] `FINDINGS.md` states plainly what the model is **not** allowed to be used for.
 
-**If you get stuck:** be careful with the difference between "per claim" and "per
-claim-rule pair". The mentor's metrics are per **pair** (6000 of them on
-development), while resampling should happen per **claim** (400) because rules
-within one claim are not independent. That distinction is the analytical heart of
-this lab — get it right and explain it in your report.
+**If you get stuck:** the most common failure here is leakage — a feature like "number of
+findings" that only exists because the rules already ran. If your model scores 0.99, suspect
+leakage before celebrating.
 
 ---
 
-# B3 — The documents and data-integrity lab (your field: computer vision / data)
+# B3 — The retrieval quality lab (your field: AI / information retrieval)
 
-**Your mission.** Own the "documents" side. Claims arrive with attachments and,
-separately, as FHIR bundles — and we have publicly claimed that FHIR **cannot**
-carry 11 of the fields our rules need. You are going to independently check that
-claim, and then characterise the attachment population nobody has looked at.
+**Your mission.** Build a search index over the rulebook and policy documents, then **measure
+how good it is**. When a reviewer asks "which rule explains this?", retrieval quality decides
+whether the right text ever reaches them — and nobody has measured ours, because we have none.
 
-**Why this matters.** Two reasons. First, independent verification: we asserted
-something in our own code; a colleague re-deriving it is exactly how a real team
-catches its own mistakes. Second, attachments are where the bonus OCR points live,
-and before promising OCR you must know what the documents actually look like.
+**Why it matters.** Every credible explanation system sits on retrieval: find the right rule
+excerpt, the right policy clause, the right worked example. The mentor's own architecture asks
+the assistant to *"select supplied rules"*. Retrieval quality is measurable, it is pure AI
+work, and it needs no API key — which is why it is the perfect lab for a CV person moving into
+AI engineering.
 
 **Read first (30 minutes):**
-- `ClaimGuardAI_Student_Starter_Pack/.../docs/11_FHIR_Orientation.md` — especially
-  "Deliberate limitations".
-- `claimguard/edu/intake/fhir_source.py` — our claim, in code.
-- `ClaimGuardAI_Student_Starter_Pack/.../docs/03_Data_Dictionary.md` — the
-  attachment record definition.
+- `ClaimGuardAI_Student_Starter_Pack/.../rules/rules.json` and `policies.json` — the corpus.
+- The committed copy at `tests/edu/fixtures/pack_reference/` — same files, always available.
+- The pack's `docs/04_Rulebook.md` and `docs/03_Data_Dictionary.md` — the prose corpus.
+- `docs/verification/EDU-EVALUATION-REPORT.md` — the findings you will build queries from.
 
-**Build (in this order):**
+**Build, in this order:**
 
-| Step | Deliverable in `team/b3-documents/` |
+| Step | Deliverable in `team/b3-retrieval/` |
 |---|---|
-| 1 | `attachment_census.py` — across all **three** splits: how many attachments, the distribution of `type` and of `document_status`, how many exist whose `patient_id` differs from the claim's patient, how long the `text` field is, and what the text actually looks like (quote two short examples). |
-| 2 | `fhir_gap_check.py` — re-derive, from the raw bundles alone, exactly which envelope fields a FHIR bundle cannot provide. Then print your list next to the list in `claimguard/edu/intake/fhir_source.py` and say **agree** or **disagree per field**, with the reason. |
-| 3 | `CENSUS.md` — the measured tables, the agree/disagree result, and what surprised you. |
-| 4 | `OCR_FEASIBILITY.md` — if attachments were scanned PDFs instead of inline text: which two libraries you would compare and why, what could go wrong, and why any text coming out of OCR must be treated as untrusted data that can never change a rule result. |
+| 1 | `corpus.py` — load and chunk the corpus into retrievable passages (one rule = one passage; split long prose sensibly). Print the corpus size and a few examples. |
+| 2 | `bm25.py` — implement BM25 **yourself** (term frequencies, document frequencies, the k1 and b parameters, length normalisation). No search library. Explain each formula in a comment. |
+| 3 | `queries.jsonl` — build a labelled query set: for a finding (its evidence and symptom), which rule passage is relevant? At least 40 queries with relevance judgements, derived from real claims, written **by you** — this is the ground truth your metrics stand on. |
+| 4 | `evaluate_retrieval.py` — report **recall@1, recall@5, MRR and nDCG@5**, plus a failure analysis of the queries that failed. Compare BM25 against a naïve keyword baseline. |
+| 5 | `FINDINGS.md` — how good is lexical retrieval on our corpus, which queries fail and why (vocabulary mismatch, abbreviations, synonyms), and what an embedding-based retriever would fix that BM25 cannot. |
 
 **How you know you are done:**
-- [ ] The census covers all three splits and every number is printed by your script.
-- [ ] The gap check gives a per-field verdict, not a general opinion.
-- [ ] `uv run pytest team/b3-documents -q` passes.
-- [ ] `OCR_FEASIBILITY.md` contains no claim about OCR accuracy — you have not
-      measured any, and the pack states there is no OCR task in this challenge.
+- [ ] BM25 is your own implementation; you can explain k1 and b to the team in one sentence each.
+- [ ] The query set is real and labelled, with the reasoning recorded for at least a few cases.
+- [ ] Metrics are reported with the number of queries, and the naive baseline is shown beside
+      them so the improvement is visible.
+- [ ] The failure analysis names concrete queries, not generalities.
+- [ ] `uv run pytest team/b3-retrieval -q` passes, including a test on a tiny hand-built corpus
+      where you know the correct ranking.
+- [ ] No claim about embedding quality that you did not measure.
 
-**If you get stuck:** do not try to "fix" the eight attachments whose patient does
-not match the claim. They are deliberate — the pack's own notes say some records
-intentionally reference a different document patient, and our R010 rule exists
-precisely to catch that. Finding them is the success, not changing them.
+**If you get stuck:** start with 10 queries and a 15-passage corpus — the whole pipeline on a
+toy scale — then grow the query set. Retrieval work fails when the evaluation harness is
+elaborate and the labels are thin; do it the other way round.
+
+---
+
+# Why these three are independent
+
+| | B1 reads | B2 reads | B3 reads |
+|---|---|---|---|
+| Own folder only (writes) | `team/b1-grounding/` | `team/b2-risk-model/` | `team/b3-retrieval/` |
+| Product code | read-only | read-only | read-only |
+| Engine output | yes | yes | yes |
+| Rule catalogue | yes | yes | yes |
+| Other teammates' output | **no** | **no** | **no** |
+
+No lab consumes another's artifacts, so nobody waits and nobody blocks. If you finish early,
+add a second metric or a harder case — do not reach into someone else's folder.
 
 ---
 
@@ -202,22 +222,22 @@ precisely to catch that. Finding them is the success, not changing them.
 
 | When | B1 | B2 | B3 |
 |---|---|---|---|
-| Day 1 | Read the three sources, run the engine once, open your branch | Read the metric definitions, build `load_results.py` | Read the FHIR notes, run `fhir_gap_check.py` skeleton |
-| Day 2 | Build the scorecard generator | Get the bootstrap point estimates matching the report | Finish the census script |
-| Day 3 | Score all 25 cases **by hand** | Finish intervals + start abstention analysis | Finish the gap check per field |
-| Day 4 | `score.py` + `FINDINGS.md` | `FINDINGS.md` | `CENSUS.md` + `OCR_FEASIBILITY.md` |
+| Day 1 | Read the explain layer, run the engine, open your branch | Read the metric philosophy, start `build_dataset.py` | Read rules.json, build `corpus.py` |
+| Day 2 | `citation_check.py` on real results | Baselines + feature builder finished | BM25 implemented, toy test passing |
+| Day 3 | Hand-score all 25 cases | Train both models, validation metrics | 40 labelled queries |
+| Day 4 | `handover_agent.py` + `FINDINGS.md` | Calibration table + `FINDINGS.md` | Metrics + failure analysis |
 | Day 5 | PR + 5-minute demo to the team | PR + 5-minute demo | PR + 5-minute demo |
 
-**Definition of done for any lab:** it runs from a clean checkout, it has at least
-one test that would fail if the logic broke, every number is traceable to a command,
-and you can explain what you built in five minutes without reading it aloud.
+**Done, for any lab:** it runs from a clean checkout, it has at least one test that would fail
+if the logic broke, every number traces to a command, and you can explain it in five minutes
+without reading it aloud.
 
 ---
 
 # One thing to keep straight
 
-Everything in this challenge is **synthetic and educational**. Our system
-pre-validates administrative data; it never approves, denies, or judges a claim,
-and it never gives medical advice. If a finding in your lab output could be read as
-"this claim should be paid" or "this patient needs X", that is a defect — tell the
-team lead rather than writing around it.
+Everything here is **synthetic and educational**. Our system pre-validates administrative data:
+it never approves, denies or judges a claim, and it never gives medical advice. If anything in
+your lab's output could be read as "this claim should be paid" or "this patient needs X", that
+is a defect — tell the project lead rather than writing around it. A model that predicts a
+probability is helping a human look in the right place; it is not deciding anything.
