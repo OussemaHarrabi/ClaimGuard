@@ -83,6 +83,7 @@ why `make edu-conformance` is a mandatory pre-submission step.
 
 | # | Document | What it's for | Who reads it first |
 |---|---|---|---|
+| — | [`HANDOFF.md`](HANDOFF.md) | **Everything about this project in one file**: the graded contract, the timeline, the module map, what is verified, what is not, the traps, and how to run it all | **Anyone new — start here** |
 | 01 | [`docs/01-DOMAIN-Gulf-Claims-101.md`](docs/01-DOMAIN-Gulf-Claims-101.md) | Gulf/Dubai claims metier from zero | **The 3 beginners — start here** |
 | 02 | [`docs/02-PROBLEMATIC-Impact.md`](docs/02-PROBLEMATIC-Impact.md) | The problem + all sourced statistics | Everyone |
 | 02B | [`docs/02B-PITCH-Problem-Narrative.md`](docs/02B-PITCH-Problem-Narrative.md) | Pitch-ready version of 02 | Deck authors |
