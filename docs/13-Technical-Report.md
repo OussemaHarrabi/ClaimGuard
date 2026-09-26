@@ -129,10 +129,11 @@ from the pack".)*
 The complete post-format release gate produced:
 
 ```text
-backend: 610 passed, 39 skipped, 0 failed
+clean worktree backend: 610 passed, 39 explicit pack skips, 0 failed
+merged main with local mentor pack: 649 passed, 0 skipped, 0 failed
 frontend: 11 passed in 3 files
 Ruff lint: passed
-Ruff format: 142 files already formatted
+Ruff format: 143 files already formatted
 focused strict Pyright: 0 errors, 1 private-test-helper warning
 ESLint: passed
 TypeScript: passed
@@ -140,9 +141,10 @@ Next.js production build: passed
 browser: demo data, three-column desktop grid and recommendation-to-note flow verified
 ```
 
-The 39 skips are explicit mentor-pack-dependent tests. The delivered pack is intentionally not in
-git; no failure is hidden behind a skip. The exact release commands and remaining limitations are in
-`docs/20-Implementation-Completion-Report.md` §§9–10.
+The clean-worktree 39 skips are explicit mentor-pack-dependent tests. The delivered pack is
+intentionally not in git; no failure is hidden behind a skip. The post-merge run used the local
+gitignored nested pack and executed all 649 tests. The exact release commands and remaining
+limitations are in `docs/20-Implementation-Completion-Report.md` §§9–10.
 
 The earlier per-directory collection snapshot below is retained for traceability rather than
 rewritten as if it were the current total.

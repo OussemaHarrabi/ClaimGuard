@@ -249,10 +249,10 @@ Commands were run from the release worktree after the final formatting pass:
 
 | Gate | Result |
 |---|---|
-| `uv run --extra temporal --extra dev pytest -q` | **610 passed, 39 skipped, 0 failed** |
-| Skip reason | Mentor-delivered starter pack absent from this checkout; each skip is explicit |
+| Clean-worktree backend | **610 passed, 39 skipped, 0 failed**; every skip explicitly names the absent mentor pack |
+| Merged `main` backend | **649 passed, 0 skipped, 0 failed** with the local gitignored nested mentor pack present |
 | `uv run --extra dev ruff check .` | Passed |
-| `uv run --extra dev ruff format --check .` | 142 files already formatted |
+| `uv run --extra dev ruff format --check .` | 143 files already formatted |
 | Focused strict Pyright | 0 errors, 1 existing private-test-helper warning |
 | `npm test -- --run` | **11 passed in 3 files** |
 | `npm run lint` | Passed |
