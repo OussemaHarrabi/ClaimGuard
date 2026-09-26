@@ -260,7 +260,7 @@ Commands were run from the release worktree after the final formatting pass:
 | `npm run build` | Next.js production build passed; `/` and `/_not-found` prerendered |
 | Notebook JSON parse | Passed |
 | `git diff --check` | Passed; Windows line-ending notices only |
-| Browser verification | Demo data rendered; responsive three-column desktop grid confirmed; recommendation copied into the correct note |
+| Browser verification | Demo mode (`NEXT_PUBLIC_DEMO_MODE=true`) rendered; responsive three-column desktop grid confirmed; recommendation copied into the correct note. **Live mode was verified separately on 2026-09-26**: with the API origin set at build time, the cockpit loaded a real queue (13 claims / 29 findings), opened a claim, showed the evidence chips and the security panel, and recorded a decision (queue went 29 unresolved → 28 unresolved / 1 resolved, audit entry `reviewer-12 · Confirm Issue`) |
 
 The public mentor data result remains 1.0000 status accuracy on all 9,000 public claim-rule labels,
 but this is not evidence of real-claim accuracy or held-out performance.

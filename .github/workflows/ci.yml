@@ -2,6 +2,7 @@
 # ClaimGuard AI — CI
 #   quality  : lint (ruff) + format check (ruff) + typecheck (pyright strict)
 #   test     : pytest without the opt-in `llm` / `e2e` markers, with coverage
+#   frontend : npm ci + lint + typecheck + vitest + Next.js production build
 #   security : locked-dependency audit (pip-audit) + secret scan (gitleaks)
 # ---------------------------------------------------------------------------
 name: CI
@@ -93,6 +94,43 @@ jobs:
           name: coverage-python${{ matrix.python-version }}
           path: coverage.xml
           if-no-files-found: error
+
+  frontend:
+    name: frontend (lint + typecheck + test + build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies (locked)
+        working-directory: frontend
+        run: npm ci
+
+      - name: Lint
+        working-directory: frontend
+        run: npm run lint
+
+      - name: Typecheck
+        working-directory: frontend
+        run: npm run typecheck
+
+      - name: Test
+        working-directory: frontend
+        run: npm test
+
+      - name: Build
+        working-directory: frontend
+        # CLAIMGUARD_API_ORIGIN is read at BUILD time by next.config.ts and baked
+        # into the route manifest, so the build needs it here. It must match the
+        # origin the browser will reach, not a container hostname.
+        env:
+          CLAIMGUARD_API_ORIGIN: http://127.0.0.1:8000
+        run: npm run build
 
   security:
     name: security (deps + secrets)
