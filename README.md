@@ -107,6 +107,10 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | — | [`docs/verification/EDU-EVALUATION-REPORT.md`](docs/verification/EDU-EVALUATION-REPORT.md) | Generated evaluation report (single source for every metric) | Jury |
 | — | [`docs/verification/EDU-PACK-CONFORMANCE.md`](docs/verification/EDU-PACK-CONFORMANCE.md) | How conformance is verified: oracle + independent second opinion | Reviewer |
 | — | [`docs/verification/REPRODUCIBLE-SAMPLE-RUN.md`](docs/verification/REPRODUCIBLE-SAMPLE-RUN.md) | Captured end-to-end transcript | Reviewer |
+| — | [`docs/verification/PHASE-1-GAP-ANALYSIS.md`](docs/verification/PHASE-1-GAP-ANALYSIS.md) | **What Phase 1 requires vs what we shipped**, gap by gap, with the remaining gaps and the plan to close them | Head of project |
+| — | [`docs/verification/AUDIT-REPLAY.md`](docs/verification/AUDIT-REPLAY.md) | A stored run reconstructed from the ledger, with the chain verified | Auditor |
+| — | [`docs/verification/FHIR-MAPPING-EXAMPLE.md`](docs/verification/FHIR-MAPPING-EXAMPLE.md) | One real bundle projected, and what FHIR cannot carry | Reviewer |
+| — | [`docs/verification/AI-ABLATION.md`](docs/verification/AI-ABLATION.md) | What the assistance layer contributes, and what it costs when the model fails | Reviewer |
 | — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | How we work: methodology, ground rules, milestones | **Whole team — start here** |
 | — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Current sprint: one lab per person, with steps and a done-checklist | **B1, B2, B3** |
 
