@@ -12,6 +12,9 @@ is left as it was found.
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
 import pytest
@@ -21,6 +24,7 @@ from claimguard.edu.envelope import RULE_VERSION, ResultRecord, Severity, Status
 from claimguard.edu.explain import TemplateExplanationProvider
 from claimguard.edu.policy import RuleContext
 from claimguard.review import audit_events
+from claimguard.review import store as review_store_module
 from claimguard.review.explanations import explain_run
 from claimguard.review.models import (
     ClaimQueueSummary,
@@ -120,6 +124,8 @@ def test_a_run_persists_the_fifteen_records_and_its_identity(
     stored = store.get_results(recorded.run.run_id)
     assert [record.rule_id for record in stored] == [f"R{index:03d}" for index in range(1, 16)]
     assert stored == records_for(envelope)
+    assert store.get_claim_envelope(recorded.run.run_id) == envelope
+    assert store.get_claim_envelope("RUN-unknown") is None
     assert [json_of(record) for record in stored] == [
         serialize(record.model_dump(), envelope) for record in stored
     ], "stored records must still satisfy the frozen result contract"
@@ -144,6 +150,34 @@ def test_an_identical_resubmission_is_not_a_new_version(
     assert len(store.list_runs(envelope["claim_id"])) == 1
     with engine.connect() as connection:
         assert len(audit_events.events_for_ref(connection, first.run.run_id)) == 1
+
+
+def test_simultaneous_identical_submissions_collapse_to_one_run(
+    engine: Engine, sandbox: Sandbox
+) -> None:
+    """Version allocation is serialized per claim, not left to a unique violation."""
+    envelope = sandbox.coverage_lapse()
+    start = threading.Barrier(2)
+
+    class SlowLatestStore(ReviewStore):
+        def _latest_run(self, connection: Any, claim_id: str) -> Any:
+            latest = super()._latest_run(connection, claim_id)
+            time.sleep(0.2)
+            return latest
+
+    concurrent_store = SlowLatestStore(engine)
+
+    def submit_together() -> Any:
+        start.wait()
+        return submit(concurrent_store, envelope)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        recorded = [future.result() for future in [pool.submit(submit_together) for _ in range(2)]]
+
+    assert sorted(run.duplicate for run in recorded) == [False, True]
+    assert recorded[0].run.run_id == recorded[1].run.run_id
+    assert len(store_runs := concurrent_store.list_runs(envelope["claim_id"])) == 1
+    assert store_runs[0].version == 1
 
 
 def test_a_correction_is_a_new_version_and_leaves_the_original_untouched(
@@ -212,6 +246,34 @@ def test_a_run_refuses_provenance_that_does_not_cover_its_records(
             explanations=explained.provenance[:1],
         )
     assert store.latest_run(envelope["claim_id"]) is None, "the refused run was written anyway"
+
+
+def test_assistance_security_receipts_and_corrections_survive_persistence(
+    store: ReviewStore, sandbox: Sandbox
+) -> None:
+    envelope = sandbox.coverage_lapse()
+    explained = explain_run(
+        records_for(envelope),
+        rules_context(),
+        envelope,
+        provider=TemplateExplanationProvider(),
+    )
+    recorded = store.record_run(
+        envelope,
+        explained.records,
+        rule_version=RULE_VERSION,
+        model_version=explained.model_version,
+        prompt_version=explained.prompt_version,
+        initiated_by="security-test",
+        explanations=explained.provenance,
+    )
+
+    restored = store.get_explanations(recorded.run.run_id)
+    assert restored == explained.provenance
+    assert all(entry.correction_recommendation for entry in restored)
+    assert all(entry.receipt_sha256 is not None for entry in restored)
+    assert all(len(entry.receipt_sha256 or "") == 64 for entry in restored)
+    assert {entry.security_decision for entry in restored} <= {"accept", "fallback", "decline"}
 
 
 # ---------------------------------------------------------------------------
@@ -371,6 +433,39 @@ def test_the_store_enforces_the_decision_state_machine(
     assert reopened.review.status is ReviewStatus.INFO_REQUESTED
     assert reopened.review.decision_count == 2
     assert decide(store, run.run_id, ReviewAction.CONFIRM_ISSUE).review.decision_count == 3
+
+
+def test_simultaneous_terminal_decisions_are_validated_in_sequence(
+    monkeypatch: pytest.MonkeyPatch, store: ReviewStore, sandbox: Sandbox
+) -> None:
+    """Two reviewers cannot both confirm a finding from the same stale state."""
+    run = submit(store, sandbox.coverage_lapse()).run
+    start = threading.Barrier(2)
+    original_reviews_for = review_store_module._reviews_for
+
+    def slow_reviews_for(connection: Any, run_ids: Any) -> Any:
+        states = original_reviews_for(connection, run_ids)
+        time.sleep(0.2)
+        return states
+
+    monkeypatch.setattr(review_store_module, "_reviews_for", slow_reviews_for)
+
+    def decide_together(actor: str) -> Any:
+        start.wait()
+        try:
+            return decide(store, run.run_id, ReviewAction.CONFIRM_ISSUE, actor=actor)
+        except Exception as exc:  # noqa: BLE001 - the outcome is what this race test asserts
+            return exc
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = [
+            future.result()
+            for future in [pool.submit(decide_together, actor) for actor in ("rev-a", "rev-b")]
+        ]
+
+    assert sum(not isinstance(outcome, Exception) for outcome in outcomes) == 1
+    assert sum(isinstance(outcome, IllegalReviewTransitionError) for outcome in outcomes) == 1
+    assert len(store.get_decisions(run.run_id)) == 1
 
 
 def test_a_decision_on_a_superseded_version_is_refused(

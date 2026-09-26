@@ -12,10 +12,11 @@
 #
 # WHAT RUNS
 #   uvicorn, serving the factory `claimguard.review.app:create_app` on :8000.
-#   That one application is the whole product surface: the review API under
-#   /v1, the reviewer interface at /review, OpenAPI docs at /docs and
-#   readiness at /v1/health. There is no `claimguard.api` package — the only
-#   ASGI application in this repository is claimguard/review/app.py.
+#   This image is the API and legacy fallback surface: the review API under
+#   /v1, the legacy reviewer at /review, OpenAPI docs at /docs and readiness
+#   at /v1/health. The primary Next.js reviewer ships from frontend/Dockerfile.
+#   There is no `claimguard.api` package; the ASGI application is
+#   claimguard/review/app.py.
 #
 # WHAT IT NEEDS AT RUNTIME (configuration, not code)
 #   CLAIMGUARD_DATABASE_URL    the DSN; docker-compose.yml points it at `db`
@@ -83,7 +84,7 @@ EXPOSE 8000
 # `database`, `schema_revision`, `rules_dir`, `rules_ready` — so an operator
 # reads the verdict from the body rather than inferring it from the status code.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \
-    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=3)"]
+    CMD ["python", "-c", "import json,sys,urllib.request; body=json.load(urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=3)); sys.exit(0 if body.get('status') == 'ok' else 1)"]
 
 # The application: the review API and the reviewer interface, one factory.
 # `--factory` is required because the target is a factory, not an instance.

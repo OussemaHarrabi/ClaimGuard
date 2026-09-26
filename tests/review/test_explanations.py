@@ -28,13 +28,14 @@ import pytest
 from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.envelope import RESULT_KEYS, ResultRecord, Status
 from claimguard.edu.explain import (
+    ASSISTANCE_PROMPT_VERSION,
     DETERMINISTIC_PREFIX,
     MODEL_PREFIX,
-    PROMPT_VERSION,
     SOURCE_DETERMINISTIC,
     SOURCE_MODEL,
     ModelExplanationProvider,
     TemplateExplanationProvider,
+    UnavailableModelProvider,
 )
 from claimguard.review.explanations import (
     ENGINE_MODEL_VERSION,
@@ -99,15 +100,38 @@ def test_no_configured_model_uses_the_deterministic_provider() -> None:
     ), "a half-configured model path must degrade, not raise"
 
 
-def test_a_configured_model_is_used() -> None:
+def test_stale_model_settings_do_not_override_the_deterministic_selection() -> None:
     provider = explanation_provider(
         {
             "CLAIMGUARD_EXPLAIN_MODEL": MODEL_NAME,
             "CLAIMGUARD_EXPLAIN_BASE_URL": "http://model.test/v1",
         }
     )
+    assert isinstance(provider, TemplateExplanationProvider)
+
+
+def test_an_explicit_model_mode_uses_a_fully_configured_model() -> None:
+    provider = explanation_provider(
+        {
+            "CLAIMGUARD_EXPLAIN_MODE": "model",
+            "CLAIMGUARD_EXPLAIN_MODEL": MODEL_NAME,
+            "CLAIMGUARD_EXPLAIN_BASE_URL": "http://model.test/v1",
+        }
+    )
     assert isinstance(provider, ModelExplanationProvider)
     assert provider.settings.model == MODEL_NAME
+
+
+def test_explicit_model_mode_without_an_endpoint_is_a_visible_fallback() -> None:
+    provider = explanation_provider({"CLAIMGUARD_EXPLAIN_MODE": "model"})
+    assert isinstance(provider, UnavailableModelProvider)
+
+    envelope = coverage_lapse()
+    explained = explain_run(engine_records(envelope), rules_context(), envelope, provider=provider)
+    failing = next(entry for entry in explained.provenance if entry.rule_id == "R003")
+    assert failing.fallback_used is True
+    assert failing.security_decision == "fallback"
+    assert "not fully configured" in " ".join(failing.rejection_reasons)
 
 
 def test_run_identity_records_what_produced_the_wording() -> None:
@@ -118,7 +142,7 @@ def test_run_identity_records_what_produced_the_wording() -> None:
     )
     assert run_identity(model_provider(ScriptedModelTransport())) == (
         f"{MODEL_VERSION_PREFIX}{MODEL_NAME}",
-        PROMPT_VERSION,
+        ASSISTANCE_PROMPT_VERSION,
     )
 
 
@@ -182,11 +206,16 @@ def test_a_model_drafts_the_text_and_is_marked_as_the_source() -> None:
     assert failing.model_assisted is True
     assert failing.provider == "model"
     assert failing.fallback_used is False
+    assert failing.correction_recommendation.startswith(MODEL_PREFIX)
+    assert failing.security_decision == "accept"
+    assert failing.receipt_sha256 is not None
+    assert len(failing.receipt_sha256) == 64
+    assert failing.cited_evidence_paths
     record = next(record for record in explained.records if record.rule_id == "R003")
     assert record.explanation.startswith(MODEL_PREFIX)
     assert "A model drafted this sentence for R003" in record.explanation
     assert explained.model_version == f"{MODEL_VERSION_PREFIX}{MODEL_NAME}"
-    assert explained.prompt_version == PROMPT_VERSION
+    assert explained.prompt_version == ASSISTANCE_PROMPT_VERSION
 
 
 def test_a_model_never_changes_a_status() -> None:
@@ -223,7 +252,7 @@ def test_a_model_failure_keeps_the_deterministic_text_and_records_why() -> None:
     assert other_keys(jsonable(record)) == other_keys(jsonable(records[2]))
 
 
-def test_only_failures_and_unable_to_assess_are_sent_to_a_model() -> None:
+def test_only_attention_findings_are_sent_to_a_model() -> None:
     """A PASS is never sent to a model: it cannot improve it, and it invites a
     "passed check → payer acceptance" reading (the layer's own gate)."""
     envelope = coverage_lapse()
@@ -235,7 +264,7 @@ def test_only_failures_and_unable_to_assess_are_sent_to_a_model() -> None:
     eligible = [
         record.rule_id
         for record in explained.records
-        if record.status in (Status.FAIL, Status.UNABLE_TO_ASSESS)
+        if record.status in (Status.FAIL, Status.UNABLE_TO_ASSESS, Status.NOT_IMPLEMENTED)
     ]
     assert len(transport.calls) == len(eligible)
     for entry in explained.provenance:

@@ -20,6 +20,7 @@ from claimguard.edu.explain import (
     DETERMINISTIC_PREFIX,
     MODEL_PREFIX,
     RULE_EXCERPT_CHARS,
+    SECURE_ASSISTANCE_PROMPT,
     SOURCE_DETERMINISTIC,
     SOURCE_MODEL,
     SYSTEM_PROMPT,
@@ -124,6 +125,14 @@ def test_the_prompt_is_the_pack_prompt_verbatim() -> None:
         assert clause in SYSTEM_PROMPT
 
 
+def test_the_deployed_prompt_has_one_coherent_five_field_contract() -> None:
+    assert "correction_recommendation" in SECURE_ASSISTANCE_PROMPT
+    assert (
+        "Return only a JSON object with explanation (string), cited_evidence_paths"
+        not in SECURE_ASSISTANCE_PROMPT
+    )
+
+
 @requires_pack
 def test_the_prompt_copy_matches_the_pack_file_byte_for_byte() -> None:
     pack_prompt = (PACK_ROOT / "prompts" / "explain_findings.md").read_text(encoding="utf-8")
@@ -149,14 +158,21 @@ def test_the_request_carries_only_the_finding_the_evidence_and_a_rule_excerpt() 
     assert request["timeout"] == DEFAULT_TIMEOUT
     assert request["payload"]["model"] == "synthetic-model"
     assert request["payload"]["max_tokens"] == DEFAULT_MAX_TOKENS
-    assert request["payload"]["messages"][0]["content"] == SYSTEM_PROMPT
+    assert request["payload"]["messages"][0]["content"] == SECURE_ASSISTANCE_PROMPT
+    assert request["payload"]["response_format"] == {"type": "json_object"}
 
     user_text = request["payload"]["messages"][1]["content"]
     body = json.loads(user_text)
-    assert set(body) == {"finding", "evidence", "rule_excerpt"}
+    assert set(body) == {"authority", "finding", "evidence", "rule_excerpt"}
+    assert body["authority"]["status"] == "deterministic_engine"
     assert body["evidence"] == [
-        {"path": "/lines/0/quantity", "value": 1.5},
-        {"path": "/lines/0/unit_price", "value": 180},
+        {"path": "/lines/0/quantity", "value": 1.5, "trust": "validated_data", "authority": "none"},
+        {
+            "path": "/lines/0/unit_price",
+            "value": 180,
+            "trust": "validated_data",
+            "authority": "none",
+        },
     ]
     assert body["rule_excerpt"]["rule_id"] == "R013"
     assert body["rule_excerpt"]["logic"] == SYNTHETIC_RULE["logic"]
@@ -313,6 +329,9 @@ def _compliant(finding: Mapping[str, Any]) -> dict[str, Any]:
         "explanation": (
             "The billed quantity 1.5 is not a positive integer, so the fictional quantity "
             "limit cannot be satisfied; a reviewer must confirm the billed quantity."
+        ),
+        "correction_recommendation": (
+            "Verify the quantity against the source document, then correct it or attach evidence."
         ),
         "cited_evidence_paths": ["/lines/0/quantity"],
         "cited_rule_ids": [finding["rule_id"]],

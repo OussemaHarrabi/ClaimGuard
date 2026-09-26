@@ -99,10 +99,15 @@ from claimguard.review.models import (
 )
 
 #: The Alembic revision this module's tables come from.
-SCHEMA_REVISION: Final = "0003"
+SCHEMA_REVISION: Final = "0004"
 
 #: ``run_id`` prefix (opaque; deliberately carries no claim identifier).
 RUN_ID_PREFIX: Final = "RUN-"
+
+#: Namespace for transaction-scoped advisory locks that serialize writes to one
+#: claim. PostgreSQL hashes the full key to a signed bigint; the namespace keeps
+#: these locks distinct from the audit chain's project-wide lock.
+CLAIM_WRITE_LOCK_NAMESPACE: Final = "claimguard:review:claim:"
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +216,10 @@ EXPLANATIONS = Table(
     Column("provider", Text, nullable=False),
     Column("rewritten", BOOLEAN, nullable=False),
     Column("fallback_used", BOOLEAN, nullable=False),
+    Column("correction_recommendation", Text, nullable=False),
+    Column("cited_evidence_paths", JSONB, nullable=False),
+    Column("security_decision", Text, nullable=False),
+    Column("receipt_sha256", Text),
     Column("rejection_reasons", JSONB, nullable=False),
     Column("declined_reason", Text),
     schema="claimguard",
@@ -224,6 +233,10 @@ _EXPLANATION_COLUMNS: Final[tuple[str, ...]] = (
     "provider",
     "rewritten",
     "fallback_used",
+    "correction_recommendation",
+    "cited_evidence_paths",
+    "security_decision",
+    "receipt_sha256",
     "rejection_reasons",
     "declined_reason",
 )
@@ -315,6 +328,19 @@ def new_run_id() -> str:
 def new_trace_id() -> str:
     """A fresh 32-hex correlation id, shared by a run and its audit events."""
     return uuid.uuid4().hex
+
+
+def _lock_claim_writes(connection: Connection, claim_id: str) -> None:
+    """Serialize version and decision writes for one claim for this transaction.
+
+    A row lock cannot protect the first version because no claim row exists yet.
+    The transaction-scoped advisory lock covers that case and is released by
+    PostgreSQL automatically on commit or rollback.
+    """
+    connection.execute(
+        text("SELECT pg_advisory_xact_lock(hashtextextended(:claim_key, 0))"),
+        {"claim_key": f"{CLAIM_WRITE_LOCK_NAMESPACE}{claim_id}"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -454,6 +480,14 @@ class ReviewStore:
         with self._engine.connect() as connection:
             return self._get_results(connection, run_id)
 
+    def get_claim_envelope(self, run_id: str) -> dict[str, Any] | None:
+        """Return a detached copy of the immutable input envelope for one run."""
+        with self._engine.connect() as connection:
+            envelope = connection.execute(
+                select(RUNS.c.envelope).where(RUNS.c.run_id == run_id)
+            ).scalar_one_or_none()
+            return dict(envelope) if envelope is not None else None
+
     def get_explanations(self, run_id: str) -> list[ExplanationProvenance]:
         """How each of the run's explanations was produced, in R001..R015 order.
 
@@ -526,6 +560,7 @@ class ReviewStore:
             claim_id = envelope.get("claim_id")
             if not isinstance(claim_id, str) or not claim_id:
                 raise ReviewStoreError("the envelope has no claim_id")
+            _lock_claim_writes(connection, claim_id)
             digest = envelope_digest(envelope)
             latest = self._latest_run(connection, claim_id)
             if latest is not None and latest.input_hash == digest:
@@ -573,6 +608,7 @@ class ReviewStore:
             claim_id = envelope.get("claim_id")
             if not isinstance(claim_id, str) or not claim_id:
                 raise ReviewStoreError("the envelope has no claim_id")
+            _lock_claim_writes(connection, claim_id)
             latest = self._latest_run(connection, claim_id)
             if latest is None:
                 raise RunNotFoundError(f"claim {claim_id!r} has no run to recheck")
@@ -686,6 +722,10 @@ class ReviewStore:
                         "provider": provenance.provider,
                         "rewritten": provenance.rewritten,
                         "fallback_used": provenance.fallback_used,
+                        "correction_recommendation": provenance.correction_recommendation,
+                        "cited_evidence_paths": list(provenance.cited_evidence_paths),
+                        "security_decision": provenance.security_decision,
+                        "receipt_sha256": provenance.receipt_sha256,
                         "rejection_reasons": list(provenance.rejection_reasons),
                         "declined_reason": provenance.declined_reason,
                     }
@@ -765,6 +805,7 @@ class ReviewStore:
             run = self._get_run(connection, run_id)
             if run is None:
                 raise RunNotFoundError(f"unknown run: {run_id}")
+            _lock_claim_writes(connection, run.claim_id)
             record = self._get_record(connection, run_id, request.rule_id)
             if record is None:
                 raise FindingNotFoundError(f"run {run_id} has no result for {request.rule_id}")

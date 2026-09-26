@@ -288,6 +288,10 @@ class ScriptedModelTransport:
                 f"A model drafted this sentence for {finding['rule_id']}, whose status "
                 f"{finding['status']} came from the rule engine."
             ),
+            "correction_recommendation": (
+                f"Verify the cited source for {finding['rule_id']}, then correct the claim "
+                "or attach supporting evidence."
+            ),
             "cited_evidence_paths": [entry["path"] for entry in user["evidence"]][:1],
             "cited_rule_ids": [finding["rule_id"]],
             "needs_human_review": finding["requires_human_review"],

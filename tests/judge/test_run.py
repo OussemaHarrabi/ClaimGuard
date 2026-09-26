@@ -40,6 +40,7 @@ from claimguard.edu.judge.run import (
 )
 
 from tests.judge import (
+    API_KEY,
     MODEL,
     FakeTransport,
     failing,
@@ -197,6 +198,14 @@ def test_a_judge_fault_is_recorded_as_failed_and_changes_nothing(
     assert assessment.advisory == AdvisorySummary()
     assert json.dumps(record, sort_keys=True) == before
     assert assessment.key == (record["claim_id"], record["rule_id"])
+
+
+def test_a_vendor_error_cannot_persist_the_credential_in_the_sidecar_reason() -> None:
+    record, claim = sample()
+    transport = FakeTransport(error=JudgeHTTPError(422, f"echoed token {API_KEY}"))
+    assessment = assess_record(record, rule=rule_for(), claim=claim, provider=judge(transport))
+    assert API_KEY not in assessment.reason
+    assert "redacted" in assessment.reason
 
 
 def test_an_unanswered_question_is_a_failure() -> None:

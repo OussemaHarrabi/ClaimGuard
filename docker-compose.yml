@@ -11,16 +11,15 @@
 # What `docker compose up -d --build` gives you, in order:
 #   db       PostgreSQL 16, healthy
 #   migrate  one-shot `alembic upgrade head` against that database
-#   api      the reviewer API and interface on http://localhost:8000
-#            reviewer interface  /review
+#   api      the reviewer API on http://localhost:8000
 #            OpenAPI docs        /docs
 #            readiness           /v1/health
+#   web      the Next.js evidence-first reviewer workspace on
+#            http://localhost:3001 (3000 remains Grafana in this stack)
 #
-# The `api` service is the ONLY application service. The reviewer interface is
-# not a second server: it ships inside the `claimguard` package
-# (claimguard/review/ui/static/) and is served by the same FastAPI app, so the
-# old `web` service — which built a `./web` directory that does not exist in
-# this repository — was removed rather than left to fail the build.
+# The legacy `/review` page stays available as an operational fallback. The
+# primary reviewer experience is the separately built Next.js `web` service,
+# which proxies `/v1/*` to `api` without exposing a second API contract.
 #
 # Windows note: keep API hot-reload on the host (Docker file sharing slows
 # watch loops); Compose is for the demo / production-shaped run.
@@ -104,10 +103,31 @@ services:
     ports:
       - "8000:8000"
     healthcheck:
-      # The endpoint that exists. The body carries readiness
-      # (database, schema_revision, rules_dir, rules_ready); read it, do not
-      # infer it from this status code.
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=3)"]
+      # The endpoint always answers 200 so operators can inspect a degraded
+      # deployment. Container readiness therefore parses the JSON verdict.
+      test: ["CMD", "python", "-c", "import json,sys,urllib.request; body=json.load(urllib.request.urlopen('http://127.0.0.1:8000/v1/health', timeout=3)); sys.exit(0 if body.get('status') == 'ok' else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # --- Evidence-first reviewer workspace (Next.js, standalone output) ------
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        CLAIMGUARD_API_ORIGIN: http://api:8000
+        NEXT_PUBLIC_DEMO_MODE: "false"
+        NEXT_PUBLIC_REVIEWER_NAME: ${CLAIMGUARD_REVIEWER_NAME:-reviewer-12}
+    depends_on:
+      api:
+        condition: service_healthy
+    ports:
+      - "3001:3000"
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
       interval: 15s
       timeout: 5s
       retries: 5

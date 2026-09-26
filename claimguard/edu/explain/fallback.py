@@ -208,7 +208,7 @@ def build_text(finding: Mapping[str, Any], rule: Mapping[str, Any]) -> str:
 
 
 def build_explanation(finding: Mapping[str, Any], rule: Mapping[str, Any]) -> dict[str, Any]:
-    """Build the deterministic explanation output (the pack's 4-key contract).
+    """Build the deterministic assistance output used as the fail-closed twin.
 
     ``cited_evidence_paths`` is the finding's own evidence set (so the citation
     contract holds by construction), ``cited_rule_ids`` is exactly the finding's
@@ -216,8 +216,14 @@ def build_explanation(finding: Mapping[str, Any], rule: Mapping[str, Any]) -> di
     — never re-derived.
     """
     rule_id = _required_text(finding, "rule_id")
+    action = finding.get("corrective_action")
+    if not isinstance(action, str) or not action.strip():
+        action = rule.get("corrective_action")
+    if not isinstance(action, str) or not action.strip():
+        action = _STATUS_STEP.get(str(finding.get("status") or ""), "Review the cited evidence.")
     return {
         "explanation": build_text(finding, rule),
+        "correction_recommendation": mark_deterministic(str(action)),
         "cited_evidence_paths": evidence_paths(finding),
         "cited_rule_ids": [rule_id],
         "needs_human_review": finding.get("requires_human_review") is True,

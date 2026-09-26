@@ -9,6 +9,13 @@
 > **Scope:** synthetic educational data only. The system reports deterministic check results and
 > records reviewer notes about them. It never approves, denies, prices, pays or submits a claim, and
 > no endpoint, button or database column in this repository expresses such a decision.
+>
+> **2026-09-25 product update:** the primary interface is now the evidence-first Next.js cockpit in
+> `frontend/`, served by Compose on `http://localhost:3001`. It keeps queue, deterministic findings,
+> explanation provenance and audit context visible together, requires a reviewer note before a
+> decision, and edits a detached copy of the stored synthetic claim before creating a recheck
+> version. The detailed `/review` walkthrough below remains accurate for the legacy operational
+> fallback; it is no longer the primary presentation surface.
 
 ---
 
@@ -28,7 +35,7 @@ supports the finding, what to review or correct, and which questions remain unre
 |---|---|
 | **Needs to see** | Which of the 15 checks objected, the severity, the exact field and value that proves it (`path = value`, read from the claim they submitted), the corrective action, and which checks could not be decided. |
 | **May do** | Submit an envelope for checking (`POST /v1/claims`); read the queue and a claim's 15 records; correct the source claim and ask for a recheck (`POST /v1/claims/{claim_id}/recheck`). |
-| **Must never be able to do** | Read a check result as payer approval. There is no approve, deny, pay, price or submit-to-payer operation in the API (`claimguard/review/app.py`, the seven documented operations) and no such field in the result contract (`RESULT_KEYS`, `claimguard/edu/envelope.py`). The page says so on itself, quoting the pack: *"A PASS is not payer approval."* |
+| **Must never be able to do** | Read a check result as payer approval. There is no approve, deny, pay, price or submit-to-payer operation in the API (`claimguard/review/app.py`, the eight documented operations) and no such field in the result contract (`RESULT_KEYS`, `claimguard/edu/envelope.py`). The page says so on itself, quoting the pack: *"A PASS is not payer approval."* |
 
 ### 1.2 The first-line reviewer — work a queue
 
@@ -285,19 +292,20 @@ behaviour 6. It is a *language* layer and nothing else:
   claim data, and an explanation that echoed them would be indistinguishable from one that followed
   them.
 * `provider.py::explain_finding` asks an `ExplanationProvider` for a draft, verifies it, and on any
-  fault — no provider, exception, timeout, malformed payload, rejected output — returns the
-  deterministic text with the reasons recorded (`rejection_reasons`) and `fallback_used=True`. The
-  model path prefixes accepted text with `[model] `. Only `explanation` can differ from the input
-  record (`apply_outcome`); status, severity, evidence and the review flag are carried through.
-* `MODEL_ELIGIBLE_STATUSES = {"FAIL", "UNABLE_TO_ASSESS"}`: a `PASS` is never even sent to a model —
-  it cannot improve it, it costs latency, and it invites exactly the "passed check → payer
-  acceptance" confusion the pack warns about.
-* `verifier.py::validate_explanation` enforces the pack's 4-key output contract
-  (`explanation, cited_evidence_paths, cited_rule_ids, needs_human_review`), requires every citation
-  to resolve **in the original envelope** to the stored value, and adds the guards the pack's own
-  prose asks for: no adjudication or clinical assertion (`PROHIBITED_PATTERNS`), no empty text, no
-  text that merely echoes the rule. The system instruction is the pack's
-  `prompts/explain_findings.md` v1.0.0, carried verbatim (`SYSTEM_PROMPT`, `PROMPT_SHA256`).
+  fault — missing configuration, exception, timeout, malformed payload, rejected output — returns
+  the deterministic safe twin with reasons recorded (`rejection_reasons`) and
+  `fallback_used=True`. The model path prefixes accepted explanation and recommendation with
+  `[model]`; fallback content is marked `[deterministic]`. Only reviewer-facing language can differ:
+  status, severity, evidence and the review flag are carried through unchanged.
+* `MODEL_ELIGIBLE_STATUSES = {"FAIL", "UNABLE_TO_ASSESS", "NOT_IMPLEMENTED"}`: a `PASS` is never
+  sent to a model. Every state that needs administrator attention receives contextual help when the
+  SLM is configured, while non-attention results stay deterministic.
+* `verifier.py::validate_explanation` enforces the secured five-key contract
+  (`explanation, correction_recommendation, cited_evidence_paths, cited_rule_ids,
+  needs_human_review`), requires every citation to be supplied by the finding and preserve the
+  stored review flag, and rejects empty text, adjudication/clinical claims, automatic actions and
+  direct or Base64-transformed instruction language. The mentor prompt is preserved as
+  `SYSTEM_PROMPT`; the coherent deployed extension is `SECURE_ASSISTANCE_PROMPT`, version `2.0.0`.
 
 **Why the deterministic text is always available even when a model writes the prose.** The
 dependency points one way: the record exists *before* the explanation layer is consulted, and the
@@ -310,13 +318,14 @@ configured, the outcome is `source=deterministic, fallback_used=True`, the text 
 rejected with `citation '/lines/0/nonexistent_field' was not supplied with the finding`; a draft
 saying *"The claim is denied"* is rejected as `adjudication_outcome`.
 
-**Where this layer is *not* wired in — stated plainly.** `enrich_records` is called by
-`tests/edu_explain/**` and by nothing else: `claimguard/review/**`, `claimguard/cli/**` and
-`scripts/**` do not import it (§7.5). So the reviewer page shows (a), the engine's own sentence, and
-a model-written explanation is **not** displayed anywhere in the product today. Behaviour 6 is
-satisfied as a library with its own contract, tests and provenance markers; it is not yet a feature
-of the reviewer interface. `docs/13-Technical-Report.md` describes the same seam structurally and
-claims no explanation-quality number.
+**Where this layer is wired — stated plainly.** Every API submission and recheck now passes the
+engine's 15 records through `claimguard.review.explanations.explain_run`. The intended product
+profile is model-first through the environment. An endpoint and checkpoint must still be explicitly
+configured; incomplete configuration becomes a visible fallback rather than silent deterministic
+success. The page receives explanation, correction recommendation and immutable sidecar provenance,
+including security decision and receipt, while the API re-validates that the frozen decision fields
+did not move. This is a product feature now, not only a tested library. No live-model quality number
+is claimed: secured-contract v2 must be rerun first.
 
 ---
 
@@ -469,8 +478,9 @@ Stated plainly, so nothing here is read as a promise:
    string. Nothing in this repository should be exposed to an untrusted network as it stands.
 2. **No adjudication of any kind.** No approve, deny, price, pay, appeal or submit-to-payer
    operation exists — not in the API, not in the page, not as a column.
-3. **The bounded explanation layer is not wired into the reviewer API or the page.** The page shows
-   the engine's own `explanation`; `enrich_records` is called only by `tests/edu_explain/**`.
+3. **No live-model explanation benchmark has been completed.** The bounded layer is wired into the
+   reviewer API and page, but its default is deterministic and no configured model has yet earned a
+   quality, latency or cost claim.
 4. **No explanation-quality number.** The pack's manual 0/1 scorecard over its 25 cases is not
    reproducible by a command and has not been run here.
 5. **No live model was measured.** No latency, cost or token figure exists in this repository, and no
@@ -491,8 +501,8 @@ Stated plainly, so nothing here is read as a promise:
 12. **No notification, email, export, PDF, print stylesheet, i18n or RTL support.**
 13. **No accessibility audit.** The page uses semantic elements, labels and `aria-label`s on the
     reason boxes and the recheck textarea, but no screen-reader or contrast audit has been run.
-14. **A misconfigured rule catalogue is a bare 500 on submit.** `GET /v1/health` reports it
-    (`rules_ready: false`) but `RuleDirError` is not mapped to a named status (measured, §7.6).
+14. **A misconfigured rule catalogue blocks submissions.** Health remains readable with
+    `rules_ready: false`; a valid submission receives a structured 503 naming the missing setting.
 
 ---
 
@@ -698,6 +708,14 @@ SYSTEM_PROMPT first line: # Explanation helper prompt v1.0.0
 DEFAULT_TIMEOUT: 20.0
 ENV_BASE_URL / ENV_MODEL: ('CLAIMGUARD_EXPLAIN_BASE_URL', 'CLAIMGUARD_EXPLAIN_MODEL')
 
+### Secured SLM correction assistance
+
+For every attention finding, the right-hand panel now keeps the SLM explanation and its contextual
+correction recommendation together. The administrator can copy a verified recommendation into the
+editable review note, but ClaimGuard never mutates the claim or records a decision automatically.
+The same card exposes the envelope decision (`accept`, `fallback`, or `decline`) and the assistance
+receipt prefix; rejection reasons remain visible when the deterministic safe twin is shown.
+
 === no provider configured -> deterministic text, marked, status unchanged ===
 source: deterministic   provider: none   fallback_used: True
 rejection_reasons: ('no explanation provider is configured',)
@@ -781,14 +799,13 @@ Observed:
 - store.py: the only `limit` uses are `.limit(1)` on single-row lookups; `_queue_statement` has no
   LIMIT, so the queue returns every matching finding.
 - render.mjs `renderQueueItems`: no slice, no cap — every returned item becomes a node.
-- `enrich_records` / `explain_records` / `explain_finding`: matched only inside
-  `claimguard/edu/explain/**` and `tests/edu_explain/**`. Nothing under `claimguard/review/**`,
-  `claimguard/cli/**` or `scripts/**` imports the explanation layer.
+- `claimguard/review/app.py` calls the bounded explanation facade for every submission and recheck;
+  `claimguard/review/explanations.py` persists one provenance row per rule beside the frozen record.
 - Measured queue size: `GET /v1/queue?include_all=true` over the two claims in the local database
   -> counts.findings = 30 in a single response.
 ```
 
-### 7.6 Health degradation and the 422 / 500 paths
+### 7.6 Health degradation and the 422 / 503 paths
 
 Two inline probes (heredocs), each building the app with `create_app(store=…, rules_dir=…)` and
 calling it through `fastapi.testclient.TestClient`:
@@ -801,13 +818,15 @@ uv run python - <<'PY'   # create_app(rules_dir=<bad>), POST /v1/claims with a V
 ```
 
 ```text
+historical probe before migration 0004:
 health (bad rules dir): 200 {'status': 'degraded', 'database': 'ready',
-  'schema_revision': '0002', 'rules_dir': 'C:\\tmp\\ui_probe\\not-a-rules-dir',
+  'schema_revision': '0003', 'rules_dir': 'C:\\tmp\\ui_probe\\not-a-rules-dir',
   'rules_ready': False, 'engine_rule_version': '1.0.0'}
 submit with a defective envelope: 422
 body: {'detail': 'Unexpected or missing envelope keys'}
 transport defect: 422 {'detail': 'Unexpected or missing envelope keys'}
-valid envelope, no rule catalogue: 500   (body is plain text "Internal Server Error")
+valid envelope, no rule catalogue: 503
+body: {'detail': 'the rule catalogue is unavailable ...', 'error': 'RuleDirError'}
 ```
 
 And the role the application connects with, which decides what the grants in migration `0002` are

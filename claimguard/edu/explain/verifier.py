@@ -33,6 +33,8 @@ because the reviewer-facing report has to say why.
 
 from __future__ import annotations
 
+import base64
+import binascii
 import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final, cast
@@ -43,6 +45,7 @@ from claimguard.edu.explain.fallback import evidence_pairs, evidence_paths
 #: The pack's explanation output contract (``src/llm_adapter.py``).
 EXPLANATION_KEYS: Final = (
     "explanation",
+    "correction_recommendation",
     "cited_evidence_paths",
     "cited_rule_ids",
     "needs_human_review",
@@ -96,6 +99,14 @@ PROHIBITED_PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
 #: Fields of the manifest rule that the echo guard treats as "the rule text".
 _RULE_TEXT_FIELDS: Final = ("title", "logic", "corrective_action", "summary", "source")
 
+_INSTRUCTION_PATTERN: Final = re.compile(
+    r"\bignore\b[^.!?]{0,40}\b(?:prior|previous|system)\b[^.!?]{0,25}\binstructions?\b"
+    r"|\breveal\b[^.!?]{0,30}\b(?:system prompt|patient record|secret)\b"
+    r"|\b(?:override|bypass)\b[^.!?]{0,30}\b(?:policy|guard|verifier|instruction)\b",
+    re.IGNORECASE,
+)
+_BASE64_TOKEN: Final = re.compile(r"(?<![A-Za-z0-9+/=])[A-Za-z0-9+/]{20,}={0,2}(?![A-Za-z0-9+/=])")
+
 
 class ExplanationRejectionError(ValueError):
     """A candidate explanation violates the contract; :attr:`reasons` says how."""
@@ -123,6 +134,20 @@ def rule_text(rule: Mapping[str, Any]) -> str:
 def prohibited_assertions(text: str) -> tuple[str, ...]:
     """Categories of prohibited assertion found in ``text`` (empty means clean)."""
     return tuple(name for name, pattern in PROHIBITED_PATTERNS if pattern.search(text))
+
+
+def instruction_like(text: str) -> bool:
+    """Detect direct or base64-transformed instruction language in model output."""
+    if _INSTRUCTION_PATTERN.search(text):
+        return True
+    for token in _BASE64_TOKEN.findall(text):
+        try:
+            decoded = base64.b64decode(token, validate=True).decode("utf-8")
+        except (binascii.Error, UnicodeDecodeError, ValueError):
+            continue
+        if _INSTRUCTION_PATTERN.search(decoded):
+            return True
+    return False
 
 
 def _string_list(value: Any) -> list[str] | None:
@@ -208,21 +233,29 @@ def validate_explanation(
         )
 
     text = candidate.get("explanation")
-    if not isinstance(text, str) or not text.strip():
-        reasons.append("explanation must be a non-empty string")
-        text = ""
-    else:
-        found = prohibited_assertions(text)
+    recommendation = candidate.get("correction_recommendation")
+    for field, value in (
+        ("explanation", text),
+        ("correction recommendation", recommendation),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            reasons.append(f"{field} must be a non-empty string")
+            continue
+        found = prohibited_assertions(value)
         if found:
             reasons.append(
-                "explanation asserts an adjudication or clinical conclusion "
+                f"{field} asserts an adjudication or clinical conclusion "
                 f"({', '.join(found)}); this layer explains, it never decides"
             )
-        if rule is not None:
-            corpus = rule_text(rule)
-            normalised = normalise(text)
-            if corpus and normalised and normalised in corpus:
-                reasons.append("explanation merely repeats the rule text")
+        if re.search(r"\b(?:automatically|without review)\b", value, re.IGNORECASE):
+            reasons.append(f"{field} attempts an unreviewed action")
+        if instruction_like(value):
+            reasons.append(f"{field} contains direct or transformed instruction-like content")
+    if isinstance(text, str) and text.strip() and rule is not None:
+        corpus = rule_text(rule)
+        normalised = normalise(text)
+        if corpus and normalised and normalised in corpus:
+            reasons.append("explanation merely repeats the rule text")
 
     cited = _string_list(candidate.get("cited_evidence_paths"))
     if not cited:

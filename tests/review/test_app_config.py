@@ -159,6 +159,33 @@ async def test_a_missing_rule_catalogue_is_a_structured_503(tmp_path: Path) -> N
         await _assert_catalogue_503(client, base_claim())
 
 
+async def test_health_stays_readable_when_no_catalogue_path_resolves(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A fresh checkout without the delivered pack still exposes degraded readiness.
+
+    This differs from an explicitly configured but invalid directory: resolving the
+    directory itself raises. Health must catch that once and avoid resolving the same
+    missing dependency again while constructing its response.
+    """
+    monkeypatch.delenv(review_app.RULES_DIR_ENV, raising=False)
+    monkeypatch.delenv(review_app.PACK_ROOT_ENV, raising=False)
+    monkeypatch.setattr(review_app, "_REPO_ROOT", tmp_path)
+    app = review_app.create_app(
+        store=cast(ReviewStore, _ReadyStore()),
+        explain_provider=TemplateExplanationProvider(),
+    )
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+    ) as client:
+        response = await client.get("/v1/health")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "degraded"
+    assert response.json()["rules_ready"] is False
+    assert response.json()["rules_dir"] is None
+
+
 async def test_an_env_configured_but_unusable_catalogue_is_also_a_structured_503(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
@@ -205,13 +232,14 @@ async def test_an_unmigrated_database_is_reported_not_crashed() -> None:
 
 
 def test_the_documented_surface_is_what_is_mounted() -> None:
-    """The six operations this package promises, and no adjudication endpoint."""
+    """The eight operations this package promises, and no adjudication endpoint."""
     paths = {route.path for route in review_app.app.routes if isinstance(route, APIRoute)}
     assert paths >= {
         "/v1/health",
         "/v1/claims",
         "/v1/claims/{claim_id}/recheck",
         "/v1/runs/{run_id}",
+        "/v1/runs/{run_id}/claim",
         "/v1/runs/{run_id}/results",
         "/v1/runs/{run_id}/decisions",
         "/v1/queue",

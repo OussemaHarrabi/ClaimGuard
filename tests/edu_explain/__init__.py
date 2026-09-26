@@ -154,6 +154,9 @@ class StubModelProvider:
         ]
         return {
             "explanation": explanation,
+            "correction_recommendation": (
+                "Verify the cited source, then correct the submitted value or attach evidence."
+            ),
             "cited_evidence_paths": paths[:1] or paths,
             "cited_rule_ids": [finding.get("rule_id")],
             "needs_human_review": finding.get("requires_human_review") is True,

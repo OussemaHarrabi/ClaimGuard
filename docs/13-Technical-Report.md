@@ -1,6 +1,8 @@
 # 13 — Technical report
 
-> **Status:** Phase-1 submission document · written 2026-09-23.
+> **Status:** Main-branch implementation report · originally written 2026-09-23, updated 2026-09-26
+> after the Next.js product rebuild and secured assistance release. See
+> `docs/20-Implementation-Completion-Report.md` for the release inventory and remaining work.
 > **Team:** CSTAM-VELODOC · challenge CSTAM 3.0 · mentor pack v1.0.0 (17 Sep 2026).
 > **Headline, quoted from our own measured report:** *"6000 claim-rule pairs, status accuracy
 > 1.0000, issue precision 1.0000, issue recall 1.0000, false alarms 0, missed issues 0."*
@@ -27,7 +29,7 @@ prices, pays or submits a claim.
 | 3 · Claim ID, Rule ID/version, severity, affected lines, evidence, explanation, corrective action | The frozen 15-key result record | `claimguard/edu/emit.py`, `claimguard/edu/envelope.py` |
 | 4 · Review queue with filters, original values, unresolved-check counts | `GET /v1/queue` returns findings with echoed filters and counts | `claimguard/review/app.py`, `claimguard/review/store.py` |
 | 5 · Confirm / dismiss with reason / request information / corrected-for-recheck | Four-action state machine; actor and reason required and non-blank | `claimguard/review/models.py`, `claimguard/review/store.py` |
-| 6 · One bounded AI capability with tool boundaries, schema checks and a safe fallback | Optional explanation provider; 4-key output contract; citation, prohibition and echo guards; deterministic fallback always available | `claimguard/edu/explain/**` |
+| 6 · One bounded AI capability with tool boundaries, schema checks and a safe fallback | Model-first explanation and correction assistance; exact five-key contract; citation, invariant, adjudication, automatic-action and instruction-injection guards; labelled deterministic safe twin always available | `claimguard/edu/explain/**`, `docs/19-Assistance-Security-Envelope.md` |
 | 7 · Record checks and human actions with versions; tamper-evident audit prototype and its limits | Run and decision events appended to the SHA-256 hash-chained ledger; limits documented | `claimguard/review/audit_events.py`, `claimguard/audit/chain.py`, `docs/12-Privacy-and-Security-Note.md` §4 |
 | 8 · Evaluate on the provided data; report false alarms, missed issues and uncertainty separately | Versioned evaluation report generated from a real run; the scorer's own JSON is reproduced verbatim | `scripts/edu_report.py`, `docs/verification/EDU-EVALUATION-REPORT.md` |
 
@@ -60,6 +62,11 @@ The two decision records this report defers to are
 | D12 | Explanations carry a provenance prefix (`[deterministic] ` / `[model] `) | A reviewer must be able to tell who wrote the text without extra tooling | `claimguard/edu/explain/fallback.py` |
 | D13 | The decision's free-text `reason` is **not** copied into the immutable ledger | Reviewer text may quote attachment content; duplicating it into an immutable table widens the data-protection surface for no audit gain | `claimguard/review/audit_events.py` |
 | D14 | One deployable service, Docker Compose, no Kubernetes, no microservices | Five people, one month, one demo machine | doc 09 §A3, §A4 |
+| D15 | The SLM returns explanation and correction recommendation under one exact five-field contract | Both outputs need the same evidence and authority boundary; separate unverified prose paths would create inconsistent safety | `docs/19`, prompt `2.0.0` |
+| D16 | Every assistance result receives `accept`, `fallback` or `decline` plus a SHA-256 receipt | Operators need a replayable security decision rather than an unverifiable “guarded by prompt” claim | migration `0004`, `provider.py` |
+| D17 | JEV remains an independent typed advisory sidecar | A second model must not become a covert adjudicator or approve unsafe prose | `docs/17`, `claimguard/edu/judge/` |
+| D18 | No SLM checkpoint is selected until secured-contract v2 clears every hard gate | The historical highest average score still failed schema/injection checks; average quality cannot compensate for a safety failure | `docs/18` §§9–10 |
+| D19 | The primary frontend is an evidence-first Next.js cockpit, not a chatbot | Reviewers need simultaneous queue, finding, evidence and assistance context with explicit human controls | `frontend/`, `PRODUCT.md`, `DESIGN.md` |
 
 ---
 
@@ -117,7 +124,30 @@ The harness is also proven to fail loudly. Negative self-checks (mutants built b
 *(Source of this table: `docs/verification/EDU-PACK-CONFORMANCE.md`, §"Independently verified vs taken
 from the pack".)*
 
-### 3.4 Suite sizes (measured by me, 2026-09-23)
+### 3.4 Release verification (measured 2026-09-26)
+
+The complete post-format release gate produced:
+
+```text
+backend: 610 passed, 39 skipped, 0 failed
+frontend: 11 passed in 3 files
+Ruff lint: passed
+Ruff format: 142 files already formatted
+focused strict Pyright: 0 errors, 1 private-test-helper warning
+ESLint: passed
+TypeScript: passed
+Next.js production build: passed
+browser: demo data, three-column desktop grid and recommendation-to-note flow verified
+```
+
+The 39 skips are explicit mentor-pack-dependent tests. The delivered pack is intentionally not in
+git; no failure is hidden behind a skip. The exact release commands and remaining limitations are in
+`docs/20-Implementation-Completion-Report.md` §§9–10.
+
+The earlier per-directory collection snapshot below is retained for traceability rather than
+rewritten as if it were the current total.
+
+#### Historical suite-size snapshot (2026-09-23)
 
 ```bash
 uv run pytest <dir> --collect-only -q      # counted per directory
@@ -238,16 +268,25 @@ by 10.00 points. Read with §5 below, this is the honest shape of a 1.0000.
   `{"findings": 1, "unresolved": 0, "resolved": 1}`, and `UPDATE`/`DELETE` on the result and
   decision tables refused by the database. Full transcript:
   `docs/11-Architecture-and-Dataflow.md` §9.1(b).
-* **The AI layer is ablation-shaped, not score-shaped.** The pack's AI evaluation requires manual
-  0/1 scoring of explanation cases; that scorecard is produced by hand elsewhere and no explanation
-  number is claimed here. What is verified structurally: the explanation output carries exactly four
-  keys, its cited evidence paths must be a subset of the finding's supplied paths, its cited rule id
+* **The production SLM copilot remains safety-gated.** What is verified structurally: the assistance output carries exactly five
+  keys, including a contextual `correction_recommendation`; its cited evidence paths must be a subset of the finding's supplied paths, its cited rule id
   must equal the finding's, its review flag must equal the finding's own, and any failure falls back
   to the deterministic explanation with the fallback marked. A model failure changes **0** statuses
-  (`tests/edu_explain/test_status_invariance.py`), and a model is never even consulted for a `PASS`
-  (`MODEL_ELIGIBLE_STATUSES = {"FAIL", "UNABLE_TO_ASSESS"}`).
-* **No latency, cost or token figure is reported**, because none was measured with a live model in
-  this repository.
+  (`tests/edu_explain/test_status_invariance.py`). The SLM is consulted for every attention state
+  (`FAIL`, `UNABLE_TO_ASSESS`, `NOT_IMPLEMENTED`) and never for a `PASS`. Direct and Base64-
+  transformed instruction output is rejected. Each accepted, declined or fallback result has an
+  immutable SHA-256 assistance receipt in the provenance sidecar (see `docs/19`).
+* **The first SLM comparison ran on 2026-09-25.** A Tesla T4 run compared Gemma 4 E4B Q4 and
+  BF16/Q4 variants of Phi-4 Mini and Qwen3 4B; Gemma BF16 did not fit the declared threshold. Qwen3
+  4B BF16 had the highest raw grounding score (0.7000), while Gemma 4 Q4 had the best exact-schema
+  rate (75%) among the measured configurations. Every configuration failed at least one hard gate,
+  and all 22 semantic-support labels are still blank. Therefore **no SLM won and none is enabled**.
+  Exact per-case output, environment, timing, VRAM and the selection analysis are preserved under
+  `docs/verification/slm-benchmark/2026-09-25/` and explained in `docs/18` §9.
+* **The product profile is now model-first and fail-closed.** `.env.example` selects model mode, but
+  no checkpoint is silently blessed: an endpoint and model identifier are still required. Missing
+  or rejected SLM output becomes the labelled deterministic safe twin. The old benchmark predates
+  the secured five-field contract and must be rerun before a checkpoint is called deployable.
 
 ---
 
@@ -310,7 +349,11 @@ Quoted from `docs/verification/EDU-PACK-CONFORMANCE.md`, §"Honest limitations":
 * **The held-out assessment has not happened.** Per `docs/10-ADR-Starter-Pack-Authority.md` §7, the
   mentor's 200 claims remain outstanding, and the reproducibility package (video, pitch) is due at
   the Phase-1/Phase-3 gates.
-* **No explanation-quality number exists** in this report, on purpose: it would have to be invented.
+* **No deployable explanation-model quality claim exists.** The first narrow synthetic run produced
+  useful automatic measurements, but every model failed a hard gate and the required two-reviewer
+  semantic adjudication is incomplete. The product is model-first when a vetted endpoint is
+  configured and otherwise exposes the labelled deterministic safe twin; no checkpoint is bundled
+  or silently selected.
 
 ---
 
@@ -340,6 +383,26 @@ CLAIMGUARD_DATABASE_URL="postgresql+psycopg://claimguard:claimguard@localhost:54
   uv run python scripts/sample_run.py
 ```
 
+Release regression and frontend:
+
+```bash
+uv run --extra temporal --extra dev pytest -q
+uv run --extra dev ruff check .
+uv run --extra dev ruff format --check .
+uv run --extra dev pyright claimguard/edu/explain claimguard/review \
+  tests/edu_explain tests/review tests/experiments
+
+cd frontend
+npm test -- --run
+npm run lint
+npm run typecheck
+npm run build
+```
+
+The secured SLM experiment is `notebooks/slm_explanation_benchmark_colab.ipynb`. Run it on Colab,
+preserve its CSV, JSON, semantic-review sheet and environment export together, and do not configure
+`CLAIMGUARD_EXPLAIN_MODEL` until a candidate clears every v2 hard gate.
+
 The literal argv, exit codes and full stderr of the recorded run are preserved verbatim in
 `docs/verification/EDU-EVALUATION-REPORT.md` §"Reproduction"; the harness commands are in
 `docs/verification/EDU-PACK-CONFORMANCE.md` §"Exact commands". A minimal end-to-end sample run is in
@@ -354,6 +417,8 @@ The literal argv, exit codes and full stderr of the recorded run are preserved v
   would not have changed them. Everything I *did* run is labelled with its command.
 * I did not reconcile the 20300 / 20270 evidence-pointer difference (§4.2).
 * I did not run the pack's manual explanation scorecard, so no explanation-quality claim is made.
-* I did not run `docker compose up`; the compose/Dockerfile entry points do not match the tree
-  (see `docs/11-Architecture-and-Dataflow.md` §9.3).
-* No performance, latency, cost or capacity measurement exists in this repository.
+* I validated the current Compose configuration and ran the Next.js interface locally, but I did not
+  run a clean, production-like multi-container load/soak test. Container failure recovery remains a
+  release-hardening task; see `docs/20` §§10–11.
+* The SLM notebook records narrow single-case latency, throughput and peak VRAM on one Tesla T4. It
+  does not measure production concurrency, endpoint cost, sustained capacity or tail latency.

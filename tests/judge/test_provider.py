@@ -233,6 +233,15 @@ def test_an_http_error_from_the_endpoint_surfaces_as_itself() -> None:
         judge(transport).assess(STATE, questions())
 
 
+def test_an_http_error_body_never_echoes_the_credential() -> None:
+    transport = FakeTransport(error=JudgeHTTPError(422, f"vendor echoed bearer {API_KEY}"))
+    with pytest.raises(JudgeHTTPError) as caught:
+        judge(transport).assess(STATE, questions())
+    assert API_KEY not in str(caught.value)
+    assert API_KEY not in caught.value.detail
+    assert "redacted" in caught.value.detail
+
+
 # ---------------------------------------------------------------------------
 # The null provider and the factory
 # ---------------------------------------------------------------------------

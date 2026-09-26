@@ -47,9 +47,10 @@ Two ways to point the engine at a rule catalogue: the mentor pack on disk
 uv run claimguard evaluate --split all                 # engine + the mentor's own scorer
 uv run claimguard report --split development \
     --output docs/verification/EDU-EVALUATION-REPORT.md
-uv run claimguard serve                                # reviewer UI at /review, API at /v1
+uv run claimguard serve                                # API at /v1; legacy fallback at /review
+cd frontend && npm ci && npm run dev                   # primary reviewer workspace on :3000
 uv run python scripts/sample_run.py                    # end-to-end demo transcript, no network
-uv run pytest tests/ -q                                # 508 tests
+uv run pytest tests/ -q                                # full Python verification suite
 ```
 
 ---
@@ -62,8 +63,9 @@ uv run pytest tests/ -q                                # 508 tests
 | Independent conformance harness (second opinion, no pack import) | `scripts/edu_conformance.py` | **CONFORMANT** on all three splits, 0 problems |
 | CSV intake + educational FHIR projection | `claimguard/edu/intake/` | CSV rebuild is **byte-equal** to the pack's JSONL; FHIR recovers 30 of 41 leaf paths and reports the other 11 as unsupported rather than inventing them |
 | Reviewer workflow (runs, results, queue, decisions, corrections) | `claimguard/review/` + migration `0002` | Verified end to end: submit → 15 results; malformed decisions 422; correction → new version, original untouched |
-| Reviewer interface | `claimguard/review/ui/` at `/review` | Queue with filters and unresolved counts, evidence shown as `path = value`, four decisions, correction→recheck |
+| Reviewer interface | `frontend/` (Next.js) | Evidence-first three-column cockpit; queue, findings, AI provenance and audit visible together; reasoned decisions; immutable correction→recheck. Legacy `/review` remains a fallback. |
 | Bounded explanation layer (LLM may rewrite, never decide) | `claimguard/edu/explain/` | Adversarial outputs rejected; a model failure changes **zero** statuses (2250 enrichments tested) |
+| JEV advisory sidecar | `claimguard/edu/judge/` + `claimguard judge` | Typed grounding/agreement/attention second opinion; offline-safe without credentials; cannot enter the graded 15-key record. Live quality is not claimed until access and evaluation. |
 | Append-only audit ledger (SHA-256 hash chain) | `claimguard/audit/` + migration `0001` | Trigger/Python digest parity proven against live Postgres |
 | Edge-case suite for the rulebook edges the public labels cannot reach | `tests/edu_edges/` | 38 tests, 14 edges, mutation probes proving each test discriminates |
 | Operator console | `claimguard/cli/` | `status`, `serve`, `evaluate`, `report` — each a real gate with meaningful exit codes |
@@ -98,6 +100,10 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | 13 | [`docs/13-Technical-Report.md`](docs/13-Technical-Report.md) | Implementation, decisions, tests, limitations | Jury |
 | 14 | [`docs/14-Contribution-Log.md`](docs/14-Contribution-Log.md) | Roles and an honest statement of AI-tool use | Jury |
 | 15 | [`docs/15-Demo-Script.md`](docs/15-Demo-Script.md) | The 7-minute demo, beat by beat, with a fallback | Presenters |
+| 17 | [`docs/17-JEV-Judge-Layer.md`](docs/17-JEV-Judge-Layer.md) | Typed probabilistic second opinion, strict sidecar boundary and offline-safe operation | AI/ML + jury |
+| 18 | [`docs/18-SLM-Benchmark-Methodology.md`](docs/18-SLM-Benchmark-Methodology.md) | Colab protocol, preserved Gemma 4/Phi-4 Mini/Qwen3 run and secured-contract v2 rerun plan; no checkpoint is deployable yet | AI/ML + jury |
+| 19 | [`docs/19-Assistance-Security-Envelope.md`](docs/19-Assistance-Security-Envelope.md) | AegisGraph-inspired SLM authority graph, correction contract, verifier decisions and receipts | Security + jury |
+| 20 | [`docs/20-Implementation-Completion-Report.md`](docs/20-Implementation-Completion-Report.md) | Complete release inventory, architecture, verification, limitations, remaining work and operational handoff | **Whole team + jury** |
 | — | [`docs/verification/EDU-EVALUATION-REPORT.md`](docs/verification/EDU-EVALUATION-REPORT.md) | Generated evaluation report (single source for every metric) | Jury |
 | — | [`docs/verification/EDU-PACK-CONFORMANCE.md`](docs/verification/EDU-PACK-CONFORMANCE.md) | How conformance is verified: oracle + independent second opinion | Reviewer |
 | — | [`docs/verification/REPRODUCIBLE-SAMPLE-RUN.md`](docs/verification/REPRODUCIBLE-SAMPLE-RUN.md) | Captured end-to-end transcript | Reviewer |

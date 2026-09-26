@@ -41,6 +41,9 @@ def candidate(finding: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
             "The billed quantity 1.5 is not a positive integer, so the fictional limit "
             "cannot be satisfied."
         ),
+        "correction_recommendation": (
+            "Verify the quantity against the source document, then correct it or attach evidence."
+        ),
         "cited_evidence_paths": ["/lines/0/quantity"],
         "cited_rule_ids": [finding["rule_id"]],
         "needs_human_review": finding["requires_human_review"],
@@ -54,7 +57,7 @@ def candidate(finding: Mapping[str, Any], **overrides: Any) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_a_clean_candidate_is_accepted_and_returned_with_exactly_four_keys() -> None:
+def test_a_clean_candidate_is_accepted_and_returned_with_the_exact_contract() -> None:
     finding = synthetic_finding()
     validated = validate_explanation(
         candidate(finding), finding, envelope=SYNTHETIC_ENVELOPE, rule=SYNTHETIC_RULE

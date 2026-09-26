@@ -2,12 +2,13 @@
 
 WHAT THIS SURFACE IS
 --------------------
-Seven honest operations, and nothing that decides anything about a claim:
+Eight honest operations, and nothing that decides anything about a claim:
 
 =====================================  ==============================================
 ``POST /v1/claims``                    validate the envelope, run the 15 checks,
                                        persist the run and its audit event
 ``GET  /v1/runs/{run_id}``             one run's identity, versions and provenance
+``GET  /v1/runs/{run_id}/claim``       the immutable input, for drafting a correction
 ``GET  /v1/runs/{run_id}/results``     the 15 records, exactly as the CLI emits them,
                                        plus each explanation's provenance
 ``GET  /v1/runs/{run_id}/decisions``   the run's decision history with review states
@@ -101,6 +102,7 @@ from claimguard.review.models import (
     QueueFilters,
     RecheckRequest,
     ReviewQueue,
+    RunClaimResponse,
     RunResponse,
     RunResultsResponse,
     SubmitClaimRequest,
@@ -259,6 +261,12 @@ def create_app(
     )
     app.add_api_route("/v1/runs/{run_id}", get_run, methods=["GET"], response_model=RunResponse)
     app.add_api_route(
+        "/v1/runs/{run_id}/claim",
+        get_claim,
+        methods=["GET"],
+        response_model=RunClaimResponse,
+    )
+    app.add_api_route(
         "/v1/runs/{run_id}/results",
         get_results,
         methods=["GET"],
@@ -330,15 +338,17 @@ def health(request: Request) -> HealthResponse:
     except Exception as exc:  # noqa: BLE001 - readiness reporting must not raise
         database = f"unreachable: {type(exc).__name__}"
     rules_ready = True
+    rules_dir: str | None = None
     try:
         rules.context()
+        rules_dir = str(rules.rules_dir)
     except RuleDirError:
         rules_ready = False
     return HealthResponse(
         status="ok" if database == "ready" and rules_ready else "degraded",
         database=database,
         schema_revision=revision,
-        rules_dir=str(rules.rules_dir),
+        rules_dir=rules_dir,
         rules_ready=rules_ready,
         engine_rule_version=RULE_VERSION,
     )
@@ -382,6 +392,23 @@ def get_results(request: Request, run_id: str) -> RunResultsResponse:
         run=run,
         results=review_store.get_results(run_id),
         explanations=review_store.get_explanations(run_id),
+    )
+
+
+def get_claim(request: Request, run_id: str) -> RunClaimResponse:
+    """The run's immutable synthetic claim input, for drafting a new version."""
+    review_store = _migrated_store(request.app)
+    run = review_store.get_run(run_id)
+    if run is None:
+        raise RunNotFoundError(f"unknown run: {run_id}")
+    envelope = review_store.get_claim_envelope(run_id)
+    if envelope is None:
+        raise RunNotFoundError(f"unknown run: {run_id}")
+    return RunClaimResponse(
+        run_id=run.run_id,
+        claim_id=run.claim_id,
+        version=run.version,
+        claim=envelope,
     )
 
 

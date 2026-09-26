@@ -1,0 +1,59 @@
+{
+  "seed": 20260924,
+  "gpu": "Tesla T4",
+  "gpu_vram_gb": 14.56317138671875,
+  "python": "3.13.15",
+  "torch": "2.11.0+cu128",
+  "transformers": "5.17.0",
+  "cuda": "12.8",
+  "model_configs": [
+    {
+      "family": "gemma4-e4b",
+      "name": "gemma4-e4b-bf16",
+      "model_id": "google/gemma-4-E4B-it",
+      "loader": "multimodal",
+      "precision": "bf16",
+      "min_vram_gb": 18.0
+    },
+    {
+      "family": "gemma4-e4b",
+      "name": "gemma4-e4b-q4",
+      "model_id": "google/gemma-4-E4B-it",
+      "loader": "multimodal",
+      "precision": "q4",
+      "min_vram_gb": 7.0
+    },
+    {
+      "family": "phi4-mini",
+      "name": "phi4-mini-bf16",
+      "model_id": "microsoft/Phi-4-mini-instruct",
+      "loader": "causal",
+      "precision": "bf16",
+      "min_vram_gb": 10.0
+    },
+    {
+      "family": "phi4-mini",
+      "name": "phi4-mini-q4",
+      "model_id": "microsoft/Phi-4-mini-instruct",
+      "loader": "causal",
+      "precision": "q4",
+      "min_vram_gb": 5.0
+    },
+    {
+      "family": "qwen3-4b",
+      "name": "qwen3-4b-bf16",
+      "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+      "loader": "causal",
+      "precision": "bf16",
+      "min_vram_gb": 10.0
+    },
+    {
+      "family": "qwen3-4b",
+      "name": "qwen3-4b-q4",
+      "model_id": "Qwen/Qwen3-4B-Instruct-2507",
+      "loader": "causal",
+      "precision": "q4",
+      "min_vram_gb": 5.0
+    }
+  ]
+}

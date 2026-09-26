@@ -156,6 +156,20 @@ def _first_error(exc: ValidationError) -> str:
     return f"{location}: {first['msg']}"
 
 
+def _redacted_error(settings: JudgeSettings, exc: JudgeError) -> JudgeError:
+    """Rebuild a provider error after credential redaction, preserving its type."""
+    if isinstance(exc, JudgeHTTPError):
+        return JudgeHTTPError(exc.status_code, settings.redact(exc.detail))
+    message = settings.redact(str(exc))
+    if isinstance(exc, JudgeDisabledError):
+        return JudgeDisabledError(message)
+    if isinstance(exc, JudgeTransportError):
+        return JudgeTransportError(message)
+    if isinstance(exc, JudgeResponseError):
+        return JudgeResponseError(message)
+    return JudgeError(message)
+
+
 # ---------------------------------------------------------------------------
 # The provider seam
 # ---------------------------------------------------------------------------
@@ -302,8 +316,8 @@ class JevJudge:
         """Perform one request through the injected transport, keeping errors typed."""
         try:
             return self._transport(request)
-        except JudgeError:
-            raise
+        except JudgeError as exc:
+            raise _redacted_error(self.settings, exc) from exc
         except (OSError, ValueError) as exc:
             raise JudgeTransportError(
                 self.settings.redact(f"judge transport failed: {exc}")

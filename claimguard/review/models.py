@@ -301,6 +301,7 @@ class ClaimQueueSummary(BaseModel):
 
 #: Provenance sources an explanation can declare (the explain layer's own markers).
 EXPLANATION_SOURCES: Final[tuple[str, ...]] = (SOURCE_DETERMINISTIC, SOURCE_MODEL)
+SECURITY_DECISIONS: Final[tuple[str, ...]] = ("accept", "fallback", "decline", "unrecorded")
 
 
 class ExplanationProvenance(BaseModel):
@@ -329,6 +330,10 @@ class ExplanationProvenance(BaseModel):
     provider: str
     rewritten: bool
     fallback_used: bool
+    correction_recommendation: str
+    cited_evidence_paths: list[str] = Field(default_factory=list)
+    security_decision: str
+    receipt_sha256: str | None = Field(default=None, pattern=_HASH_PATTERN)
     rejection_reasons: list[str] = Field(default_factory=list)
     declined_reason: str | None = None
 
@@ -350,6 +355,18 @@ class ExplanationProvenance(BaseModel):
     @classmethod
     def _provider_is_present(cls, value: str) -> str:
         return _non_blank(value)
+
+    @field_validator("correction_recommendation")
+    @classmethod
+    def _recommendation_is_present(cls, value: str) -> str:
+        return _non_blank(value)
+
+    @field_validator("security_decision")
+    @classmethod
+    def _security_decision_is_known(cls, value: str) -> str:
+        if value not in SECURITY_DECISIONS:
+            raise ValueError(f"unknown assistance security decision: {value!r}")
+        return value
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -584,6 +601,22 @@ class RunResultsResponse(BaseModel):
     explanations: list[ExplanationProvenance]
 
 
+class RunClaimResponse(BaseModel):
+    """The immutable input envelope for one run, used to prepare a correction.
+
+    ClaimGuard's current dataset is synthetic. Exposing the stored run input here
+    lets the reviewer edit a copy and submit a new version without mutating the
+    audited original.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    run_id: str
+    claim_id: str
+    version: int = Field(ge=1)
+    claim: dict[str, Any]
+
+
 class DecisionResponse(BaseModel):
     """A recorded decision, the finding's new review state and its audit stamp."""
 
@@ -626,7 +659,7 @@ class HealthResponse(BaseModel):
     status: str
     database: str
     schema_revision: str | None = None
-    rules_dir: str
+    rules_dir: str | None = None
     rules_ready: bool
     engine_rule_version: str
 

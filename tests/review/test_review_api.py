@@ -21,9 +21,9 @@ import pytest
 from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.envelope import RESULT_KEYS, RULE_VERSION
 from claimguard.edu.explain import (
+    ASSISTANCE_PROMPT_VERSION,
     DETERMINISTIC_PREFIX,
     MODEL_PREFIX,
-    PROMPT_VERSION,
     SOURCE_DETERMINISTIC,
     SOURCE_MODEL,
 )
@@ -73,7 +73,7 @@ async def test_health_reports_the_schema_and_the_rule_catalogue(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["schema_revision"] == "0003"
+    assert body["schema_revision"] == "0004"
     assert body["database"] == "ready"
     assert body["rules_ready"] is True
     assert body["engine_rule_version"] == RULE_VERSION
@@ -107,6 +107,15 @@ async def test_submitting_a_claim_returns_its_fifteen_results(
     metadata = await client.get(f"/v1/runs/{run_id}")
     assert metadata.status_code == 200
     assert metadata.json()["run"] == body["run"]
+
+    stored_claim = await client.get(f"/v1/runs/{run_id}/claim")
+    assert stored_claim.status_code == 200
+    assert stored_claim.json() == {
+        "run_id": run_id,
+        "claim_id": envelope["claim_id"],
+        "version": 1,
+        "claim": envelope,
+    }
 
 
 async def test_a_malformed_envelope_is_rejected_with_the_engines_message(
@@ -440,7 +449,7 @@ async def test_a_configured_model_drafts_the_text_and_the_run_says_so(
         assert created.status_code == 201, created.text
         run = created.json()["run"]
         assert run["model_version"] == f"{MODEL_VERSION_PREFIX}{TEST_MODEL_NAME}"
-        assert run["prompt_version"] == PROMPT_VERSION
+        assert run["prompt_version"] == ASSISTANCE_PROMPT_VERSION
         payload = (await http.get(f"/v1/runs/{run['run_id']}/results")).json()
 
     assert transport.calls, "the model path was configured but never used"

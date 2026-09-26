@@ -1,0 +1,121 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-09-24T00:00:00+01:00",
+  "title": "Design System: ClaimGuard",
+  "extensions": {
+    "colorMeta": {
+      "navigation-navy": {
+        "role": "primary",
+        "displayName": "Navigation Navy",
+        "canonical": "oklch(30% 0.075 245)",
+        "tonalRamp": ["#031828", "#05243D", "#082F53", "#16496E", "#376987", "#6A91A8", "#A9C2D1", "#E4EEF4"]
+      },
+      "action-blue": {
+        "role": "primary",
+        "displayName": "Action Blue",
+        "canonical": "oklch(60% 0.20 255)",
+        "tonalRamp": ["#05172D", "#072A52", "#0B4587", "#0E60BE", "#1677FF", "#68A6FF", "#AFD1FF", "#EAF3FF"]
+      },
+      "evidence-aqua": {
+        "role": "secondary",
+        "displayName": "Evidence Aqua",
+        "canonical": "oklch(69% 0.115 190)",
+        "tonalRamp": ["#042123", "#06383B", "#07545A", "#087077", "#19AEB4", "#62C9CD", "#A8E2E4", "#E5F6F7"]
+      },
+      "canvas-ice": {
+        "role": "neutral",
+        "displayName": "Canvas Ice",
+        "canonical": "oklch(97% 0.009 235)",
+        "tonalRamp": ["#12202B", "#253742", "#41545F", "#667A86", "#91A4AF", "#BFCED7", "#DFEAF0", "#F3F8FC"]
+      }
+    },
+    "typographyMeta": {
+      "headline": {"displayName": "Workspace headline", "purpose": "Claim identity and page titles."},
+      "body": {"displayName": "Operational body", "purpose": "Findings, explanations, and guidance."},
+      "label": {"displayName": "Interface label", "purpose": "Metadata, controls, and compact status language."}
+    },
+    "shadows": [
+      {"name": "shell", "value": "0 10px 30px rgba(8, 47, 83, 0.10)", "purpose": "Navigation and outer workspace shell."},
+      {"name": "raised", "value": "0 8px 24px rgba(8, 47, 83, 0.12)", "purpose": "Menus, sticky actions, and overlays."}
+    ],
+    "motion": [
+      {"name": "instant", "value": "120ms cubic-bezier(0.25, 1, 0.5, 1)", "purpose": "Press and selection feedback."},
+      {"name": "state", "value": "220ms cubic-bezier(0.22, 1, 0.36, 1)", "purpose": "Panel, disclosure, and filter state changes."}
+    ],
+    "breakpoints": [
+      {"name": "queue-stack", "value": "760px"},
+      {"name": "cockpit", "value": "1180px"},
+      {"name": "wide", "value": "1480px"}
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The single strongest action in the current review context.",
+      "html": "<button class=\"ds-btn-primary\">Recheck claim</button>",
+      "css": ".ds-btn-primary{min-height:44px;padding:12px 18px;border:1px solid #1677FF;border-radius:8px;background:#1677FF;color:#FCFEFF;font:600 .8125rem/1.35 Inter,Segoe UI,system-ui,sans-serif;transition:background 120ms cubic-bezier(.25,1,.5,1),transform 120ms cubic-bezier(.25,1,.5,1)}.ds-btn-primary:hover{background:#0E60BE}.ds-btn-primary:active{transform:translateY(1px)}.ds-btn-primary:focus-visible{outline:2px solid #19AEB4;outline-offset:2px}"
+    },
+    {
+      "name": "Evidence Chip",
+      "kind": "chip",
+      "refersTo": "evidence-chip",
+      "description": "A cited evidence identifier with a stable aqua vocabulary.",
+      "html": "<button class=\"ds-evidence-chip\">E2 · Authorization policy</button>",
+      "css": ".ds-evidence-chip{min-height:32px;padding:4px 8px;border:1px solid #A8E2E4;border-radius:8px;background:#E5F6F7;color:#087077;font:600 .8125rem/1.35 Inter,Segoe UI,system-ui,sans-serif}.ds-evidence-chip:hover{background:#D2F0F1}.ds-evidence-chip:focus-visible{outline:2px solid #1677FF;outline-offset:2px}"
+    },
+    {
+      "name": "Status Chip",
+      "kind": "chip",
+      "refersTo": "status-finding",
+      "description": "A text-first semantic state marker.",
+      "html": "<span class=\"ds-status-finding\">Needs correction</span>",
+      "css": ".ds-status-finding{display:inline-flex;align-items:center;min-height:28px;padding:5px 10px;border-radius:999px;background:#FCE8EC;color:#C9344F;font:600 .8125rem/1.35 Inter,Segoe UI,system-ui,sans-serif}"
+    },
+    {
+      "name": "Search Field",
+      "kind": "input",
+      "refersTo": "search-field",
+      "description": "Persistent queue search with a visible label.",
+      "html": "<label class=\"ds-search-label\">Search claims<input class=\"ds-search\" placeholder=\"Claim, member, or provider\"></label>",
+      "css": ".ds-search-label{display:grid;gap:4px;color:#0B2640;font:600 .8125rem/1.35 Inter,Segoe UI,system-ui,sans-serif}.ds-search{min-height:44px;padding:10px 12px;border:1px solid #D6E4EE;border-radius:8px;background:#FCFEFF;color:#0B2640;font:400 .9375rem/1.5 Inter,Segoe UI,system-ui,sans-serif}.ds-search:focus-visible{outline:2px solid #19AEB4;outline-offset:2px;border-color:#1677FF}"
+    },
+    {
+      "name": "Top Navigation",
+      "kind": "nav",
+      "refersTo": "navigation-shell",
+      "description": "A compact rounded navy shell that establishes Velodoc-familiar confidence without copying its identity.",
+      "html": "<nav class=\"ds-nav\"><strong>ClaimGuard</strong><a class=\"ds-nav-active\" href=\"#\">Queue</a><a href=\"#\">Review</a><a href=\"#\">Audit</a></nav>",
+      "css": ".ds-nav{display:flex;align-items:center;gap:12px;padding:10px 16px;border-radius:18px;background:#082F53;color:#FCFEFF;font:600 .8125rem/1.35 Inter,Segoe UI,system-ui,sans-serif;box-shadow:0 10px 30px rgba(8,47,83,.10)}.ds-nav a{min-height:40px;padding:11px 16px;border-radius:999px;color:#DCEAF3;text-decoration:none}.ds-nav a:hover{background:#16496E}.ds-nav .ds-nav-active{background:#1677FF;color:#FCFEFF}.ds-nav a:focus-visible{outline:2px solid #19AEB4;outline-offset:2px}"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Evidence Desk",
+    "overview": "A bright, evidence-first operations desk built around a persistent queue, deterministic findings, and a bounded explanation workspace. Familiar blue-aqua confidence supports the work, while ClaimGuard's citations and audit-first composition create the identity.",
+    "keyCharacteristics": [
+      "Three persistent work zones",
+      "Navy structure, blue action, aqua evidence",
+      "Compact humanist typography",
+      "Flat by default",
+      "Deterministic result first"
+    ],
+    "rules": [
+      {"name": "The Evidence Color Rule", "body": "Aqua is reserved for evidence, citations, provenance, and the visual path between a finding and its source.", "section": "colors"},
+      {"name": "The Operational Gradient Rule", "body": "Gradients are prohibited behind claim data, findings, tables, inputs, and corrective actions.", "section": "colors"},
+      {"name": "The Data Rhythm Rule", "body": "Claim amounts, dates, counts, and identifiers use tabular numerals so rows remain visually stable.", "section": "typography"},
+      {"name": "The Flat-by-Default Rule", "body": "If every panel casts a shadow, the hierarchy has failed. Use borders and spacing first.", "section": "elevation"}
+    ],
+    "dos": [
+      "Do keep queue, findings, and explanation visible together on wide screens.",
+      "Do show deterministic evidence before AI prose and attach every factual model statement to an evidence ID.",
+      "Do design loading, empty, failure, long-content, keyboard, touch, and reduced-motion states."
+    ],
+    "donts": [
+      "Don't build a generic AI dashboard that leads with chat instead of the operator's queue.",
+      "Don't use marketing-style gradients, oversized hero metrics, or decorative glass effects inside operational workflows.",
+      "Don't create a literal Velodoc clone or use another company's private assets, copy, or proprietary identity.",
+      "Don't imply that the AI can adjudicate, submit, or alter a deterministic claim outcome."
+    ]
+  }
+}

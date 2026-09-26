@@ -7,10 +7,10 @@ pack's verification contract and the deterministic fallback — and the reviewer
 workflow, which owns persistence and the HTTP surface. At run creation it:
 
 1.  **chooses a provider.** The deterministic template by default; the
-    OpenAI-compatible model provider when the environment configures one
-    (``CLAIMGUARD_EXPLAIN_BASE_URL`` + ``CLAIMGUARD_EXPLAIN_MODEL``). Nothing is
-    configured in the common case, and a half-configured deployment degrades
-    instead of failing.
+    OpenAI-compatible model provider only when ``CLAIMGUARD_EXPLAIN_MODE=model``
+    and the endpoint/model variables are both configured. The default is an
+    explicit deterministic selection; stale endpoint settings cannot activate a
+    model, and a half-configured model mode degrades instead of failing.
 2.  **explains the run through the layer's own orchestration**
     (:func:`claimguard.edu.explain.explain_records`), so the model-status gate
     (a PASS is never sent to a model), the citation checks, the prohibited-
@@ -42,14 +42,15 @@ sees the validated finding, its evidence pointers and a bounded rule excerpt.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from claimguard.edu.envelope import ResultRecord
 from claimguard.edu.explain import (
+    ASSISTANCE_PROMPT_VERSION,
     MODEL_ELIGIBLE_STATUSES,
-    PROMPT_VERSION,
     SOURCE_DETERMINISTIC,
     SOURCE_MODEL,
     ExplanationOutcome,
@@ -58,7 +59,9 @@ from claimguard.edu.explain import (
     ModelExplanationProvider,
     RuleSource,
     TemplateExplanationProvider,
+    UnavailableModelProvider,
     apply_outcomes,
+    assistance_receipt,
     explain_records,
     provider_name,
     provider_source_kind,
@@ -75,6 +78,7 @@ ENGINE_PROMPT_VERSION: Final = "none"
 #: model. The wording is explicit on purpose: the model drafted *text*, and the
 #: value must not read as if a model produced a status (pack behaviour 6).
 MODEL_VERSION_PREFIX: Final = "explanation-model/"
+EXPLANATION_MODE_ENV: Final = "CLAIMGUARD_EXPLAIN_MODE"
 
 
 @dataclass(frozen=True)
@@ -97,14 +101,17 @@ class ExplainedRun:
 def explanation_provider(env: Mapping[str, str] | None = None) -> ExplanationProvider:
     """The configured explanation provider: the model when configured, else the template.
 
-    The model path is opt-in through the environment
-    (``CLAIMGUARD_EXPLAIN_MODEL`` + ``CLAIMGUARD_EXPLAIN_BASE_URL``). With nothing
-    configured — the default, and what CI runs — the deterministic template
-    provider is used, so a deployment that never sets those variables behaves
-    exactly as before apart from the wording of the explanation.
+    The model path is opt-in through ``CLAIMGUARD_EXPLAIN_MODE=model`` plus
+    ``CLAIMGUARD_EXPLAIN_MODEL`` and ``CLAIMGUARD_EXPLAIN_BASE_URL``. Any other
+    mode selects the deterministic template. This makes a benchmark rejection a
+    durable deployment decision instead of relying on empty or forgotten values.
     """
-    model = ModelExplanationProvider.from_env(env)
-    return TemplateExplanationProvider() if model is None else model
+    source = os.environ if env is None else env
+    mode = (source.get(EXPLANATION_MODE_ENV) or "deterministic").strip().lower()
+    if mode != "model":
+        return TemplateExplanationProvider()
+    model = ModelExplanationProvider.from_env(source)
+    return UnavailableModelProvider() if model is None else model
 
 
 def run_identity(provider: ExplanationProvider) -> tuple[str, str]:
@@ -119,7 +126,7 @@ def run_identity(provider: ExplanationProvider) -> tuple[str, str]:
     """
     if provider_source_kind(provider) != SOURCE_MODEL:
         return ENGINE_MODEL_VERSION, ENGINE_PROMPT_VERSION
-    return f"{MODEL_VERSION_PREFIX}{_model_id(provider)}", PROMPT_VERSION
+    return f"{MODEL_VERSION_PREFIX}{_model_id(provider)}", ASSISTANCE_PROMPT_VERSION
 
 
 def _model_id(provider: ExplanationProvider) -> str:
@@ -186,6 +193,10 @@ def _provenance_from_outcome(index: int, outcome: ExplanationOutcome) -> Explana
         provider=outcome.provider,
         rewritten=outcome.rewritten,
         fallback_used=outcome.fallback_used,
+        correction_recommendation=outcome.correction_recommendation,
+        cited_evidence_paths=list(outcome.cited_evidence_paths),
+        security_decision=outcome.security_decision,
+        receipt_sha256=outcome.receipt_sha256,
         rejection_reasons=list(outcome.rejection_reasons),
         declined_reason=outcome.declined_reason,
     )
@@ -195,6 +206,33 @@ def _engine_text_provenance(
     index: int, record: Mapping[str, Any], provider: str, reason: str
 ) -> ExplanationProvenance:
     """Provenance for a record whose engine text stands unrewritten."""
+    evidence = record.get("evidence")
+    entries = cast("list[Any]", evidence) if isinstance(evidence, list) else []
+    paths: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        path = cast("Mapping[str, Any]", entry).get("path")
+        if isinstance(path, str):
+            paths.append(path)
+    outcome = ExplanationOutcome(
+        claim_id=str(record.get("claim_id") or ""),
+        rule_id=str(record.get("rule_id") or ""),
+        status=str(record.get("status") or ""),
+        explanation=str(record.get("explanation") or ""),
+        correction_recommendation=str(
+            record.get("corrective_action") or "Review the cited evidence."
+        ),
+        cited_evidence_paths=tuple(paths),
+        cited_rule_ids=(str(record.get("rule_id") or ""),),
+        needs_human_review=record.get("requires_human_review") is True,
+        source=SOURCE_DETERMINISTIC,
+        provider=provider,
+        rewritten=False,
+        fallback_used=True,
+        security_decision="fallback",
+        rejection_reasons=(reason,),
+    )
     return ExplanationProvenance(
         rule_id=str(record.get("rule_id") or ""),
         seq=index,
@@ -202,6 +240,10 @@ def _engine_text_provenance(
         provider=provider,
         rewritten=False,
         fallback_used=True,
+        correction_recommendation=outcome.correction_recommendation,
+        cited_evidence_paths=paths,
+        security_decision=outcome.security_decision,
+        receipt_sha256=assistance_receipt(outcome),
         rejection_reasons=[reason],
     )
 
