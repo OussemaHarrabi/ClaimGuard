@@ -5,8 +5,9 @@
 > **Read together with:** `docs/01-DOMAIN-Gulf-Claims-101.md` (how healthcare
 > claims actually work) and `docs/03-Challenge-Decode-Requirements.md`
 > (exactly what the challenge grades).
-> **Your current sprint work is in [`TEAM-TASKS.md`](TEAM-TASKS.md)** — one lab per
-> person, in your own field, with a step-by-step list and a done-checklist.
+> **Your current AI labs are in
+> [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md)**. The earlier Sprint 1 brief remains
+> in [`TEAM-TASKS.md`](TEAM-TASKS.md) as background.
 
 ---
 
@@ -112,9 +113,9 @@ Before implementing, write/describe the shape of the solution:
 > needed; and the engine now exists, so the streams become *measuring and
 > verifying* work rather than building from zero.
 >
-> **Your current sprint assignments are the three labs in
-> [`TEAM-TASKS.md`](TEAM-TASKS.md)** — read that first, and treat the sections
-> below as the background for why each field matters.
+> **Your current lab assignments are in
+> [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md)**. Treat the sections below as the
+> background for why each field matters.
 
 ### Stream A — The Explainable AI layer
 

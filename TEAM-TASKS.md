@@ -1,4 +1,7 @@
-# Team task sheets — Sprint 1 (mentor data has arrived)
+# Team task sheets — Sprint 1 (earlier lab plan)
+
+> **Current AI labs:** [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) has the next
+> assignments for B1, B2 and B3. The plan below is retained as background and reference.
 
 > **Who this is for:** B1, B2 and B3.
 > **Read this with:** `TEAM-ROADMAP.md` (how we work) and `docs/01-Domain-Gulf-Claims-101.md`

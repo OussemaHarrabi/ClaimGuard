@@ -115,11 +115,12 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | — | [`docs/verification/AI-ABLATION.md`](docs/verification/AI-ABLATION.md) | What the assistance layer contributes, and what it costs when the model fails | Reviewer |
 | — | [`docs/verification/ADVERSARIAL-CASES.md`](docs/verification/ADVERSARIAL-CASES.md) | 87 boundary cases against the rulebook's exact wording, and what they found | Reviewer |
 | — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | How we work: methodology, ground rules, milestones | **Whole team — start here** |
-| — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Current sprint: one lab per person, with steps and a done-checklist | **B1, B2, B3** |
+| — | [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) | Current AI labs: reviewer questions, secured SLM comparison and document understanding | **B1, B2, B3** |
+| — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Earlier Sprint 1 lab plan, retained as background | Team |
 
 > Documents 07 and 08 (the original per-task plan and per-person sprint backlog) were retired when
 > the mentor's labelled dataset arrived and are kept locally, not in the repository. Their successors
-> are `docs/10` (the contract decision) and `TEAM-TASKS.md` (the current work).
+> are `docs/10` (the contract decision) and the current team lab brief above.
 
 ---
 
@@ -146,8 +147,10 @@ why `make edu-conformance` is a mandatory pre-submission step.
 
 ## Team
 
-Roles and the current per-person work are in [`TEAM-TASKS.md`](TEAM-TASKS.md) and
-[`TEAM-ROADMAP.md`](TEAM-ROADMAP.md).
+Roles and the current per-person work are in
+[`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) and
+[`TEAM-ROADMAP.md`](TEAM-ROADMAP.md). The earlier plan remains in
+[`TEAM-TASKS.md`](TEAM-TASKS.md).
 
 | Role | Focus |
 |---|---|
