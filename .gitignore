@@ -72,3 +72,9 @@ Desktop.ini
 !.vscode/settings.json.example
 # Local-only planning workspace (retired per-task planning docs)
 claimguard-plans-local/
+
+# Local-only engineering handoff. Tracked until 2026-09-27; removed from the working
+# tree AND from every commit so the team working in this repository cannot read it or
+# its history. Keep it local: never `git add -f` it, never paste it into anything the
+# team sees. TEAM-TASKS.md and TEAM-ROADMAP.md are the team-visible briefs.
+HANDOFF.md

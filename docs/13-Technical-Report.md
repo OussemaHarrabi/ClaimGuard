@@ -128,8 +128,8 @@ from the pack".)*
 
 > **Release-day counts.** Later verification (2026-09-27) added adversarial boundary
 > cases and their CI tests: the clean worktree now reports **650 passed / 46 skipped**,
-> the pack-present suite **696 passed**, and the frontend **17 passed**. See `HANDOFF.md`
-> §5 for the current state.
+> the pack-present suite **696 passed**, and the frontend **17 passed**. `uv run pytest
+> tests/ -q` re-measures both counts on any checkout.
 
 The complete post-format release gate produced:
 

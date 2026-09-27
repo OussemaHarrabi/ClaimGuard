@@ -248,7 +248,7 @@ confirms the offered model.
 > **These are the release-day counts (2026-09-26).** Verification added on 2026-09-27
 > (adversarial boundary cases and their CI tests) moved them: the clean worktree now
 > reports **650 passed / 46 skipped**, the pack-present suite **696 passed**, and the
-> frontend **17 passed**. Current status lives in `HANDOFF.md` §5 and
+> frontend **17 passed**. Current status lives in
 > `docs/verification/PHASE-1-GAP-ANALYSIS.md`.
 
 Commands were run from the release worktree after the final formatting pass:
@@ -338,4 +338,5 @@ For every release:
 7. state failures and missing evidence explicitly;
 8. never call a model deployable merely because it has the highest average score.
 
-The detailed repository map, traps, commands and mentor questions remain in `HANDOFF.md`.
+The detailed repository map and the commands are in `docs/11-Architecture-and-Data-Flow.md` and
+`docs/13-Technical-Report.md`.
