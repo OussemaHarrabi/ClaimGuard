@@ -155,3 +155,7 @@ jobs:
         uses: gitleaks/gitleaks-action@v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Narrow allowlist for the benchmark's anonymised `label_key` ids, which the
+          # entropy rule reads as API keys. See .gitleaks.toml: it applies only under
+          # docs/verification/slm-benchmark/ and only to a 20-hex `label_key` line.
+          GITLEAKS_CONFIG: .gitleaks.toml

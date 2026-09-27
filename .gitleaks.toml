@@ -1,0 +1,32 @@
+# gitleaks configuration — ClaimGuard AI
+#
+# WHY THIS FILE EXISTS
+# --------------------
+# The default ruleset includes `generic-api-key`, which flags any long,
+# high-entropy string that resembles a credential. One tracked artefact trips it:
+# the SLM benchmark's semantic-review sheet,
+# `docs/verification/slm-benchmark/2026-09-25/claimguard_slm_benchmark.json`.
+#
+# Each review row carries a `label_key`: a random 20-character hex id (for example
+# `3eaf14d5e7aaf8407e91`) that lets a human's labels be joined back to a review row
+# without carrying the case id. The row beside it reads `"case_id": "coverage-001"`,
+# `"claim_text": ...`, `"supported": null` — these are identifiers from a synthetic
+# benchmark, not credentials, and they were never usable to authenticate anything.
+#
+# The scan is not widened to make the finding go away. The allowlist below applies
+# ONLY under that benchmark directory, and ONLY to a line that is a `label_key`
+# carrying exactly a 20-character hex value. Every other byte of those files, and
+# every other path in the repository, is still scanned by the full default ruleset.
+#
+# If a future artefact stores something that is actually a credential, this file
+# must not be edited to allow it: rotate the credential, remove it from the
+# artefact, and tell the lead.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "SLM benchmark semantic-review rows carry anonymised 20-hex label ids, not credentials"
+paths = ['''^docs/verification/slm-benchmark/''']
+regexTarget = "line"
+regexes = ['''"label_key":\s*"[0-9a-f]{20}"''']
