@@ -125,11 +125,9 @@ jobs:
 
       - name: Build
         working-directory: frontend
-        # CLAIMGUARD_API_ORIGIN is read at BUILD time by next.config.ts and baked
-        # into the route manifest, so the build needs it here. It must match the
-        # origin the browser will reach, not a container hostname.
-        env:
-          CLAIMGUARD_API_ORIGIN: http://127.0.0.1:8000
+        # No API origin needed: the cockpit proxies /v1 through a route handler
+        # that reads CLAIMGUARD_API_ORIGIN per request, so the build bakes no
+        # address into the bundle.
         run: npm run build
 
   security:

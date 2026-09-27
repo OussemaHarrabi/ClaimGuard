@@ -49,6 +49,9 @@ uv run claimguard report --split development \
     --output docs/verification/EDU-EVALUATION-REPORT.md
 uv run claimguard serve                                # API at /v1; legacy fallback at /review
 cd frontend && npm ci && npm run dev                   # primary reviewer workspace on :3000
+#   The cockpit proxies /v1 to CLAIMGUARD_API_ORIGIN (default http://127.0.0.1:8000).
+#   Set it at runtime - `CLAIMGUARD_API_ORIGIN=http://127.0.0.1:8030 npm run dev` -
+#   if your API is on another port. No rebuild is needed, in any mode.
 uv run python scripts/sample_run.py                    # end-to-end demo transcript, no network
 uv run pytest tests/ -q                                # full Python verification suite
 ```
