@@ -58,6 +58,11 @@ checks answerable; R009 and R010 are not), captured verbatim in
 
 **Gap G5 (mentor-held set).** Not obtainable: the pack states the 200 held-out claims are held by the
 mentor. **This cannot be closed by us** — it can only be stated honestly, which `docs/20` §10 does.
+*Risk reduced, not closed, 2026-09-27:* the pack's splits are representative rather than adversarial,
+so 87 hand-built boundary cases now probe the edges the rulebook words precisely (inclusive dates,
+0.01 SAR tolerances, equality at a maximum, null-modifier normalization). All 87 behave as the
+rulebook says — `docs/verification/ADVERSARIAL-CASES.md`. That is evidence about the *edges*, not
+about the mentor's unseen 200 claims, and it does not become evidence about them by being written down.
 
 ---
 

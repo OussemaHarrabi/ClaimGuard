@@ -111,6 +111,7 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | — | [`docs/verification/AUDIT-REPLAY.md`](docs/verification/AUDIT-REPLAY.md) | A stored run reconstructed from the ledger, with the chain verified | Auditor |
 | — | [`docs/verification/FHIR-MAPPING-EXAMPLE.md`](docs/verification/FHIR-MAPPING-EXAMPLE.md) | One real bundle projected, and what FHIR cannot carry | Reviewer |
 | — | [`docs/verification/AI-ABLATION.md`](docs/verification/AI-ABLATION.md) | What the assistance layer contributes, and what it costs when the model fails | Reviewer |
+| — | [`docs/verification/ADVERSARIAL-CASES.md`](docs/verification/ADVERSARIAL-CASES.md) | 87 boundary cases against the rulebook's exact wording, and what they found | Reviewer |
 | — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | How we work: methodology, ground rules, milestones | **Whole team — start here** |
 | — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Current sprint: one lab per person, with steps and a done-checklist | **B1, B2, B3** |
 
