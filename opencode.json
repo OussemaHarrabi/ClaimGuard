@@ -1,0 +1,79 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "share": "disabled",
+
+  "permission": {
+    "read": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    },
+    "edit": {
+      "*": "allow",
+      "*.env": "deny",
+      "*.env.*": "deny",
+      "*.env.example": "allow"
+    },
+    "bash": {
+      "*": "allow",
+      "git push*": "ask",
+      "git push --force*": "deny",
+      "git push -f*": "deny",
+      "git reset --hard*": "ask",
+      "git clean -fd*": "ask",
+      "rm -rf*": "deny",
+      "docker compose down -v*": "ask"
+    }
+  },
+
+  "lsp": {
+    "pyright": {
+      "command": ["uv", "run", "pyright-langserver", "--stdio"],
+      "extensions": [".py", ".pyi"]
+    }
+  },
+
+  "formatter": {
+    "claimguard-ruff": {
+      "command": ["uv", "run", "ruff", "format", "$FILE"],
+      "extensions": [".py"]
+    }
+  },
+
+  "watcher": {
+    "ignore": [
+      ".venv/**",
+      "node_modules/**",
+      ".git/**",
+      "**/__pycache__/**",
+      ".pytest_cache/**",
+      ".ruff_cache/**",
+      "htmlcov/**",
+      "coverage.xml"
+    ]
+  },
+
+  "compaction": {
+    "auto": true,
+    "prune": false,
+    "reserved": 12000
+  },
+
+  "subagent_depth": 2,
+
+  "command": {
+    "gates": {
+      "description": "Run the four ClaimGuard local gates in order and report each result",
+      "template": "Run the ClaimGuard local gates in this exact order, stopping at the first failure: 1) `uv run ruff check .`  2) `uv run ruff format --check .`  3) `uv run pyright`  4) `uv run pytest -m \"not llm and not e2e\" -q`. Report the outcome of each gate as PASS or FAIL with the first actionable error. If `uv` is not on PATH, say so and stop - do not substitute pip or python -m."
+    },
+    "spec-audit": {
+      "description": "Map ClaimGuard spec sections to implementing files and report drift, gaps, contradictions",
+      "template": "Audit ClaimGuard for docs-vs-code drift. Map every spec section in docs/05 sections 1, 3, 4, 5, 6, 7; docs/04 sections 4, 6, 9; docs/06 section 5; and docs/09 Part B to the file under claimguard/ that implements it, and mark each EXISTING, PARTIAL, or MISSING. Then list contradictions, specifically: the Severity and Tone enums in claimguard/contracts.py versus the SQL CHECK constraints in claimguard/db/migrations/versions/0001_initial_schema.sql; and any doc that still references the retired docs/07 or docs/08. Output one markdown table plus a 'top 5 risks' list. Do not edit any file."
+    },
+    "engine-smoke": {
+      "description": "Smoke-check the flagship fixture CLM-0042 end to end",
+      "template": "Smoke-check the ClaimGuard flagship claim CLM-0042. Expected outcome: the bundle parses into a CanonicalClaim whose dense payload exposes exactly three published defects - COV-001 (coverage periodEnd earlier than anchorDate), AUTH-004 (no authorization present), DUP-002 (two identical lines). First check whether claimguard/pipeline.py and claimguard/cli/main.py exist. If they do, run the validation and show the findings as JSON. If they do not exist yet, run `uv run pytest tests/unit/test_payload_contract.py tests/unit/test_fhir_parse.py -q` and report which of the three defects are already provable in code and which engine pieces are still missing. Do not implement anything."
+    }
+  }
+}
