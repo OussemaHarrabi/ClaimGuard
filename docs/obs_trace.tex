@@ -1,0 +1,517 @@
+% =============================================================================
+% ClaimGuard AI --- Technical Reviewer Observability & Traceability (obs_trace)
+%
+% PLANNING / DECISION DOCUMENT. Proposed scope for team review. This is NOT a
+% final architecture and NOT an implementation specification.
+%
+% Grounded in the repo as of 2026-09-28. No claim is made that telemetry
+% currently works: the OTel stack is provisioned but inert.
+% =============================================================================
+\documentclass[11pt]{article}
+
+\usepackage[T1]{fontenc}
+\usepackage[utf8]{inputenc}
+\usepackage[a4paper,margin=2.2cm]{geometry}
+\usepackage{booktabs}
+\usepackage{tabularx}
+\usepackage{array}
+\usepackage{ragged2e}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{0.55em}
+
+\newcolumntype{L}{>{\RaggedRight\arraybackslash}X}
+\newcommand{\code}[1]{\texttt{#1}}
+
+\title{\vspace{-1.6em}\textbf{ClaimGuard AI --- Technical Reviewer\\[0.25em]
+Observability \& Traceability}\vspace{0.4em}}
+\author{Planning / decision document (file \code{obs\_trace.tex})}
+\date{28 September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{center}
+\begin{tabular}{@{}ll@{}}
+\toprule
+\textbf{Document type} & Proposal for team review (not final architecture) \\
+\textbf{Decision status} & \textbf{PROPOSED} --- pending ADR and ownership sign-off \\
+\textbf{Scope} & Technical Reviewer observability + business traceability \\
+\textbf{Posture} & Review, not adjudicate. Synthetic-only data. \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+% -----------------------------------------------------------------------------
+\section{Purpose and decision status}
+
+This document proposes the scope for a \textbf{Technical Reviewer
+Observability \& Traceability} workspace for ClaimGuard AI: what we would
+build, what we would explicitly defer, and what we would never build.
+
+It is a \emph{filtering and decision} document over the proposed MoSCoW lists.
+It is \textbf{not} a final architecture, \textbf{not} an implementation
+specification, and \textbf{not} a commitment that telemetry already works ---
+it does not. Telemetry export is currently inert (see Section~5).
+
+Decision status: \textbf{PROPOSED}. Before any implementation starts, an ADR
+must record the scope, ownership, and the open decisions in Section~11.
+
+% -----------------------------------------------------------------------------
+\section{Technical Reviewer goal}
+
+The goal is a \textbf{single product workspace} inside ClaimGuard from which a
+Technical Reviewer can:
+
+\begin{itemize}
+\item see whether the service, its data sources, and its jobs are healthy and
+      \emph{fresh} (not just ``up''),
+\item investigate a claim flow end to end (which checks ran, what the engine
+      produced, what the audit ledger recorded),
+\item find and act on operational alerts, and
+\item inspect the business traceability trail without touching raw systems.
+\end{itemize}
+
+\textbf{Backend-only adapters.} The platform talks to
+Prometheus, OpenTelemetry (OTLP), Grafana, Loki, Tempo, and Alertmanager
+\emph{as applicable}, entirely from the backend. The browser never talks to
+those systems directly. Every observability capability is served to the
+frontend through ClaimGuard's own API, under the same privacy and audit
+posture as the rest of the product.
+
+% -----------------------------------------------------------------------------
+\section{System observability versus business traceability}
+
+These two concerns are deliberately separated. \textbf{Audit is not
+telemetry}, and conflating them is a design error we are avoiding:
+
+\begin{itemize}
+\item \textbf{System observability (telemetry):} metrics, logs, traces, and
+      alerts about how the \emph{system} behaves. Volatile, high-volume,
+      operational, and by default \emph{not} part of the business record.
+\item \textbf{Business traceability (audit):} the immutable, hash-chained
+      record of \emph{business and governance events} (who did what to which
+      claim, when, and why). Append-only, integrity-protected, and the
+      authoritative evidence trail.
+\end{itemize}
+
+One UI presents both, but each has its own source, permissions, and retention
+semantics (Table~\ref{tab:audit-vs-telemetry}).
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{} l L L @{}}
+\toprule
+\textbf{Aspect} & \textbf{System observability} & \textbf{Business traceability} \\
+\midrule
+Definition & Metrics, logs, traces, alerts & Immutable claim / governance events \\
+Source & OTel collectors, Prometheus, Loki, Tempo & \code{claimguard.audit\_events} (Postgres) \\
+Integrity & Best effort, no hash chain & SHA-256 hash chain, append-only \\
+Retention & Short window, configurable, no PII & Long-lived, per policy \\
+Permissions & Ops-oriented role & Stricter, role-locked \\
+Failure behaviour & Safe degradation (read-only) & Fails open on verification \\
+\bottomrule
+\end{tabularx}
+\caption{Audit is not telemetry: distinct source, permissions, and retention.}
+\label{tab:audit-vs-telemetry}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Principles}
+
+These principles gate every decision in Sections~6 and~7.
+
+\begin{enumerate}
+\item \textbf{Review, not adjudicate.} The workspace shows status, health,
+      and evidence. It never approves, denies, or advises on claims.
+\item \textbf{Privacy / synthetic-only.} All data in the workspace, its
+      fixtures, and its demos is synthetic. No real patient or claim data.
+\item \textbf{No PII/PHI in telemetry.} Logs, metrics, labels, traces, and
+      alerts must never carry patient identifiers or clinical content.
+\item \textbf{Low-cardinality metrics.} No per-claim or per-patient metric
+      labels; aggregate at safe levels only.
+\item \textbf{Server-side auth.} All observability and traceability routes are
+      mounted behind the platform's (future) auth layer. The browser is never
+      an authorized client of the telemetry systems.
+\item \textbf{Safe degradation.} If a telemetry source is down, the workspace
+      shows ``unknown / stale'' clearly; it must never fabricate status or
+      block the review flow. Audit verification failure fails open.
+\item \textbf{Tenant-ready correlation without deciding tenant enforcement
+      now.} Correlation metadata (tenant-aware IDs, correlation IDs) is
+      designed so a future \code{tenant\_id} can be attached and enforced
+      later. No tenant model and no tenant filtering are implemented in this
+      scope.
+\end{enumerate}
+
+% -----------------------------------------------------------------------------
+\section{Current repo baseline and impact / non-overlap}
+
+The workspace is \textbf{additive}. The table below names what exists today and
+what is absent; the document makes no claim that telemetry works.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{} L L L @{}}
+\toprule
+\textbf{Path} & \textbf{What exists today} & \textbf{Relevance to this scope} \\
+\midrule
+\code{claimguard/review/app.py} & FastAPI surface; \code{GET /v1/health}
+(schema readiness + loaded rule catalogue); eight \code{/v1} endpoints &
+Seed for the operational overview; the pattern to extend \\
+\code{claimguard/config.py} & \code{otel\_endpoint},
+\code{otel\_service\_name} settings & Endpoint configured, nothing exports \\
+\code{pyproject.toml} & OTel API / SDK / OTLP exporter / FastAPI \&
+SQLAlchemy instrumentation deps declared & Declared, \textbf{not initialized};
+export is inert \\
+\code{docker-compose.yml} &
+\code{otel-lgtm} (Grafana + Loki + Mimir + Tempo), OTLP/HTTP on :4318,
+Grafana UI on :3000; Temporal is an opt-in profile &
+Backend stores provisioned; no data flows to them yet \\
+\code{claimguard/audit/chain.py},
+\code{db/migrations/versions/0001\_initial\_schema.sql} &
+Append-only, hash-chained \code{audit\_events}; \code{trace\_id} column;
+indexes on \code{at}, \code{trace\_id}, \code{claim\_ref}; \code{REVOKE}
+UPDATE/DELETE/TRUNCATE &
+Business traceability exists; the telemetry correlation column is already
+reserved \\
+\code{claimguard/workflow/claim\_workflow.py} & Thin Temporal orchestration
+(opt-in profile) & Future span source for the claim flow \\
+\code{frontend/src/components/review-cockpit.tsx},
+\code{review-workspace-app.tsx} & The main review cockpit & No ops console,
+alerts, logs, or traces views exist \\
+\code{frontend/src/app/v1/[...path]/route.ts} & \code{/v1} proxy to the
+review API & Browser already only reaches platform APIs; pattern to extend \\
+\bottomrule
+\end{tabularx}
+\caption{Baseline: what exists, what is provisioned but inert, what is absent.}
+\label{tab:baseline}
+\end{table}
+
+\textbf{Absent today:} authentication / RBAC / tenancy; metrics export; log
+shipping; distributed traces; alerts and incidents; an ops console; SLOs;
+deployment / version markers; integration health checks.
+
+\textbf{Impact / non-overlap notes:}
+
+\begin{itemize}
+\item The canonical claim model (\code{claimguard/canonical.py}) is sealed and
+      is not touched. The audit schema and the hash-chain trigger are owned by
+      SeniorDev; this workspace only \emph{reads} audit data.
+\item No authentication is introduced here. Routes are defined so they can be
+      mounted behind SeniorDev's auth layer; enforcement is a Phase~4 item.
+\item Starting the OTel exporter (Phase~2) touches CI and runtime config owned
+      by SeniorDev; coordination is required, not assumed.
+\item Nothing in this scope changes the rule engine, the LLM, or the review
+      flow. B1/B2/B3 streams are involved only when their services need
+      instrumentation (LLM provider health, benchmark runs, assistant metrics).
+\end{itemize}
+
+% -----------------------------------------------------------------------------
+\section{Filtered scope --- OBSERVABILITY (MoSCoW)}
+
+\textbf{Must} (Table~\ref{tab:obs-must}) are the phase-1/2 backbone.
+\textbf{Should} and \textbf{Could} are gated. \textbf{Won't now} is explicit.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{} l L L @{}}
+\toprule
+\textbf{Priority} & \textbf{Scope item} & \textbf{Note / current reality} \\
+\midrule
+Must & Component health / readiness and source freshness &
+\code{/v1/health} exists (schema + rule catalogue); extend with explicit
+source-status and ``stale / unknown'' states \\
+Must & API error rate and latency &
+No metrics export today; add from Phase~2 \\
+Must & Resource health where available &
+DB connectivity via health; aggregate DB health only \\
+Must & Background job / queue health &
+Engine runs in-process; Temporal is an opt-in profile; no queue metrics today \\
+Must & DB health at safe aggregate level &
+Counts and latency at aggregate granularity only; no claim-level data \\
+Must & Centralized redacted searchable logs with correlation ID &
+Structured logs exist partially; Loki is provisioned but nothing ships to it \\
+Must & End-to-end traces for the main claim flow &
+OTel deps declared, endpoint configured, no spans emitted; \code{trace\_id}
+already exists in \code{audit\_events} \\
+Must & In-platform severity alerts &
+None today; surfaced in the workspace, not only in Grafana \\
+Must & Deployment / version markers &
+Engine rule version is already in health; add app/DB schema markers \\
+Must & Operational overview making scope and data-source failures visible &
+None today; the centrepiece of Phase~1 \\
+\midrule
+Should & Per-tenant views (deferred; telemetry contract tenant-ready) &
+No tenant model exists; add tenant-capable correlation metadata now, enforce
+later \\
+Should & External integration health &
+LLM provider used by the explanation layer; no health check today \\
+Should & Authentication / suspicious-activity visibility &
+No auth exists today; audited once auth lands \\
+Should & Basic SLOs &
+None; propose targets in Section~11 \\
+Should & Incident workflow (ack / assign / comment / resolve) with audit events &
+None today; every action must write an audit event \\
+\midrule
+Could & Business-flow gauges (non-PII) &
+Aggregate counts only, e.g.\ claims reviewed per period \\
+Could & Synthetic checks &
+Synthetic-only test fixtures already exist \\
+Could & AI / assistant health &
+Explanation-layer provider status; B1/B2 territory, instrumented when needed \\
+Could & Anomaly / deduplication &
+Later, only at safe aggregate level \\
+Could & Bounded deep-dive link or embedded panel, backend-mediated only &
+Never a direct browser path to Grafana \\
+\midrule
+Won't now & Continuous profiling / full APM &
+Out of scope \\
+Won't now & Self-healing &
+Out of scope \\
+Won't now & Per-claim metric labels &
+Cardinality and PII risk \\
+Won't now & External customer status page &
+Out of scope \\
+Won't now & Custom Grafana replacement &
+We consume, we do not rebuild \\
+Won't now & Broad arbitrary query language &
+Bounded endpoints only \\
+Won't now & Embedded Grafana as the primary experience &
+At most bounded, backend-mediated deep links (open decision D8) \\
+\bottomrule
+\end{tabularx}
+\caption{Observability scope (filtered MoSCoW).}
+\label{tab:obs-must}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Filtered scope --- TRACEABILITY (MoSCoW)}
+
+\textbf{Before/after content is structured metadata and a diff summary, never
+full sensitive payloads.} This rule applies to every row in this table.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{} l L L @{}}
+\toprule
+\textbf{Priority} & \textbf{Scope item} & \textbf{Note / current reality} \\
+\midrule
+Must & Immutable claim lifecycle audit events &
+Exists: \code{audit\_events} append-only, hash-chained \\
+Must & Authentication and role changes &
+No auth yet; role/actor changes must be audited when they land \\
+Must & Sensitive-data access events &
+Needs a sensitive-field allowlist (D6); record access, never content \\
+Must & Admin / config actions &
+Audit config changes (rules dir, packs, settings) \\
+Must & Technical Reviewer incident actions &
+ack / assign / comment / resolve must be audited \\
+Must & Correlation between audit and telemetry &
+\code{trace\_id} column already in \code{audit\_events}; correlation ID naming
+is D4 \\
+Must & Application cannot edit or delete audit records &
+Enforced today by trigger + \code{REVOKE}; must stay enforced \\
+\midrule
+Should & Document access events &
+Record which claim document was accessed and when \\
+Should & Decision trail &
+Decisions exist (\code{POST /v1/runs/\{id\}/decisions}); ensure they are
+audited with actor and reason \\
+Should & Denied access / failed operations &
+Audit denials once auth exists \\
+Should & External integration call metadata without payloads &
+Provider, duration, status code; no request/response bodies \\
+Should & Audit search / filter &
+Bounded, server-side filtered \\
+Should & Incident-to-transaction linkage &
+Incident ID on related transactions/audit events \\
+\midrule
+Could & Unified claim timeline (business events + selected technical
+references, not raw telemetry) &
+Reviewer-friendly single view \\
+Could & Field-level diff where safe &
+Metadata-level diff summary only \\
+Could & Compliance exports subject to policy &
+Gated by the same permission model \\
+\midrule
+Won't now & Full request / response payloads &
+Privacy boundary, never \\
+Won't now & Event-sourcing rewrite &
+The ledger stays as-is \\
+Won't now & Blockchain &
+Hash chain in Postgres is the integrity mechanism \\
+\bottomrule
+\end{tabularx}
+\caption{Traceability scope (filtered MoSCoW).}
+\label{tab:trace-must}
+\end{table}
+
+% -----------------------------------------------------------------------------
+\section{Proposed Technical Reviewer workspace --- information architecture}
+
+One workspace, seven views. Sensitive views and per-tenant filters are
+\emph{backend-enforced later}; the UI merely requests them.
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{} L L L @{}}
+\toprule
+\textbf{View} & \textbf{Purpose} & \textbf{Notes} \\
+\midrule
+Overview & Top-level status: active incidents, source freshness, scope state &
+Data-source failures must be visible here \\
+Service health & Per-component readiness: API, engine, DB, optional Temporal &
+Extends \code{GET /v1/health} \\
+Claim-flow investigation & One run: its trace, its checks, its audit events &
+Side-by-side telemetry + traceability \\
+Alerts / incidents & Severity, ack / assign / comment / resolve &
+Every action audited \\
+Audit / traceability & Searchable audit trail + chain verification status &
+Sensitive view; stricter role \\
+Integrations & External adapter status (LLM provider, future packs) &
+Should-level scope \\
+Configuration / access & Settings, roles, retention, correlation ID naming &
+Sensitive view; server-side enforcement later \\
+\bottomrule
+\end{tabularx}
+\caption{Workspace information architecture.}
+\label{tab:ia}
+\end{table}
+
+\textbf{UX focus:} the overview leads with \emph{top-level status} and
+\emph{active incidents}, then \emph{affected components and transactions},
+then a \emph{timeline} and a clear \emph{next action}. Every status shows its
+\textbf{freshness and source state} (``ok / degraded / stale / unknown'') so
+stale data is never mistaken for healthy data. Drill-down is the pattern;
+dashboard clutter is not.
+
+% -----------------------------------------------------------------------------
+\section{Backend / frontend data flow and bounded API recommendations}
+
+\textbf{Data flow:}
+\begin{center}
+\small
+\code{frontend} $\to$ \code{/v1/technical-reviewer/*} (platform API) $\to$
+backend adapters $\to$ Postgres / OTel collector (Prometheus, Loki, Tempo,
+Alertmanager as applicable)
+\end{center}
+The frontend calls \emph{only} platform APIs --- never Grafana, Prometheus,
+Loki, Tempo, or Alertmanager directly. Grafana remains a backend-consumed
+store, not a browser-facing surface.
+
+\textbf{Bounded API names (names only, no implementation):}
+\begin{itemize}
+\item \code{/v1/technical-reviewer/overview} --- aggregate status, active
+      incidents, source freshness
+\item \code{/v1/technical-reviewer/health} --- component readiness
+\item \code{/v1/technical-reviewer/metrics} --- bounded time-series query
+\item \code{/v1/technical-reviewer/logs} --- redacted, searchable logs
+\item \code{/v1/technical-reviewer/traces} --- trace search and span view
+\item \code{/v1/technical-reviewer/transactions} --- claim-run / transaction
+      index linking audit and telemetry
+\item \code{/v1/technical-reviewer/alerts} --- current alerts and incidents
+\item \code{/v1/technical-reviewer/audit} --- audit trail search and chain
+      verification
+\end{itemize}
+
+\textbf{Contract constraints on every endpoint:} explicit pagination, bounded
+time windows, query limits, and server-side redaction before anything reaches
+the frontend. No endpoint returns raw payloads.
+
+% -----------------------------------------------------------------------------
+\section{Phased implementation plan (conflict-avoiding)}
+
+\begin{table}[h]
+\centering
+\small
+\begin{tabularx}{\textwidth}{@{} l L L @{}}
+\toprule
+\textbf{Phase} & \textbf{Scope} & \textbf{Coordination} \\
+\midrule
+0 & Contract and ADR: scope, ownership, endpoint contracts, correlation ID
+naming, sensitive-field allowlist &
+HeadOfProject (ADR / scope); SeniorDev (auth, audit, API, CI) \\
+1 & Read-only overview + health + source status; no telemetry writes &
+SeniorDev (extend \code{/v1/health}, API surface) \\
+2 & Metrics / logs / traces / claim-flow investigation; start OTel exporter,
+ship structured logs with correlation ID &
+SeniorDev (runtime config, CI, secrets); B1/B2/B3 only if their services need
+instrumentation \\
+3 & Alerts / incident workflow (ack / assign / comment / resolve) with audit
+events &
+SeniorDev (audit schema additions, migrations) \\
+4 & Tenant enforcement (RBAC filters) and deeper integration health &
+SeniorDev (auth, RBAC); only after a tenant model exists \\
+\bottomrule
+\end{tabularx}
+\caption{Phased plan and ownership.}
+\label{tab:phases}
+\end{table}
+
+Phase~0 explicitly records what this document does \emph{not} decide (see
+Section~11). Nothing in Phase~1 touches the audit chain, the canonical model,
+or the engine.
+
+% -----------------------------------------------------------------------------
+\section{Acceptance criteria and open decisions}
+
+\textbf{Acceptance criteria (when the scope is approved and built):}
+\begin{enumerate}
+\item \textbf{AC1 --- Honest status.} The overview renders real source
+      freshness; a stopped or silent source is shown as ``stale / unknown'',
+      never as healthy.
+\item \textbf{AC2 --- Redaction.} Logs and traces served to the workspace pass
+      the sensitive-field allowlist; nothing unredacted leaves the backend.
+\item \textbf{AC3 --- Integrity.} Traceability views show only hash-chained
+      events; a verification failure is surfaced as an error (fails open).
+\item \textbf{AC4 --- Audit coverage.} Every incident action
+      (ack / assign / comment / resolve) produces an audit event.
+\item \textbf{AC5 --- No direct access.} Browser code contains no references
+      to Grafana / Prometheus / Loki / Tempo / Alertmanager endpoints.
+\item \textbf{AC6 --- No PII/PHI.} No metric label, log field, trace attribute,
+      or alert carries PII/PHI; enforced in review.
+\item \textbf{AC7 --- Auth-ready.} Routes are defined to be mounted behind
+      auth; the permission matrix is applied server-side once auth exists.
+\end{enumerate}
+
+\textbf{Open decisions (recorded in the Phase~0 ADR):}
+\begin{enumerate}
+\item \textbf{D1 --- Role permission matrix.} Who may see audit versus
+      telemetry versus incidents.
+\item \textbf{D2 --- Current vs.\ future tenant scope.} Tenant-ready metadata
+      now; enforcement only with the tenant model.
+\item \textbf{D3 --- Telemetry retention / location.} LGTM local stack vs.\
+      managed; retention window per signal.
+\item \textbf{D4 --- Correlation ID naming.} Reuse \code{audit\_events.trace\_id}
+      convention; exact attribute name and format.
+\item \textbf{D5 --- Alert source / ack semantics.} Which components may alert;
+      ack ownership; re-alert behaviour.
+\item \textbf{D6 --- Sensitive-field allowlist.} Which canonical fields are
+      never logged or traced; redaction rules.
+\item \textbf{D7 --- SLO targets.} API latency / error budget; freshness
+      thresholds for ``stale``.
+\item \textbf{D8 --- Grafana deep links.} Are bounded, backend-mediated deep
+      links ever permitted? Default is no.
+\item \textbf{D9 --- Legal / privacy review.} Retention, storage location, and
+      cross-region implications of logs and traces.
+\end{enumerate}
+
+% -----------------------------------------------------------------------------
+\section{Recommendation}
+
+\textbf{Proceed with an additive, read-only Technical Reviewer workspace
+first}, starting at Phase~0 (ADR and contracts) then Phase~1 (overview +
+health + source status). Explicitly \textbf{not in this scope}: the tenant
+model and tenant enforcement, direct Grafana embedding (or Grafana as the
+primary experience), self-healing, and broad payload access. Telemetry export
+starts only in Phase~2, coordinated with SeniorDev, and no document in this
+series should claim it works before then.
+
+\end{document}
