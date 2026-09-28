@@ -288,6 +288,9 @@ but this is not evidence of real-claim accuracy or held-out performance.
 12. Docker Compose configuration was validated, but a complete production-like multi-container load
     and failure test remains future work.
 
+> The tenancy / RBAC / observability items above (1–3, 10, 12) describe the state at release. The
+> target plan for them is `§13` below; it is a guide, not a claim that they are already shipped.
+
 ## 11. Remaining work by priority and ownership
 
 ### P0 — project leads / senior implementation
@@ -322,6 +325,9 @@ but this is not evidence of real-claim accuracy or held-out performance.
 - localization and accessibility review with real users;
 - approved secret management and key rotation.
 
+> The auth/tenancy P0 item and the observability P2 items above are expanded into the phased
+> P0–P4 plan in `§13` (a target guide, not an as-built description).
+
 ## 12. Operational handoff checklist
 
 Before changing the engine, read `docs/10-ADR-Starter-Pack-Authority.md`. Before changing the UI or
@@ -340,3 +346,225 @@ For every release:
 
 The detailed repository map and the commands are in `docs/11-Architecture-and-Data-Flow.md` and
 `docs/13-Technical-Report.md`.
+
+For operations / telemetry additions beyond this release checklist, follow the target guide in
+`§13` (Technical Manager / Reviewer platform) and keep its claim-blind and additive-migration
+constraints.
+
+## 13. Technical Manager / Reviewer platform implementation guide
+
+> **Status:** This section is a **target implementation guide** for the evolving clinic/tenant
+> platform. It describes what should be built and how it should behave; it is **not** a claim that
+> every item is already shipped. "Current" is only used where a state exists today; everything else
+> is target. It preserves the product posture: **review, do not adjudicate**, synthetic-only data,
+> and no claim content in operational surfaces.
+
+### 13.1 Purpose and target outcome
+
+- The Technical Manager / Technical Reviewer operates the platform **inside the product UI**.
+- They see technical state, investigate claim-processing failures, and act on incidents **without
+  opening Grafana / Prometheus / Loki / Tempo**.
+- They are **claim-blind**: no claim content, patient/member data, raw findings, documents, or
+  reviewer decisions.
+- Observability and business traceability are **different sources**, shown together only when useful
+  (e.g., a run/correlation timeline beside aggregate job status).
+
+### 13.2 Tenant and role model
+
+| Element | Target rule |
+|---|---|
+| Tenant | One clinic = one tenant (`tenant_id`). |
+| Access | Global user accounts; access only through **active** `clinic_memberships(tenant_id, user_id, role)`. |
+| Identity | Active tenant and user come from the **signed HttpOnly session**; the role is resolved **server-side on every request**. |
+| Technical permissions | Technical Manager / Reviewer hold only `READ_OPERATIONS` and `MANAGE_OPERATIONS`; claim-content endpoints must return **403**. |
+| Business roles | Clinic admin / reviewer / lead permissions remain separate and are **not expanded here**; the technical role never inherits them. |
+| Tenant scope | **Never** accepted from a user-provided query parameter. Future RLS / equivalent isolation is a **production gate (P4)**. |
+
+### 13.3 User experience / screens
+
+| Screen | Purpose and content |
+|---|---|
+| Operations overview | API / database / schema / rules readiness, overall status, source freshness, active alerts. First thing a Technical Manager sees. |
+| Intake Jobs | Tenant-scoped **aggregate** job counts / status / failures; **never source content**. |
+| Model & Rule Versions | Active rule, model and provider versions in one place. |
+| Metrics | Error rate, throughput, p95/p99 latency, CPU / memory / disk aggregates, database and queue health. |
+| Logs | **Truly sanitized** runtime logs. Distinct from the existing intake-status / redacted-log page until that page is replaced or extended. |
+| Traces / transaction investigation | Run / correlation timeline from submission through processing, rules, explanation, decision and audit — **without claim payload**. |
+| Alerts / incidents | Severity, state, first/last seen, component, safe next action; acknowledge, assign, comment, resolve. |
+| Audit integrity | Chain status and safe aggregate information only; no audit or claim contents for the claim-blind role. |
+| Configuration | Only safe tenant-scoped operational toggles (e.g., intake enablement), every change audited. |
+
+Shared UX conventions:
+
+- **Overview-first, drill-down:** every screen opens with a summary and only expands into detail on
+  interaction.
+- **Freshness badges:** `healthy` / `degraded` / `stale` / `unknown` / `unavailable` / `loading` /
+  `empty` / `permission denied` — explicit states, never silent blanks.
+- **No clutter:** bounded cards, paginated tables, bounded time windows; no raw telemetry surfaces
+  in the reviewer browser.
+
+### 13.4 Technology stack and exact purpose
+
+| Component | Exact purpose |
+|---|---|
+| PostgreSQL | Tenant-owned application data, operations state, audit ledger. **Never** used as a raw telemetry query surface. |
+| Alembic | **Additive** schema migrations only. |
+| FastAPI | Server-side operations API and the authorization boundary. |
+| Pydantic | Response models and field allow-lists. |
+| SQLAlchemy | Safe aggregate DB health queries and persistence. |
+| Next.js / React | Technical Manager UI. |
+| Next.js server proxy | Browser-to-platform path; **no telemetry credentials or URLs** reach the browser. |
+| Signed HttpOnly session + backend membership resolution | Identity and tenant/role enforcement on every request. |
+| OpenTelemetry Python SDK | Instrumentation for HTTP, DB, jobs and external calls; exporter optional. |
+| OTLP / OTel Collector and existing `otel-lgtm` | Telemetry transport and local development backend. |
+| Prometheus-compatible Mimir (or Prometheus) | Metrics storage and query. |
+| Loki | Sanitized structured log storage and query. |
+| Tempo | Distributed trace storage and query. |
+| Grafana | Backend / operator source only — **not** the reviewer browser UI. |
+| Alertmanager | Optional, later: external notification routing. In-platform alerts start in backend / Postgres. |
+| structlog / python-json-logger | Allow-listed structured logs. |
+| Tenacity | Bounded retries / circuit / failure handling where appropriate. |
+| Docker Compose | Local reproducible telemetry stack. |
+| pytest / ruff / pyright / CI | Proof and merge gates. |
+
+### 13.5 End-to-end architecture and workflows
+
+```text
+Browser (Technical Manager UI)
+   │  HttpOnly session — no telemetry credentials
+   ▼
+Next.js server proxy
+   │  /v1/operations/* — server-side only
+   ▼
+FastAPI operations API  ── session → membership → role → permissions (403 for claim content)
+   │
+   ▼
+operations adapters (health · metrics · logs · traces · jobs · integrations · audit)
+   │
+   ├──▶ PostgreSQL           application data, operations state, alerts, audit ledger
+   ├──▶ Mimir / Prometheus   metrics
+   ├──▶ Loki                 sanitized logs
+   └──▶ Tempo                traces
+          ▲
+          │ OTLP (server-side export, optional)
+   OTel Collector / otel-lgtm
+```
+
+Workflows:
+
+1. **Normal health check.** Browser → proxy → operations API → health adapter → DB connectivity,
+   schema version vs applied migrations, rules catalog load, intake state → overview cards with
+   freshness badges. No claim content is involved.
+2. **Source failure / stale data.** An intake job fails or a source goes stale → adapter marks the
+   source `degraded` / `stale` → overview badge + alert row → Technical Manager sees a **safe next
+   action** (e.g., restart intake; credentials are referenced, never displayed).
+3. **Alert → investigation → audited action.** Alert created in backend / Postgres →
+   acknowledged / assigned → Technical Manager inspects sanitized logs and the correlated
+   run/correlation timeline (no payload) → acts (e.g., toggles intake) → action written to the
+   append-only audit.
+4. **Claim transaction investigation by safe reference.** A processing failure is reported with a
+   run / correlation reference → Technical Manager pulls the timeline from the trace store plus
+   aggregate job status — never the claim payload, which stays behind the claim-blind split.
+5. **Configuration action and rollback verification.** Toggle intake → audit event → re-check
+   overview health / staleness → roll back if needed, also audited.
+
+### 13.6 Telemetry and audit data contracts
+
+Allowed telemetry fields: service, route template, status class, duration, queue/job counts,
+version, bounded error category, opaque correlation ID where needed.
+
+Forbidden in telemetry: request/response bodies, raw URLs / query strings, claim / run / patient /
+member / user identifiers **in metric labels**, emails, cookies, auth headers, filenames, SQL
+parameters, free-text exceptions, prompts, clinical content.
+
+Metrics label allow-list: `service`, `component`, `route_template`, `method`, `status_class`,
+`queue_job_category`, `integration_category`.
+
+- Correlation IDs may appear in logs and traces but **never** as metric labels.
+- Telemetry keeps **short** retention; audit keeps **long / policy** retention. Separate storage and
+  separate permissions.
+
+### 13.7 Backend / API implementation
+
+Target module boundaries (not yet existing):
+
+- `claimguard/ops/` adapters for health, metrics, logs, traces, jobs, integrations and audit.
+- Existing/current operations routes stay versioned under `/v1/operations/*` where applicable.
+  Add **bounded endpoints** for metrics / logs / traces / alerts — never expose telemetry stores
+  directly.
+- Each adapter gets a timeout, circuit / freshness state, caching where safe, pagination, bounded
+  time windows, redaction, and structured errors.
+- Tenant / user / role are derived from the **backend session**; never from body or query.
+- Alert state lives in backend / Postgres initially; Alertmanager is an optional later addition.
+- Technical Manager actions are recorded in the **existing append-only audit path**. Only additive
+  migrations — never a change to hash serialization or the frozen claim contracts.
+
+### 13.8 Implementation phases and dependencies
+
+| Phase | Depends on | Scope | Success condition |
+|---|---|---|---|
+| **P0 baseline / safety** | Agreed scope + reviewed clinic workspace | Synchronize reviewed clinic workspace; define data classification; verify 403 claim isolation; leak-canary tests | Technical role proves 403 on claim-content endpoints; canary string absent; gates green |
+| **P1 instrumentation** | P0 | Optional OTel; initial allow-listed metrics / logs / traces; **collector outage cannot block claims** | Synthetic traffic produces safe metric/log/trace; claim flow unaffected when collector is down |
+| **P2 platform presentation** | P1 | Operations overview, metrics, intake, versions, sanitized logs, traces, audit integrity screens | Technical Manager investigates without telemetry tools; every UI state is explicit |
+| **P3 alerts / incident workflow** | P2 | Alerts in backend/Postgres; severity/state; acknowledge/assign/comment/resolve; runbooks | Alert → investigation → audited action works end-to-end; no claim data in alerts |
+| **P4 production hardening** | P3 | RLS / equivalent isolation; secure Grafana; secret rotation; retention / residency; backup / recovery; SLOs; synthetic checks | All production gates pass including UAE / data-residency legal review |
+
+### 13.9 Alerts and runbooks
+
+Candidate alert conditions: health degraded, API / web unavailable, elevated 5xx / latency,
+database unavailable, migration mismatch, intake-reject abnormality, explanation-fallback surge,
+audit-integrity false.
+
+- **No claim data in alerts** — alert fields are component, severity, state, first/last seen,
+  category and safe next action.
+- **Baseline before thresholds:** collect days of allow-listed synthetic/operational data before
+  tuning any threshold.
+- **Runbook fields:** title, component, severity, symptoms, safe next actions, escalation path,
+  rollback steps, verification steps, owner.
+- **Safe intake toggle semantics:** disabling intake stops new ingestion (a safety action); it never
+  mutates or derives claims, and every state change is audited.
+
+### 13.10 Security / privacy and non-overlap rules
+
+- Synthetic-only data, always; no claim leakage into operational surfaces.
+- The technical role remains **claim-blind**.
+- No direct browser access to telemetry datasources, no Grafana iframe, no admin session.
+- **Never change** the 17-key claim envelope, the 15-key rule result, the deterministic engine, the
+  audit hash serialization, the decision state machine, or the tenant/role model without owner
+  agreement.
+- **Additive migrations only.**
+- UAE / data-residency and production-telemetry legal review is a hard gate before production (P4).
+
+### 13.11 Verification / definition of done
+
+Concrete checks that must pass before this guide is considered implemented:
+
+- Actual synthetic traffic produces **safe** metrics, logs and traces.
+- A technical user gets operations access **and 403** for claim content.
+- A canary patient string is **absent** from telemetry.
+- Collector / tool outage does **not** stop claims (fail-open telemetry, fail-closed safety).
+- A tenant **cannot cross-read** another tenant's operations data.
+- Alerts and configuration changes are **audited**.
+- The UI has explicit `stale` / `unavailable` / `permission denied` states.
+- Tests, lint, typecheck, migrations and Compose / runbook evidence all pass the release gates.
+
+### 13.12 Final worklist
+
+Practical order, with dependencies. **Start with P0** — do not try to build the whole observability
+surface at once.
+
+1. **Baseline agreement** — scope, synthetic-only commitment, claim-blind split, data
+   classification. (feeds P0)
+2. **P0 baseline / safety** — reviewed clinic workspace; `clinic_memberships` + role resolution;
+   403 claim-isolation tests; leak-canary tests. (feeds P1)
+3. **P1 instrumentation** — optional OTel; allow-listed metrics / logs / traces; collector-outage
+   isolation tests. (feeds P2)
+4. **P2 platform presentation** — operations overview and drill-down screens: metrics, intake,
+   versions, sanitized logs, traces, audit integrity. (feeds P3)
+5. **P3 alerts / incidents** — backend/Postgres alerts, runbooks, acknowledge/assign/comment/resolve,
+   audited actions. (feeds P4)
+6. **P4 production hardening** — RLS / equivalent isolation, secure Grafana, secret rotation,
+   retention / residency, backup / recovery, SLOs, synthetic checks, legal review.
+
+This guide is deliberately comprehensive so every future change has a target; implementation should
+proceed phase by phase, starting with P0.
