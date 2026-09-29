@@ -21,12 +21,13 @@ import {
   type OpsMetricSeries,
   type OpsTracesResponse,
   type OpsAuditResponse,
+  type OpsVersions,
 } from "@/lib/ops-api";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const STAGGER_MS = 35;
 const MAX_STAGGER_NODES = 8;
-const HASH_LINK_IDS = ["h0", "h1", "h2", "h3", "h4", "h5", "h6", "h7", "h8", "h9", "h10", "h11"];
+const MAX_AUDIT_BLOCKS = 14;
 
 type Loadable<T> =
   | { state: "loading" }
@@ -134,22 +135,31 @@ const HIDDEN_METRIC_LABELS = new Set([
   "service_name",
 ]);
 
-const Labels = ({ labels }: { labels: Readonly<Record<string, string>> }) => {
+function MetricLabels({ labels }: { labels: Readonly<Record<string, string>> }) {
   const entries = Object.entries(labels).filter(([k]) => !HIDDEN_METRIC_LABELS.has(k));
-  if (entries.length === 0) return <span className="ops-quiet">none</span>;
+  if (entries.length === 0) {
+    return <span className="ops-signal-series-label ops-signal-series-label-none">none</span>;
+  }
   return (
-    <div className="ops-labels">
+    <div className="ops-signal-series-labels">
       {entries.map(([k, v]) => {
         const text = `${k}=${v}`;
         return (
-          <span key={k} className="ops-label" title={text}>
+          <span key={k} className="ops-signal-series-label" title={text}>
             {text}
           </span>
         );
       })}
     </div>
   );
-};
+}
+
+function seriesKey(s: OpsMetricSeries): string {
+  const visible = Object.entries(s.labels)
+    .filter(([k]) => !HIDDEN_METRIC_LABELS.has(k))
+    .sort(([a], [b]) => a.localeCompare(b));
+  return `${s.name}||${JSON.stringify(visible)}`;
+}
 
 function WindowSwitch({
   value,
@@ -251,6 +261,25 @@ function VerdictGauge({ status }: { status: string }) {
   );
 }
 
+function HeroVerdict({ status, checkedAt }: { status: string; checkedAt: string | null }) {
+  const reduced = usePrefersReducedMotion();
+  const ok = status === "ok";
+  const degraded = status === "degraded";
+  const toneClass = ok ? "ops-hero-ok" : degraded ? "ops-hero-degraded" : "ops-hero-unknown";
+  const label = `Platform ${status}`;
+  return (
+    <div className={`ops-hero-verdict ${toneClass}`} aria-live="polite" aria-atomic="true">
+      <svg viewBox="0 0 200 200" aria-hidden="true" className="ops-hero-dial">
+        <circle className="ops-dial-track" cx="100" cy="100" r="80" />
+        <circle className={`ops-dial-arc ${reduced ? "" : "ops-dial-arc-sweep"}`} cx="100" cy="100" r="80" />
+        <circle className="ops-dial-knob" cx="100" cy="20" r="6" />
+      </svg>
+      <span className="ops-hero-state">{label}</span>
+      <span className="ops-hero-checked">Checked {fmtRel(checkedAt)}</span>
+    </div>
+  );
+}
+
 type SignalMapNode = {
   name: string;
   state: string;
@@ -259,12 +288,33 @@ type SignalMapNode = {
   kind: "platform" | "component" | "source";
 };
 
+function componentStat(name: string, versions: OpsVersions | null): string {
+  if (!versions) return "";
+  if (name === "rules") return versions.engine_rule_version;
+  if (name === "api") return versions.service_name;
+  if (name === "database") return versions.schema_revision ?? "";
+  return "";
+}
+
+function freshnessWidth(iso: string): number {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return 50;
+  const s = Math.floor((Date.now() - d.getTime()) / 1000);
+  if (s < 60) return 100;
+  if (s < 600) return clamp(Math.round(100 - ((s - 60) / 540) * 85), 15, 100);
+  return 15;
+}
+
 function SignalMap({
   components,
   sources,
+  versions,
+  pulseKey,
 }: {
   components: readonly { name: string; state: string; detail: string | null }[];
   sources: readonly { name: string; state: string; detail: string | null; last_data_at: string | null }[];
+  versions: OpsVersions | null;
+  pulseKey: number;
 }) {
   const reduced = usePrefersReducedMotion();
 
@@ -279,36 +329,42 @@ function SignalMap({
       </div>
 
       <div className="ops-signal-map-content">
-        <section className="ops-signal-map-region" aria-label="Components">
+        <section className="ops-spine-section" aria-label="Components">
           <h2 className="ops-panel-title">Components</h2>
-          <div className="ops-signal-map-nodes">
+          <ul className="ops-spine-list">
             {components.map((c, i) => (
               <SignalNode
                 key={c.name}
                 node={{ ...c, kind: "component" }}
                 index={i}
-                edgeState={c.state}
+                versions={versions}
+                pulseKey={pulseKey}
                 reduced={reduced}
               />
             ))}
-            {components.length === 0 && <p className="ops-empty">No components reported.</p>}
-          </div>
+            {components.length === 0 && (
+              <li className="ops-empty">No components reported.</li>
+            )}
+          </ul>
         </section>
 
-        <section className="ops-signal-map-region" aria-label="Sources">
+        <section className="ops-spine-section" aria-label="Sources">
           <h2 className="ops-panel-title">Source freshness</h2>
-          <div className="ops-signal-map-nodes">
+          <ul className="ops-spine-list">
             {sources.map((s, i) => (
               <SignalNode
                 key={s.name}
                 node={{ ...s, kind: "source" }}
                 index={i + components.length}
-                edgeState={s.state}
+                versions={versions}
+                pulseKey={pulseKey}
                 reduced={reduced}
               />
             ))}
-            {sources.length === 0 && <p className="ops-empty">No sources reported.</p>}
-          </div>
+            {sources.length === 0 && (
+              <li className="ops-empty">No sources reported.</li>
+            )}
+          </ul>
         </section>
       </div>
     </div>
@@ -318,76 +374,136 @@ function SignalMap({
 function SignalNode({
   node,
   index,
-  edgeState,
+  versions,
+  pulseKey,
   reduced,
 }: {
   node: SignalMapNode;
   index: number;
-  edgeState: string;
+  versions: OpsVersions | null;
+  pulseKey: number;
   reduced: boolean;
 }) {
   const t = tone(node.state);
-  const stale = edgeState === "stale";
-  const unavailable = edgeState === "unavailable";
-  const style = {
-    transitionDelay: reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`,
-  };
+  const stale = node.state === "stale";
+  const unavailable = node.state === "unavailable";
+  const micro =
+    node.kind === "source"
+      ? node.last_data_at
+        ? fmtRel(node.last_data_at)
+        : ""
+      : componentStat(node.name, versions);
+  const freshness =
+    node.kind === "source" && node.last_data_at
+      ? freshnessWidth(node.last_data_at)
+      : 100;
+  const delay = reduced
+    ? "0ms"
+    : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
 
   return (
-    <div
-      className={`ops-signal-node ops-signal-node-${t} ${stale ? "ops-signal-node-stale" : ""} ${unavailable ? "ops-signal-node-unavailable" : ""} ${reduced ? "" : "ops-signal-node-enter"}`}
-      style={style}
+    <li
+      className={`ops-spine-row ops-spine-row-${t} ${stale ? "ops-spine-row-stale" : ""} ${unavailable ? "ops-spine-row-unavailable" : ""} ${reduced ? "" : "ops-spine-row-enter"}`}
+      style={
+        {
+          "--row-delay": delay,
+          "--freshness": `${freshness}%`,
+        } as React.CSSProperties
+      }
     >
-      <div className="ops-signal-node-top">
-        <span className="ops-signal-node-name">{node.name}</span>
-        <StateBadge state={node.state} />
+      <div className="ops-spine-row-main">
+        <span className="ops-spine-led" key={pulseKey} aria-hidden="true">
+          <span
+            className={`ops-spine-led-dot ${reduced ? "" : "ops-spine-led-pulse"}`}
+          />
+        </span>
+        <span className="ops-spine-name">{node.name}</span>
+        {micro && (
+          <>
+            <span className="ops-spine-separator" aria-hidden="true">
+              ·
+            </span>
+            <span className="ops-spine-stat">{micro}</span>
+          </>
+        )}
+        <span className="ops-spine-state">
+          <StateBadge state={node.state} />
+        </span>
       </div>
-      <p className="ops-signal-node-detail">{node.detail ?? "No detail provided."}</p>
-      {node.kind === "source" && (
-        <div className="ops-signal-node-freshness">
-          <Clock size={12} aria-hidden="true" />
-          <span>Last data: {fmtRel(node.last_data_at ?? null)} ({fmtTime(node.last_data_at ?? null)})</span>
-        </div>
-      )}
-    </div>
+      <div className="ops-spine-bar" aria-hidden="true">
+        <div className="ops-spine-bar-fill" />
+      </div>
+    </li>
   );
 }
 
 function HashChain({ intact, eventCount, checkedAt }: { intact: boolean; eventCount: number; checkedAt: string }) {
   const reduced = usePrefersReducedMotion();
-  const displayed = eventCount > 0 ? clamp(Math.min(eventCount, 12), 1, 12) : 0;
+  const displayed = eventCount > 0 ? clamp(Math.min(eventCount, MAX_AUDIT_BLOCKS), 1, MAX_AUDIT_BLOCKS) : 0;
   const remainder = Math.max(0, eventCount - displayed);
+  const breakIndex = displayed > 0 ? Math.floor(displayed / 2) : 0;
+
+  const blocks = Array.from({ length: displayed }, (_, i) => ({
+    id: `audit-block-${i}`,
+    fragment: `b${i.toString(16).padStart(2, "0")}`,
+    fallen: !intact && i >= breakIndex,
+  }));
+
   return (
-    <section className={`ops-hash-chain ${intact ? "ops-hash-chain-intact" : "ops-hash-chain-broken"}`} aria-label="Audit integrity">
-      <div className="ops-hash-chain-header">
-        <h2 className="ops-panel-title">Audit integrity</h2>
-        <span className="ops-hash-chain-count">{eventCount.toLocaleString()} events</span>
+    <section
+      className={`ops-audit-surface ${intact ? "ops-audit-intact" : "ops-audit-broken"}`}
+      aria-label="Audit integrity"
+    >
+      <div className="ops-audit-hero">
+        <div className="ops-audit-count">
+          <span className="ops-audit-count-value">{eventCount.toLocaleString()}</span>
+          <span className="ops-audit-count-label">events</span>
+        </div>
+        <time className="ops-audit-checked" dateTime={checkedAt}>
+          {fmtRel(checkedAt)}
+        </time>
       </div>
-      <div className="ops-hash-chain-track" aria-hidden="true">
-        <div className={`ops-hash-chain-line ${intact ? "" : "ops-hash-chain-line-broken"}`} />
-        <div className={`ops-hash-links ${reduced ? "" : "ops-hash-links-animate"}`}>
-          {HASH_LINK_IDS.slice(0, displayed).map((id, i) => (
+
+      <div className="ops-audit-chain" aria-hidden="true">
+        <div className={`ops-audit-chain-line ${intact ? "" : "ops-audit-chain-line-broken"}`} />
+        {!reduced && intact && <div className="ops-audit-chain-sweep" />}
+        <div className="ops-audit-blocks">
+          {blocks.map((block, i) => (
             <div
-              key={id}
-              className={`ops-hash-link ${i >= Math.floor(displayed / 2) && !intact ? "ops-hash-link-fallen" : ""}`}
-              style={{
-                transitionDelay: reduced ? "0ms" : `${i * 40}ms`,
-              }}
+              key={block.id}
+              className={`ops-audit-block ${block.fallen ? "ops-audit-block-fallen" : ""} ${reduced ? "" : "ops-audit-block-enter"}`}
+              style={{ "--block-index": i } as React.CSSProperties}
             >
-              <span className="ops-hash-link-face" />
+              {i > 0 && (
+                <span className="ops-audit-link-mark" aria-hidden="true">
+                  <svg viewBox="0 0 16 6" aria-hidden="true">
+                    <line
+                      x1="0"
+                      y1="3"
+                      x2="16"
+                      y2="3"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                    />
+                  </svg>
+                </span>
+              )}
+              <span className="ops-audit-fragment">{block.fragment}</span>
             </div>
           ))}
-          {remainder > 0 && <span className="ops-hash-more">+{remainder.toLocaleString()} more</span>}
+          {remainder > 0 && (
+            <span className="ops-audit-more">+{remainder.toLocaleString()}</span>
+          )}
         </div>
       </div>
-      <div className="ops-hash-chain-body">
-        <h3>{intact ? "Audit chain intact" : "Audit chain integrity failure"}</h3>
-        <p>
-          {intact
-            ? "Hash-chained audit ledger verified. Each block links to the previous."
-            : "Audit ledger integrity check failed. Escalate immediately."}
-        </p>
-        <span className="ops-checked-at">Checked {fmtRel(checkedAt)}</span>
+
+      <div className="ops-audit-verdict">
+        <h2>{intact ? "Audit chain intact" : "Audit chain integrity failure"}</h2>
+        {!intact && (
+          <span>Audit ledger integrity check failed. Escalate immediately.</span>
+        )}
       </div>
     </section>
   );
@@ -470,10 +586,10 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
               <LayoutDashboard size={22} aria-hidden="true" />
               <div>
                 <h1>{sectionMeta.title}</h1>
-                <p className="ops-subtitle">{sectionMeta.subtitle}</p>
+                <span className="ops-subtitle">{sectionMeta.subtitle}</span>
               </div>
             </div>
-            <VerdictGauge status={status} />
+            {!showOverview && <VerdictGauge status={status} />}
           </div>
           <div className="ops-header-meta">
             <span className="ops-checked-at">
@@ -522,17 +638,27 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
               </>
             )}
             {showMetrics && (
-              <section className="ops-panel" aria-label="Metrics">
-                <div className="ops-panel-header">
-                  <h2 className="ops-panel-title">Metrics</h2>
+              <section className="ops-signal-wall" aria-label="Metrics">
+                <div className="ops-signal-wall-controls">
+                  <span className="ops-signal-wall-updated">—</span>
                   <WindowSwitch value={window} onChange={setWindow} />
                 </div>
-                <Skeleton />
+                <MetricsSkeleton />
               </section>
             )}
             {showTraces && (
-              <section className="ops-panel" aria-label="Traces">
-                <h2 className="ops-panel-title">Traces</h2>
+              <section className="ops-traces-surface" aria-label="Traces">
+                <div className="ops-traces-strip">
+                  <span className="ops-traces-strip-title">Traces</span>
+                  <div className="ops-traces-figures">
+                    <span className="ops-traces-figure">
+                      total <strong>—</strong>
+                    </span>
+                    <span className="ops-traces-figure">
+                      slowest <strong>—</strong>
+                    </span>
+                  </div>
+                </div>
                 <Skeleton />
               </section>
             )}
@@ -549,10 +675,17 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
           <div className="ops-layout">
             {showOverview && (
               <>
-                <SignalMap
-                  components={snap.data.overview.components}
-                  sources={snap.data.overview.sources}
-                />
+                <div className="ops-overview-grid">
+                  <div className="ops-overview-hero">
+                    <HeroVerdict status={status} checkedAt={checkedAt} />
+                  </div>
+                  <SignalMap
+                    components={snap.data.overview.components}
+                    sources={snap.data.overview.sources}
+                    versions={snap.data.overview.versions}
+                    pulseKey={pulseKey}
+                  />
+                </div>
 
                 <section
                   className="ops-version-strip"
@@ -575,16 +708,20 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
             )}
 
             {showMetrics && snap.data.metrics && (
-              <section className="ops-panel" aria-label="Metrics">
-                <div className="ops-panel-header">
-                  <h2 className="ops-panel-title">Metrics</h2>
+              <section className="ops-signal-wall" aria-label="Metrics">
+                <div className="ops-signal-wall-controls">
+                  <span
+                    className="ops-signal-wall-updated"
+                    title={snap.data.metrics.source.last_data_at ?? snap.data.overview.checked_at}
+                  >
+                    Updated {fmtRel(snap.data.metrics.source.last_data_at ?? snap.data.overview.checked_at)}
+                  </span>
                   <WindowSwitch value={window} onChange={setWindow} />
                 </div>
                 {snap.data.metrics.series.length === 0 ? (
                   <div className="ops-empty-state">
                     <Activity size={24} aria-hidden="true" />
                     <p>No metrics available for this window.</p>
-                    <small>Source state: {snap.data.metrics.source.state}</small>
                   </div>
                 ) : (
                   <MetricsTable series={snap.data.metrics.series} />
@@ -593,8 +730,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
             )}
 
             {showTraces && snap.data.traces && (
-              <section className="ops-panel" aria-label="Traces">
-                <h2 className="ops-panel-title">Traces</h2>
+              <section className="ops-traces-surface" aria-label="Traces">
                 <Traces traces={snap.data.traces.traces} />
               </section>
             )}
@@ -613,59 +749,29 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
   );
 }
 
-function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
-  const reduced = usePrefersReducedMotion();
-  const max = useMemo(() => Math.max(1, ...series.map((s) => s.value)), [series]);
-  const groups = useMemo(() => {
-    const map = new Map<string, OpsMetricSeries[]>();
-    for (const s of series) {
-      const arr = map.get(s.name) ?? [];
-      arr.push(s);
-      map.set(s.name, arr);
-    }
-    return Array.from(map.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [series]);
+const SKEL_BANDS = ["a", "b", "c"];
+const SKEL_SERIES = ["1", "2", "3", "4"];
 
+function MetricsSkeleton() {
   return (
-    <ul className="ops-metrics-groups" aria-label="Metric series">
-      {groups.map(([name, items], groupIndex) => (
-        <li key={name} className="ops-metrics-group">
-          <div className="ops-metrics-group-header">
-            <span className="ops-metrics-group-name">{name}</span>
-            <span className="ops-metrics-group-count">{items.length} series</span>
+    <ul className="ops-signal-bands" aria-hidden="true">
+      {SKEL_BANDS.map((bandId) => (
+        <li key={`skel-band-${bandId}`} className="ops-signal-band">
+          <div className="ops-signal-band-header">
+            <div className="ops-skeleton-line" style={{ width: "140px" }} />
           </div>
-          <ul className="ops-metrics-series-list">
-            {items.map((s, i) => {
-              const labelKey = Object.entries(s.labels)
-                .sort(([a], [b]) => a.localeCompare(b))
-                .map(([k, v]) => `${k}=${v}`)
-                .join("|");
-              const heat = metricHeatLevel(s.value, max);
-              const share = max > 0 ? (s.value / max) * 100 : 0;
-              const staggerIndex = clamp(groupIndex * 2 + i, 0, MAX_STAGGER_NODES - 1);
-              return (
-                <li
-                  key={labelKey}
-                  className={`ops-metric-series ${reduced ? "" : "ops-metric-series-enter"}`}
-                  style={{ animationDelay: `${staggerIndex * STAGGER_MS}ms` }}
-                >
-                  <div className="ops-metric-series-labels">
-                    <Labels labels={s.labels} />
-                  </div>
-                  <div className="ops-metric-series-value">
-                    <span className={`ops-metric-value-number ops-heat-${heat}`}>
-                      {s.value.toLocaleString()}
-                    </span>
-                    <div className="ops-metric-bar-bg" aria-hidden="true">
-                      <div
-                        className={`ops-metric-bar ops-metric-bar-${heat}`}
-                        style={{ width: `${share}%` }}
-                      />
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
+          <ul className="ops-signal-series-grid">
+            {SKEL_SERIES.map((seriesId) => (
+              <li key={`skel-series-${bandId}-${seriesId}`} className="ops-signal-series">
+                <div className="ops-signal-series-figure">
+                  <div className="ops-skeleton-value" />
+                  <div className="ops-skeleton-line" style={{ width: "70%" }} />
+                </div>
+                <div className="ops-signal-bar-wrap">
+                  <div className="ops-skeleton-bar" />
+                </div>
+              </li>
+            ))}
           </ul>
         </li>
       ))}
@@ -673,93 +779,181 @@ function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
   );
 }
 
-function Traces({ traces }: { traces: readonly OpsTrace[] }) {
+function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
   const reduced = usePrefersReducedMotion();
-  if (traces.length === 0) {
-    return (
-      <div className="ops-empty-state">
-        <Timer size={24} aria-hidden="true" />
-        <p>No recent traces.</p>
-      </div>
-    );
-  }
-
-  const starts = traces.map((t) => new Date(t.start_time).getTime());
-  const durations = traces.map((t) => t.duration_ms);
-  const timeAxisReady = starts.every((s) => !Number.isNaN(s));
-  const min = timeAxisReady ? Math.min(...starts) : 0;
-  const maxEnd = timeAxisReady ? Math.max(...starts.map((s, i) => s + durations[i])) : 0;
-  const scale = Math.max(1, maxEnd - min);
-  const maxDuration = Math.max(1, ...durations);
-
-  const tickCount = 4;
-  const ticks = Array.from({ length: tickCount }, (_, i) => min + (scale * i) / (tickCount - 1));
+  const groups = useMemo(() => {
+    const map = new Map<string, OpsMetricSeries[]>();
+    for (const s of series) {
+      const arr = map.get(s.name) ?? [];
+      arr.push(s);
+      map.set(s.name, arr);
+    }
+    return Array.from(map.entries())
+      .map(([name, items]): [string, OpsMetricSeries[]] => {
+        items.sort((a, b) => b.value - a.value);
+        return [name, items];
+      })
+      .sort(([a], [b]) => a.localeCompare(b));
+  }, [series]);
 
   return (
-    <div className="ops-traces-timeline">
-      {timeAxisReady && (
-        <div className="ops-traces-axis" aria-hidden="true">
-          <div className="ops-traces-axis-line" />
-          {ticks.map((tick, i) => (
-            <span
-              key={`tick-${tick}`}
-              className="ops-traces-axis-tick"
-              style={{ left: `${(i / (tickCount - 1)) * 100}%` }}
-            >
-              {fmtTime(new Date(tick).toISOString())}
-            </span>
-          ))}
+    <ul className="ops-signal-bands" aria-label="Metric groups">
+      {groups.map(([name, items], groupIndex) => {
+        const groupMax = Math.max(1, ...items.map((s) => s.value));
+        return (
+          <li key={name} className="ops-signal-band">
+            <div className="ops-signal-band-header">
+              <span className="ops-signal-band-name">{name}</span>
+              <span className="ops-signal-band-scale">max {groupMax.toLocaleString()}</span>
+            </div>
+            <ul className="ops-signal-series-grid">
+              {items.map((s, i) => {
+                const share = groupMax > 0 ? s.value / groupMax : 0;
+                const heat = metricHeatLevel(s.value, groupMax);
+                const staggerIndex = clamp(groupIndex * 2 + i, 0, MAX_STAGGER_NODES - 1);
+                const delay = reduced ? "0ms" : `${staggerIndex * STAGGER_MS}ms`;
+                return (
+                  <li
+                    key={seriesKey(s)}
+                    className={`ops-signal-series ${reduced ? "" : "ops-signal-series-enter"}`}
+                    style={{ "--series-delay": delay } as React.CSSProperties}
+                  >
+                    <div className="ops-signal-series-figure">
+                      <span className={`ops-signal-value ops-signal-heat-${heat}`}>
+                        {s.value.toLocaleString()}
+                      </span>
+                      <MetricLabels labels={s.labels} />
+                    </div>
+                    <div className="ops-signal-bar-wrap" aria-hidden="true">
+                      <div
+                        className={`ops-signal-bar ops-signal-bar-${heat} ${reduced ? "" : "ops-signal-bar-enter"}`}
+                        style={{ "--bar-share": String(share) } as React.CSSProperties}
+                      />
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function Traces({ traces }: { traces: readonly OpsTrace[] }) {
+  const reduced = usePrefersReducedMotion();
+  const timeAxisReady = traces.length > 0 && traces.every((t) => !Number.isNaN(new Date(t.start_time).getTime()));
+  const starts = traces.map((t) => new Date(t.start_time).getTime());
+  const ends = traces.map((t, i) => starts[i] + t.duration_ms);
+  const min = timeAxisReady ? Math.min(...starts) : 0;
+  const max = timeAxisReady ? Math.max(...ends) : 1;
+  const range = Math.max(1, max - min);
+  const durations = traces.map((t) => t.duration_ms);
+  const maxDuration = Math.max(1, ...durations);
+  const slowest = durations.length > 0 ? Math.max(...durations) : 0;
+
+  const ticks = (() => {
+    if (!timeAxisReady) return [] as number[];
+    if (range <= 0) return [min];
+    const count = 5;
+    return Array.from({ length: count }, (_, i) => min + (range * i) / (count - 1));
+  })();
+
+  return (
+    <>
+      <div className="ops-traces-strip">
+        <span className="ops-traces-strip-title">Traces</span>
+        <div className="ops-traces-figures">
+          <span className="ops-traces-figure">
+            total <strong>{traces.length.toLocaleString()}</strong>
+          </span>
+          <span className="ops-traces-figure">
+            slowest <strong>{slowest.toLocaleString()} ms</strong>
+          </span>
         </div>
+      </div>
+
+      {traces.length === 0 ? (
+        <div className="ops-traces-empty">
+          <Timer size={24} aria-hidden="true" className="ops-traces-empty-icon" />
+          <span>No recent traces.</span>
+        </div>
+      ) : (
+        <>
+          {timeAxisReady && (
+            <div className="ops-traces-ruler" aria-hidden="true">
+              <div className="ops-traces-ruler-line" />
+              {ticks.map((tick) => (
+                <span
+                  key={`tick-${tick}`}
+                  className="ops-traces-ruler-tick"
+                  style={{ left: `${range <= 0 ? 0 : ((tick - min) / range) * 100}%` }}
+                >
+                  {fmtTime(new Date(tick).toISOString())}
+                </span>
+              ))}
+            </div>
+          )}
+
+          <div className="ops-traces-body">
+            <ul className="ops-trace-rows" aria-label="Recent traces">
+              {traces.map((t, i) => {
+                const start = new Date(t.start_time).getTime();
+                const latency = traceLatencyClass(t.duration_ms);
+                const left = timeAxisReady ? ((start - min) / range) * 100 : 0;
+                const width = timeAxisReady ? (t.duration_ms / range) * 100 : 0;
+                const simpleWidth = (t.duration_ms / maxDuration) * 100;
+                const staggerIndex = clamp(i, 0, MAX_STAGGER_NODES - 1);
+                const delay = reduced ? "0ms" : `${staggerIndex * 25}ms`;
+                return (
+                  <li key={t.trace_id}>
+                    <button
+                      type="button"
+                      className={`ops-trace-row ${reduced ? "" : "ops-trace-row-enter"}`}
+                      style={{ "--row-delay": delay } as React.CSSProperties}
+                      aria-label={`Trace ${t.trace_id}: ${t.root_name} in ${t.service}, ${t.duration_ms} ms`}
+                    >
+                      <div className="ops-trace-gutter">
+                        <span className="ops-trace-gutter-name" title={t.root_name}>
+                          {t.root_name}
+                        </span>
+                        <span className="ops-trace-gutter-service" title={t.service}>
+                          {t.service}
+                        </span>
+                      </div>
+                      <div className="ops-trace-track" aria-hidden="true">
+                        <div
+                          className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
+                          style={{
+                            left: `${left}%`,
+                            width: `${width}%`,
+                            "--bar-simple": `${simpleWidth}%`,
+                            "--bar-delay": delay,
+                          } as React.CSSProperties}
+                        />
+                      </div>
+                      <span className="ops-trace-duration">
+                        {t.duration_ms.toLocaleString()} ms
+                      </span>
+                      <div className="ops-trace-detail">
+                        <span className="ops-trace-detail-id" title={t.trace_id}>
+                          {t.trace_id}
+                        </span>
+                        <span className="ops-trace-detail-start">{fmtTime(t.start_time)}</span>
+                        <span className="ops-trace-detail-service">{t.service}</span>
+                        <span className="ops-trace-detail-duration">
+                          {t.duration_ms.toLocaleString()} ms
+                        </span>
+                      </div>
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        </>
       )}
-      <ul className="ops-trace-rows" aria-label="Recent traces">
-        {traces.map((t, i) => {
-          const start = new Date(t.start_time).getTime();
-          const latency = traceLatencyClass(t.duration_ms);
-          const left = timeAxisReady ? ((start - min) / scale) * 100 : 0;
-          const width = timeAxisReady ? (t.duration_ms / scale) * 100 : 0;
-          const simpleWidth = (t.duration_ms / maxDuration) * 100;
-          const staggerIndex = clamp(i, 0, MAX_STAGGER_NODES - 1);
-          return (
-            <li key={t.trace_id} className="ops-trace-row-item">
-              <button
-                type="button"
-                className={`ops-trace-row ${reduced ? "" : "ops-trace-row-enter"}`}
-                style={{ animationDelay: `${staggerIndex * STAGGER_MS}ms` }}
-                aria-label={`Trace ${t.trace_id}: ${t.root_name} in ${t.service}, ${t.duration_ms} ms`}
-              >
-                <div className="ops-trace-row-main">
-                  <div className="ops-trace-row-meta">
-                    <span className="ops-trace-row-service">{t.service}</span>
-                    <span className="ops-trace-row-name" title={t.root_name}>
-                      {t.root_name}
-                    </span>
-                  </div>
-                  <div className="ops-trace-bar-bg" aria-hidden="true">
-                    <div
-                      className={`ops-trace-bar ops-trace-bar-time ops-trace-bar-${latency}`}
-                      style={{ left: `${left}%`, width: `${width}%` }}
-                    />
-                    <div
-                      className={`ops-trace-bar ops-trace-bar-simple ops-trace-bar-${latency}`}
-                      style={{ width: `${simpleWidth}%` }}
-                    />
-                  </div>
-                  <span className={`ops-trace-row-duration ops-trace-duration-${latency}`}>
-                    {t.duration_ms.toLocaleString()} ms
-                  </span>
-                </div>
-                <div className="ops-trace-row-detail">
-                  <span className="ops-trace-detail-id" title={t.trace_id}>
-                    {t.trace_id}
-                  </span>
-                  <span className="ops-trace-detail-start">{fmtTime(t.start_time)}</span>
-                  <span className="ops-trace-detail-service">{t.service}</span>
-                </div>
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
+    </>
   );
 }
