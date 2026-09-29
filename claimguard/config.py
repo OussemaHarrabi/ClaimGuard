@@ -42,6 +42,9 @@ class Settings(BaseSettings):
     # OpenTelemetry OTLP/HTTP endpoint (docker-otel-lgtm exposes :4318).
     otel_endpoint: str = "http://localhost:4318"
     otel_service_name: str = "claimguard"
+    # Gates the optional P1 telemetry wiring: off by default so no SDK provider
+    # is registered and no network call is made unless an operator opts in.
+    ops_otel_enabled: bool = False
 
     # --- runtime -----------------------------------------------------------
     log_level: str = "INFO"

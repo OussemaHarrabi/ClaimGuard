@@ -85,6 +85,7 @@ from claimguard.edu.envelope import (
     validate_transport,
 )
 from claimguard.edu.policy import RuleContext, RuleDirError
+from claimguard.ops.telemetry import install_telemetry
 from claimguard.review import ui as review_ui
 from claimguard.review.explanations import (
     ExplainedRun,
@@ -294,6 +295,7 @@ def create_app(
         status_code=status.HTTP_201_CREATED,
     )
     app.include_router(review_ui.router)
+    install_telemetry(app)
     return app
 
 
