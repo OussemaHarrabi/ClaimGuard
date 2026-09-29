@@ -1,28 +1,44 @@
 """Unit tests for the P2 Technical Reviewer operations API.
 
 No database and no network: the router is mounted on a bare FastAPI app whose
-Prometheus/Tempo clients and audit seam are injected stubs. The tests pin the
-degradation contract — a dead source is a normal ``200`` with the source marked
-``unavailable``, never a ``500`` — along with the bounded query parameters and
-the audit check's refusal to claim unverified success.
+Prometheus/Tempo clients and audit seam are injected stubs. A tiny middleware
+resolves a real :class:`Principal` onto ``request.state`` so the production
+``READ_OPERATIONS`` guard runs unchanged; the security tests below pin that
+guard (non-operations roles and absent principals get ``403``). The tests also
+pin the degradation contract — a dead source is a normal ``200`` with the source
+marked ``unavailable``, never a ``500`` — along with the bounded query
+parameters and the audit check's refusal to claim unverified success.
 """
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 import pytest
+from claimguard.clinic.access import Principal, Role
 from claimguard.ops.operations import (
     AuditStatus,
     OperationsCache,
     router,
 )
 from claimguard.ops.sources import MetricSeries, SourceUnavailable, TraceSummary
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 
 pytestmark = pytest.mark.unit
+
+#: The principal the behavioural tests run as: the role operations is for.
+_OPS_PRINCIPAL = Principal(user_id="ops-1", tenant_id="clinic-1", role=Role.TECHNICAL_MANAGER)
+
+#: Every operations path, used by the uniform authorization checks.
+_OPERATIONS_PATHS = (
+    "/v1/operations/overview",
+    "/v1/operations/metrics",
+    "/v1/operations/traces",
+    "/v1/operations/audit",
+)
 
 
 class _UnavailablePrometheus:
@@ -88,9 +104,26 @@ def _app(
     audit_check: Any = None,
     store: Any = None,
     rules: Any = None,
+    principal: Principal | None = _OPS_PRINCIPAL,
 ) -> FastAPI:
-    """Mount the operations router on a bare app with injected collaborators."""
+    """Mount the operations router on a bare app with injected collaborators.
+
+    A real principal is installed on ``request.state`` through middleware unless
+    ``principal`` is ``None``, which leaves the state unset to exercise the
+    fail-closed path.
+    """
     app = FastAPI()
+    if principal is not None:
+        resolved = principal
+
+        async def _install_principal(
+            request: Request, call_next: Callable[[Request], Awaitable[Response]]
+        ) -> Response:
+            request.state.principal = resolved
+            return await call_next(request)
+
+        app.middleware("http")(_install_principal)
+
     app.include_router(router)
     app.state.prometheus_source = prometheus
     app.state.tempo_source = tempo
@@ -237,3 +270,39 @@ async def test_audit_never_claims_intact_when_the_check_fails() -> None:
     body = (await _get(app, "/v1/operations/audit")).json()
     assert body["intact"] is False
     assert body["detail"] is None
+
+
+# ---------------------------------------------------------------------------
+# Authorization: READ_OPERATIONS is required and fails closed
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("path", _OPERATIONS_PATHS)
+async def test_a_non_operations_role_is_denied(path: str) -> None:
+    reviewer = Principal(user_id="r-1", tenant_id="clinic-1", role=Role.RCM_REVIEWER)
+    app = _app(
+        prometheus=_HealthyPrometheus(),
+        tempo=_HealthyTempo(),
+        principal=reviewer,
+    )
+    assert (await _get(app, path)).status_code == 403
+
+
+@pytest.mark.parametrize("path", _OPERATIONS_PATHS)
+async def test_an_absent_principal_fails_closed(path: str) -> None:
+    app = _app(
+        prometheus=_HealthyPrometheus(),
+        tempo=_HealthyTempo(),
+        principal=None,
+    )
+    assert (await _get(app, path)).status_code == 403
+
+
+@pytest.mark.parametrize("path", _OPERATIONS_PATHS)
+async def test_the_technical_manager_is_allowed(path: str) -> None:
+    app = _app(
+        prometheus=_HealthyPrometheus(),
+        tempo=_HealthyTempo(),
+        audit_check=lambda: AuditStatus(intact=True, event_count=0),
+    )
+    assert (await _get(app, path)).status_code == 200

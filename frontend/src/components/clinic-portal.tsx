@@ -10,7 +10,7 @@ import { Input } from "./ui/input";
 import { getSession, signIn, signOut, type ClinicRole, type ClinicSession } from "../lib/clinic-api";
 import { ReviewWorkspaceApp } from "./review-workspace-app";
 import { AssignmentsPage } from "./assignments-page";
-import { OperationsPage } from "./operations-page";
+import { OpsConsole } from "./ops-console";
 import { TeamAccessPage } from "./team-access-page";
 import { DepartmentsPage } from "./departments-page";
 import { ClinicReportPage, ConfigurationPage, DocumentIntakePage, WorkItemsPage } from "./clinic-workflow-pages";
@@ -186,7 +186,7 @@ export function ClinicPortal({ page }: { page: string }) {
           <ReviewWorkspaceApp reviewer={session.user_id} scope={["team-queue", "all-claims"].includes(activePage) ? "team" : "mine"} includeAll={activePage === "all-claims"} />
         ) : null}
         {selected && activePage === "assignments" ? <AssignmentsPage claimPage={session.role === "clinic_admin" ? "all-claims" : "team-queue"} /> : null}
-        {selected && activePage === "operations" ? <OperationsPage /> : null}
+        {selected && activePage === "operations" ? <OpsConsole variant="embedded" /> : null}
         {selected && activePage === "team-access" ? <TeamAccessPage /> : null}
         {selected && activePage === "departments" ? <DepartmentsPage /> : null}
         {selected && activePage === "document-intake" ? <DocumentIntakePage /> : null}

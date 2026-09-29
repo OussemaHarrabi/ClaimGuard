@@ -1336,3 +1336,30 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
     padding: 16px;
   }
 }
+
+/* Embedded variant inside the light clinic shell */
+.ops-dark.ops-dark-embedded {
+  min-height: auto;
+  background: var(--ops-canvas);
+  border: 1px solid var(--ops-border);
+  border-radius: var(--radius-lg);
+  overflow-x: hidden;
+}
+
+.ops-dark.ops-dark-embedded .ops-console {
+  max-width: none;
+  margin: 0;
+  padding: 24px;
+}
+
+@media (max-width: 760px) {
+  .ops-dark.ops-dark-embedded .ops-console {
+    padding: 18px 16px 32px;
+  }
+}
+
+@media (max-width: 430px) {
+  .ops-dark.ops-dark-embedded .ops-console {
+    padding: 14px 12px 28px;
+  }
+}

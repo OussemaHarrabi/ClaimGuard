@@ -41,12 +41,13 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Annotated, Final, Literal, TypeVar, cast
 
-from fastapi import APIRouter, FastAPI, Query, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
 from sqlalchemy import select
 from sqlalchemy.engine import Connection, Engine
 
 from claimguard.audit.chain import AuditEvent, verify_chain
+from claimguard.clinic.access import Action, Principal, authorize
 from claimguard.config import get_settings
 from claimguard.edu.envelope import RULE_VERSION
 from claimguard.edu.policy import RuleDirError
@@ -224,7 +225,29 @@ def _cache_for(app: FastAPI) -> OperationsCache:
 # Router
 # ---------------------------------------------------------------------------
 
-router = APIRouter(prefix="/v1/operations", tags=["operations"])
+
+def require_operations(request: Request) -> None:
+    """Fail closed unless the resolved principal may read operations telemetry.
+
+    UI visibility is never authorization: the routes below are a raw view of
+    platform health, so they demand :data:`Action.READ_OPERATIONS` on every
+    request. A request with no resolved principal is denied outright rather
+    than treated as anonymous-allowed.
+    """
+    principal = getattr(request.state, "principal", None)
+    if not isinstance(principal, Principal):
+        raise HTTPException(status_code=403, detail="access denied")
+    try:
+        authorize(principal, Action.READ_OPERATIONS, tenant_id=principal.tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="access denied") from exc
+
+
+router = APIRouter(
+    prefix="/v1/operations",
+    tags=["operations"],
+    dependencies=[Depends(require_operations)],
+)
 
 
 @router.get("/overview", response_model=OverviewResponse)
