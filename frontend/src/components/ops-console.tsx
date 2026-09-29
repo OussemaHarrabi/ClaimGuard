@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   Activity,
   AlertTriangle,
@@ -127,16 +127,26 @@ const Skeleton = () => (
   </div>
 );
 
+const HIDDEN_METRIC_LABELS = new Set([
+  "instance",
+  "service_instance_id",
+  "job",
+  "service_name",
+]);
+
 const Labels = ({ labels }: { labels: Readonly<Record<string, string>> }) => {
-  const entries = Object.entries(labels);
+  const entries = Object.entries(labels).filter(([k]) => !HIDDEN_METRIC_LABELS.has(k));
   if (entries.length === 0) return <span className="ops-quiet">none</span>;
   return (
     <div className="ops-labels">
-      {entries.map(([k, v]) => (
-        <span key={k} className="ops-label">
-          {k}={v}
-        </span>
-      ))}
+      {entries.map(([k, v]) => {
+        const text = `${k}=${v}`;
+        return (
+          <span key={k} className="ops-label" title={text}>
+            {text}
+          </span>
+        );
+      })}
     </div>
   );
 };
@@ -252,56 +262,55 @@ type SignalMapNode = {
 function SignalMap({
   components,
   sources,
-  pulseKey,
 }: {
   components: readonly { name: string; state: string; detail: string | null }[];
   sources: readonly { name: string; state: string; detail: string | null; last_data_at: string | null }[];
-  pulseKey: number;
 }) {
   const reduced = usePrefersReducedMotion();
 
   return (
     <div className="ops-signal-map">
-      <div className="ops-signal-map-platform">
+      <div className="ops-signal-bus" aria-hidden="true">
         <div className="ops-signal-node ops-signal-node-platform" aria-hidden="true">
           <span className="ops-signal-node-dot" />
           <span className="ops-signal-node-name">platform</span>
         </div>
+        <div className="ops-signal-bus-line" aria-hidden="true" />
       </div>
 
-      <section className="ops-signal-map-region" aria-label="Components">
-        <h2 className="ops-panel-title">Components</h2>
-        <div className="ops-signal-map-nodes">
-          {components.map((c, i) => (
-            <SignalNode
-              key={c.name}
-              node={{ ...c, kind: "component" }}
-              index={i}
-              edgeState={c.state}
-              reduced={reduced}
-              pulseKey={pulseKey}
-            />
-          ))}
-          {components.length === 0 && <p className="ops-empty">No components reported.</p>}
-        </div>
-      </section>
+      <div className="ops-signal-map-content">
+        <section className="ops-signal-map-region" aria-label="Components">
+          <h2 className="ops-panel-title">Components</h2>
+          <div className="ops-signal-map-nodes">
+            {components.map((c, i) => (
+              <SignalNode
+                key={c.name}
+                node={{ ...c, kind: "component" }}
+                index={i}
+                edgeState={c.state}
+                reduced={reduced}
+              />
+            ))}
+            {components.length === 0 && <p className="ops-empty">No components reported.</p>}
+          </div>
+        </section>
 
-      <section className="ops-signal-map-region" aria-label="Sources">
-        <h2 className="ops-panel-title">Source freshness</h2>
-        <div className="ops-signal-map-nodes">
-          {sources.map((s, i) => (
-            <SignalNode
-              key={s.name}
-              node={{ ...s, kind: "source" }}
-              index={i + components.length}
-              edgeState={s.state}
-              reduced={reduced}
-              pulseKey={pulseKey}
-            />
-          ))}
-          {sources.length === 0 && <p className="ops-empty">No sources reported.</p>}
-        </div>
-      </section>
+        <section className="ops-signal-map-region" aria-label="Sources">
+          <h2 className="ops-panel-title">Source freshness</h2>
+          <div className="ops-signal-map-nodes">
+            {sources.map((s, i) => (
+              <SignalNode
+                key={s.name}
+                node={{ ...s, kind: "source" }}
+                index={i + components.length}
+                edgeState={s.state}
+                reduced={reduced}
+              />
+            ))}
+            {sources.length === 0 && <p className="ops-empty">No sources reported.</p>}
+          </div>
+        </section>
+      </div>
     </div>
   );
 }
@@ -311,29 +320,18 @@ function SignalNode({
   index,
   edgeState,
   reduced,
-  pulseKey,
 }: {
   node: SignalMapNode;
   index: number;
   edgeState: string;
   reduced: boolean;
-  pulseKey: number;
 }) {
   const t = tone(node.state);
   const stale = edgeState === "stale";
   const unavailable = edgeState === "unavailable";
-  const [pulse, setPulse] = useState(0);
-  const lastPulseRef = useRef(pulseKey);
   const style = {
     transitionDelay: reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`,
   };
-
-  useEffect(() => {
-    if (pulseKey !== lastPulseRef.current) {
-      lastPulseRef.current = pulseKey;
-      setPulse((p) => p + 1);
-    }
-  }, [pulseKey]);
 
   return (
     <div
@@ -341,17 +339,6 @@ function SignalNode({
       style={style}
     >
       <div className="ops-signal-node-top">
-        <div className="ops-signal-edge" aria-hidden="true">
-          <svg viewBox="0 0 40 40" preserveAspectRatio="none" aria-hidden="true" key={pulse} className={reduced ? "" : "ops-signal-edge-pulse"}>
-            <line
-              className={`ops-signal-edge-line ${stale ? "ops-edge-stale" : ""} ${unavailable ? "ops-edge-broken" : ""}`}
-              x1="0"
-              y1="0"
-              x2="40"
-              y2="40"
-            />
-          </svg>
-        </div>
         <span className="ops-signal-node-name">{node.name}</span>
         <StateBadge state={node.state} />
       </div>
@@ -565,7 +552,6 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
                 <SignalMap
                   components={snap.data.overview.components}
                   sources={snap.data.overview.sources}
-                  pulseKey={pulseKey}
                 />
 
                 <section

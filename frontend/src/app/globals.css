@@ -635,7 +635,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   grid-template-columns: 1fr auto;
   gap: 20px 24px;
   align-items: center;
-  margin-bottom: 28px;
+  margin-bottom: 18px;
   padding: 22px 24px;
   border: 1px solid var(--ops-border);
   border-radius: var(--ops-radius-lg);
@@ -763,7 +763,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 /* Layout grid */
 .ops-layout {
   display: grid;
-  gap: 24px;
+  gap: 18px;
 }
 
 .ops-panel {
@@ -979,10 +979,10 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 
 .ops-metrics-group-header {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
+  align-items: baseline;
+  justify-content: flex-start;
+  gap: 10px;
+  margin-bottom: 12px;
   padding-bottom: 10px;
   border-bottom: 1px solid var(--ops-border);
 }
@@ -1094,6 +1094,8 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 }
 
 .ops-label {
+  display: inline-flex;
+  max-width: 240px;
   padding: 2px 6px;
   border-radius: 5px;
   background: var(--ops-raised);
@@ -1101,6 +1103,9 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   color: var(--ops-muted);
   font-size: 10px;
   font-family: var(--ops-font-mono);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .ops-quiet {
@@ -1150,7 +1155,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 .ops-trace-row {
   display: block;
   width: 100%;
-  padding: 10px 12px;
+  padding: 7px 10px;
   border: 1px solid transparent;
   border-radius: var(--ops-radius-sm);
   background: transparent;
@@ -1232,6 +1237,11 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   animation: ops-trace-bar-grow 350ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
 }
 
+.ops-trace-bar-time {
+  top: 3px;
+  height: 8px;
+}
+
 .ops-trace-bar-simple {
   display: none;
 }
@@ -1241,9 +1251,9 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   to { transform: scaleX(1); }
 }
 
-.ops-trace-bar-fast { background: var(--ops-success); }
-.ops-trace-bar-medium { background: var(--ops-warning); }
-.ops-trace-bar-slow { background: var(--ops-danger); box-shadow: 0 0 10px var(--ops-glow-danger); }
+.ops-trace-bar-fast { background: oklch(85% 0.18 155); }
+.ops-trace-bar-medium { background: oklch(88% 0.16 80); }
+.ops-trace-bar-slow { background: oklch(76% 0.22 25); box-shadow: 0 0 10px var(--ops-glow-danger); }
 
 .ops-trace-duration-fast { color: var(--ops-success); }
 .ops-trace-duration-medium { color: var(--ops-warning); }
@@ -1470,7 +1480,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   top: 0;
   z-index: 25;
   width: 100%;
-  height: 5px;
+  height: 12px;
   overflow: hidden;
   background: var(--ops-canvas);
   border-bottom: 1px solid var(--ops-border);
@@ -1484,8 +1494,9 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 
 .ops-signal-polyline {
   stroke: var(--ops-primary);
-  opacity: 0.55;
-  stroke-dasharray: 60 120;
+  opacity: 0.88;
+  stroke-width: 3.5;
+  stroke-dasharray: 90 180;
   stroke-dashoffset: 0;
 }
 
@@ -1495,7 +1506,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 
 .ops-signal-rail-dead .ops-signal-polyline {
   stroke: var(--ops-quiet);
-  opacity: 0.35;
+  opacity: 0.42;
   animation: none;
 }
 
@@ -1516,25 +1527,24 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   font-size: 13px;
   font-weight: 800;
   letter-spacing: 0.02em;
-  text-transform: capitalize;
 }
 
 .ops-verdict-gauge.ops-gauge-ok {
-  --gauge-target: 0;
+  --gauge-target: 26.4;
   border-color: oklch(40% 0.11 155);
   color: var(--ops-success);
   box-shadow: 0 0 0 0 var(--ops-glow-success);
 }
 
 .ops-verdict-gauge.ops-gauge-degraded {
-  --gauge-target: 47;
+  --gauge-target: 51.8;
   border-color: oklch(44% 0.11 80);
   color: var(--ops-warning);
   box-shadow: 0 0 24px var(--ops-glow-warning);
 }
 
 .ops-verdict-gauge.ops-gauge-unknown {
-  --gauge-target: 75;
+  --gauge-target: 80.1;
   border-color: var(--ops-border-strong);
   color: var(--ops-muted);
 }
@@ -1575,18 +1585,43 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 
 /* Signal map */
 .ops-signal-map {
-  display: grid;
-  gap: 24px;
+  display: flex;
+  gap: 0;
+}
+
+.ops-signal-bus {
+  position: relative;
+  flex: 0 0 40px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.ops-signal-bus-line {
+  position: absolute;
+  left: 50%;
+  top: 38px;
+  bottom: 0;
+  width: 2px;
+  background: var(--ops-border-strong);
+  transform: translateX(-50%);
+}
+
+.ops-signal-map-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
 }
 
 .ops-signal-map-platform {
   display: flex;
   justify-content: center;
-  padding: 8px 0 4px;
+  padding: 0 0 2px;
 }
 
 .ops-signal-map-region {
-  padding: 22px 24px;
+  padding: 18px 20px;
   border: 1px solid var(--ops-border);
   border-radius: var(--ops-radius-lg);
   background: var(--ops-panel);
@@ -1594,22 +1629,22 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 }
 
 .ops-signal-map-region .ops-panel-title {
-  margin: 0 0 18px;
+  margin: 0 0 14px;
 }
 
 .ops-signal-map-nodes {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 16px;
+  gap: 14px;
 }
 
 .ops-signal-node {
   position: relative;
-  padding: 14px 16px;
+  padding: 12px 14px;
   border: 1px solid var(--ops-border);
+  border-left-width: 3px;
   border-radius: var(--ops-radius);
   background: var(--ops-raised);
-  overflow: hidden;
   opacity: 0;
   transform: translateY(10px);
 }
@@ -1624,6 +1659,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 }
 
 .ops-signal-node-platform {
+  position: relative;
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -1634,6 +1670,17 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   opacity: 1;
   transform: none;
   box-shadow: 0 0 24px var(--ops-glow-primary);
+}
+
+.ops-signal-node-platform::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  top: 100%;
+  width: 2px;
+  height: 10px;
+  background: var(--ops-border-strong);
+  transform: translateX(-50%);
 }
 
 .ops-signal-node-dot {
@@ -1650,40 +1697,10 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   50% { opacity: 1; }
 }
 
-.ops-signal-node-success { border-color: oklch(38% 0.1 155); }
-.ops-signal-node-success::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--ops-success);
-}
-
-.ops-signal-node-warning { border-color: oklch(42% 0.1 80); }
-.ops-signal-node-warning::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--ops-warning);
-}
-
-.ops-signal-node-danger { border-color: oklch(40% 0.12 25); }
-.ops-signal-node-danger::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--ops-danger);
-}
-
-.ops-signal-node-neutral::before {
-  content: "";
-  position: absolute;
-  inset: 0 auto 0 0;
-  width: 3px;
-  background: var(--ops-neutral);
-}
+.ops-signal-node-success { border-left-color: oklch(38% 0.1 155); }
+.ops-signal-node-warning { border-left-color: oklch(42% 0.1 80); }
+.ops-signal-node-danger { border-left-color: oklch(40% 0.12 25); }
+.ops-signal-node-neutral { border-left-color: var(--ops-neutral); }
 
 .ops-signal-node-stale {
   border-style: dashed;
@@ -1699,56 +1716,49 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
-.ops-signal-edge {
+.ops-signal-node::before {
+  content: "";
   position: absolute;
-  left: 0;
-  top: 0;
-  width: 28px;
-  height: 28px;
-  opacity: 0.55;
-  pointer-events: none;
+  left: -44px;
+  top: 50%;
+  width: 44px;
+  height: 2px;
+  background: var(--ops-border-strong);
+  transform: translateY(-50%);
 }
 
-.ops-signal-edge svg {
-  display: block;
-  width: 100%;
-  height: 100%;
+.ops-signal-node::after {
+  content: "";
+  position: absolute;
+  left: -50px;
+  top: 50%;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--ops-raised);
+  border: 2px solid var(--ops-border-strong);
+  transform: translateY(-50%);
 }
 
-.ops-signal-edge-line {
-  stroke: var(--ops-neutral);
-  stroke-width: 2;
-  stroke-dasharray: 4 2;
-}
+.ops-signal-node-success::before { background: var(--ops-success); }
+.ops-signal-node-warning::before,
+.ops-signal-node-stale::before { background: var(--ops-warning); }
+.ops-signal-node-danger::before,
+.ops-signal-node-unavailable::before { background: var(--ops-danger); }
+.ops-signal-node-neutral::before { background: var(--ops-neutral); }
 
-.ops-edge-stale {
-  stroke: var(--ops-warning);
-  stroke-dasharray: 3 4;
-  opacity: 0.7;
-}
-
-.ops-edge-broken {
-  stroke: var(--ops-danger);
-  stroke-dasharray: 8 10;
-  opacity: 0.8;
-}
-
-.ops-signal-edge-pulse .ops-signal-edge-line {
-  animation: ops-edge-pulse 420ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes ops-edge-pulse {
-  0% { opacity: 0.3; stroke-width: 2; }
-  50% { opacity: 1; stroke-width: 3; }
-  100% { opacity: 0.55; stroke-width: 2; }
-}
+.ops-signal-node-success::after { border-color: var(--ops-success); }
+.ops-signal-node-warning::after,
+.ops-signal-node-stale::after { border-color: var(--ops-warning); }
+.ops-signal-node-danger::after,
+.ops-signal-node-unavailable::after { border-color: var(--ops-danger); }
+.ops-signal-node-neutral::after { border-color: var(--ops-neutral); }
 
 .ops-signal-node-name {
   flex: 1;
-  margin-left: 26px;
   color: var(--ops-text);
   font-size: 14px;
   font-weight: 700;
@@ -1769,8 +1779,8 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   display: flex;
   align-items: flex-start;
   gap: 6px;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
   border-top: 1px solid var(--ops-border);
   color: var(--ops-quiet);
   font-size: 11px;
@@ -1962,8 +1972,7 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   .ops-dark .ops-signal-polyline,
   .ops-dark .ops-gauge-arc-sweep,
   .ops-dark .ops-signal-node-enter,
-  .ops-dark .ops-platform-dot,
-  .ops-dark .ops-signal-edge-pulse .ops-signal-edge-line,
+  .ops-dark .ops-signal-node-dot,
   .ops-dark .ops-hash-links-animate .ops-hash-link,
   .ops-dark .ops-hash-link-fallen .ops-hash-link-face,
   .ops-dark .ops-hash-chain-intact .ops-hash-chain-line::after,
