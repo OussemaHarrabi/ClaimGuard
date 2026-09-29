@@ -24,8 +24,10 @@ import {
   type OpsWindow,
   type OpsOverviewResponse,
   type OpsMetricsResponse,
+  type OpsMetricSeries,
   type OpsTracesResponse,
   type OpsAuditResponse,
+  type SourceState,
 } from "@/lib/ops-api";
 
 const REFRESH_INTERVAL_MS = 30_000;
@@ -63,11 +65,31 @@ const fmtRel = (iso: string | null) => {
   return `${Math.floor(s / 3600)}h ago`;
 };
 
-const tone = (state: string) => {
+type Tone = "success" | "warning" | "danger" | "neutral";
+
+const tone = (state: string): Tone => {
   if (state === "healthy") return "success";
   if (state === "degraded" || state === "stale") return "warning";
   if (state === "unavailable" || state === "unknown") return "danger";
   return "neutral";
+};
+
+const componentIcon = (name: string) =>
+  name.toLowerCase().includes("database") ? <Database size={18} aria-hidden="true" /> : <Server size={18} aria-hidden="true" />;
+
+const sourceIcon = (state: SourceState) => {
+  switch (state) {
+    case "healthy":
+      return <CheckCircle2 size={18} aria-hidden="true" />;
+    case "degraded":
+      return <AlertTriangle size={18} aria-hidden="true" />;
+    case "stale":
+      return <Clock size={18} aria-hidden="true" />;
+    case "unavailable":
+      return <XCircle size={18} aria-hidden="true" />;
+    case "unknown":
+      return <Gauge size={18} aria-hidden="true" />;
+  }
 };
 
 const StateBadge = ({ state }: { state: string }) => <span className={`ops-state ops-state-${tone(state)}`}>{state}</span>;
@@ -83,7 +105,15 @@ const Skeleton = () => (
 const Labels = ({ labels }: { labels: Readonly<Record<string, string>> }) => {
   const entries = Object.entries(labels);
   if (entries.length === 0) return <span className="ops-quiet">none</span>;
-  return <div className="ops-labels">{entries.map(([k, v]) => <span key={k} className="ops-label">{k}={v}</span>)}</div>;
+  return (
+    <div className="ops-labels">
+      {entries.map(([k, v]) => (
+        <span key={k} className="ops-label">
+          {k}={v}
+        </span>
+      ))}
+    </div>
+  );
 };
 
 function WindowSwitch({ value, onChange }: { value: OpsWindow; onChange: (w: OpsWindow) => void }) {
@@ -91,10 +121,28 @@ function WindowSwitch({ value, onChange }: { value: OpsWindow; onChange: (w: Ops
     <fieldset className="ops-window-switch">
       <legend className="ops-sr-only">Metrics window</legend>
       {(["5m", "15m", "1h"] as OpsWindow[]).map((w) => (
-        <button key={w} type="button" className={w === value ? "ops-active" : ""} onClick={() => onChange(w)} aria-pressed={w === value}>{w}</button>
+        <button key={w} type="button" className={w === value ? "ops-active" : ""} onClick={() => onChange(w)} aria-pressed={w === value}>
+          {w}
+        </button>
       ))}
     </fieldset>
   );
+}
+
+function metricHeatLevel(value: number, max: number): 1 | 2 | 3 | 4 | 5 {
+  if (max <= 0 || value <= 0) return 1;
+  const ratio = value / max;
+  if (ratio < 0.2) return 1;
+  if (ratio < 0.4) return 2;
+  if (ratio < 0.6) return 3;
+  if (ratio < 0.8) return 4;
+  return 5;
+}
+
+function traceLatencyClass(ms: number): "fast" | "medium" | "slow" {
+  if (ms < 100) return "fast";
+  if (ms < 500) return "medium";
+  return "slow";
 }
 
 export function OpsConsole() {
@@ -102,16 +150,19 @@ export function OpsConsole() {
   const [snap, setSnap] = useState<Loadable<OpsSnapshot>>({ state: "loading" });
   const [busy, setBusy] = useState(false);
 
-  const refresh = useCallback(async (signal?: AbortSignal) => {
-    setBusy(true);
-    try {
-      setSnap({ state: "ok", data: await fetchSnapshot(window, signal) });
-    } catch (err) {
-      setSnap({ state: "error", message: fetchErrorMessage(err) });
-    } finally {
-      setBusy(false);
-    }
-  }, [window]);
+  const refresh = useCallback(
+    async (signal?: AbortSignal) => {
+      setBusy(true);
+      try {
+        setSnap({ state: "ok", data: await fetchSnapshot(window, signal) });
+      } catch (err) {
+        setSnap({ state: "error", message: fetchErrorMessage(err) });
+      } finally {
+        setBusy(false);
+      }
+    },
+    [window],
+  );
 
   useEffect(() => {
     const c = new AbortController();
@@ -126,8 +177,13 @@ export function OpsConsole() {
       }
     };
     void tick();
-    const id = setInterval(() => { void tick(); }, REFRESH_INTERVAL_MS);
-    return () => { c.abort(); clearInterval(id); };
+    const id = setInterval(() => {
+      void tick();
+    }, REFRESH_INTERVAL_MS);
+    return () => {
+      c.abort();
+      clearInterval(id);
+    };
   }, [window]);
 
   const status = snap.state === "ok" ? snap.data.overview.status : "unknown";
@@ -152,9 +208,19 @@ export function OpsConsole() {
           </div>
         </div>
         <div className="ops-header-meta">
-          <span className="ops-checked-at"><Clock size={13} aria-hidden="true" />Checked {fmtRel(checkedAt)}</span>
-          <button type="button" className="ops-refresh-button" onClick={() => refresh()} disabled={busy} aria-label="Refresh operations data">
-            <RefreshCw size={15} className={busy ? "ops-spin" : ""} aria-hidden="true" />Refresh
+          <span className="ops-checked-at">
+            <Clock size={13} aria-hidden="true" />
+            Checked {fmtRel(checkedAt)}
+          </span>
+          <button
+            type="button"
+            className="ops-refresh-button"
+            onClick={() => refresh()}
+            disabled={busy}
+            aria-label="Refresh operations data"
+            title="Refresh operations data"
+          >
+            <RefreshCw size={16} className={busy ? "ops-spin" : ""} aria-hidden="true" />
           </button>
         </div>
       </header>
@@ -163,17 +229,37 @@ export function OpsConsole() {
         <div className="ops-error-card">
           <AlertTriangle size={18} aria-hidden="true" />
           <span>{snap.message}</span>
-          <button type="button" onClick={() => refresh()}>Retry</button>
+          <button type="button" onClick={() => refresh()}>
+            Retry
+          </button>
         </div>
       )}
 
       {snap.state === "loading" && (
         <div className="ops-layout">
-          <section className="ops-panel" aria-label="Components"><h2 className="ops-panel-title">Components</h2><Skeleton /></section>
-          <section className="ops-panel" aria-label="Sources"><h2 className="ops-panel-title">Source freshness</h2><Skeleton /></section>
-          <section className="ops-panel" aria-label="Metrics"><div className="ops-panel-header"><h2 className="ops-panel-title">Metrics</h2><WindowSwitch value={window} onChange={setWindow} /></div><Skeleton /></section>
-          <section className="ops-panel" aria-label="Traces"><h2 className="ops-panel-title">Traces</h2><Skeleton /></section>
-          <section className="ops-panel" aria-label="Audit integrity"><h2 className="ops-panel-title">Audit integrity</h2><Skeleton /></section>
+          <section className="ops-panel" aria-label="Components">
+            <h2 className="ops-panel-title">Components</h2>
+            <Skeleton />
+          </section>
+          <section className="ops-panel" aria-label="Sources">
+            <h2 className="ops-panel-title">Source freshness</h2>
+            <Skeleton />
+          </section>
+          <section className="ops-panel" aria-label="Metrics">
+            <div className="ops-panel-header">
+              <h2 className="ops-panel-title">Metrics</h2>
+              <WindowSwitch value={window} onChange={setWindow} />
+            </div>
+            <Skeleton />
+          </section>
+          <section className="ops-panel" aria-label="Traces">
+            <h2 className="ops-panel-title">Traces</h2>
+            <Skeleton />
+          </section>
+          <section className="ops-panel" aria-label="Audit integrity">
+            <h2 className="ops-panel-title">Audit integrity</h2>
+            <Skeleton />
+          </section>
         </div>
       )}
 
@@ -184,8 +270,14 @@ export function OpsConsole() {
             <div className="ops-card-grid">
               {snap.data.overview.components.map((c) => (
                 <div key={c.name} className={`ops-card ops-card-${tone(c.state)}`}>
-                  <div className="ops-card-top">{c.name.toLowerCase().includes("database") ? <Database size={18} aria-hidden="true" /> : <Server size={18} aria-hidden="true" />}<StateBadge state={c.state} /></div>
-                  <div className="ops-card-body"><strong>{c.name}</strong><p>{c.detail ?? "No detail provided."}</p></div>
+                  <div className="ops-card-top">
+                    {componentIcon(c.name)}
+                    <StateBadge state={c.state} />
+                  </div>
+                  <div className="ops-card-body">
+                    <strong>{c.name}</strong>
+                    <p>{c.detail ?? "No detail provided."}</p>
+                  </div>
                 </div>
               ))}
               {snap.data.overview.components.length === 0 && <p className="ops-empty">No components reported.</p>}
@@ -196,12 +288,23 @@ export function OpsConsole() {
             <h2 className="ops-panel-title">Source freshness</h2>
             <div className="ops-card-grid">
               {snap.data.overview.sources.map((s) => (
-                <div key={s.name} className={`ops-card ops-card-${tone(s.state)} ${s.state === "stale" ? "ops-card-stale" : ""} ${s.state === "unavailable" ? "ops-card-unavailable" : ""}`}>
-                  <div className="ops-card-top"><Gauge size={18} aria-hidden="true" /><StateBadge state={s.state} /></div>
+                <div
+                  key={s.name}
+                  className={`ops-card ops-card-${tone(s.state)} ${s.state === "stale" ? "ops-card-stale" : ""} ${s.state === "unavailable" ? "ops-card-unavailable" : ""}`}
+                >
+                  <div className="ops-card-top">
+                    {sourceIcon(s.state)}
+                    <StateBadge state={s.state} />
+                  </div>
                   <div className="ops-card-body">
                     <strong>{s.name}</strong>
                     <p>{s.detail ?? "No detail provided."}</p>
-                    <div className="ops-source-meta"><span><Clock size={12} aria-hidden="true" />Last data: {fmtRel(s.last_data_at)} ({fmtTime(s.last_data_at)})</span></div>
+                    <div className="ops-source-meta">
+                      <span>
+                        <Clock size={12} aria-hidden="true" />
+                        Last data: {fmtRel(s.last_data_at)} ({fmtTime(s.last_data_at)})
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))}
@@ -210,27 +313,18 @@ export function OpsConsole() {
           </section>
 
           <section className="ops-panel" aria-label="Metrics">
-            <div className="ops-panel-header"><h2 className="ops-panel-title">Metrics</h2><WindowSwitch value={window} onChange={setWindow} /></div>
+            <div className="ops-panel-header">
+              <h2 className="ops-panel-title">Metrics</h2>
+              <WindowSwitch value={window} onChange={setWindow} />
+            </div>
             {snap.data.metrics.series.length === 0 ? (
-              <div className="ops-empty-state"><Activity size={24} aria-hidden="true" /><p>No metrics available for this window.</p><small>Source state: {snap.data.metrics.source.state}</small></div>
-            ) : (
-              <div className="ops-table-wrap">
-                <table className="ops-table">
-                  <thead><tr><th scope="col">Metric</th><th scope="col">Labels</th><th scope="col" className="ops-numeric">Value</th></tr></thead>
-                  <tbody>
-                    {snap.data.metrics.series.map((s) => {
-                      const labelKey = Object.entries(s.labels).sort(([a], [b]) => a.localeCompare(b)).map(([k, v]) => `${k}=${v}`).join("|");
-                      return (
-                        <tr key={`${s.name}::${labelKey}`}>
-                          <td className="ops-metric-name">{s.name}</td>
-                          <td><Labels labels={s.labels} /></td>
-                          <td className="ops-numeric ops-metric-value">{s.value.toLocaleString()}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <div className="ops-empty-state">
+                <Activity size={24} aria-hidden="true" />
+                <p>No metrics available for this window.</p>
+                <small>Source state: {snap.data.metrics.source.state}</small>
               </div>
+            ) : (
+              <MetricsTable series={snap.data.metrics.series} />
             )}
           </section>
 
@@ -239,19 +333,34 @@ export function OpsConsole() {
             <Traces traces={snap.data.traces.traces} />
           </section>
 
-          <section className={`ops-audit-banner ${snap.data.audit.intact ? "ops-audit-ok" : "ops-audit-broken"}`} aria-label="Audit integrity">
-            <div className="ops-audit-icon">{snap.data.audit.intact ? <ShieldAlert size={22} aria-hidden="true" /> : <XCircle size={22} aria-hidden="true" />}</div>
+          <section
+            className={`ops-audit-banner ${snap.data.audit.intact ? "ops-audit-ok" : "ops-audit-broken"}`}
+            aria-label="Audit integrity"
+          >
+            <div className="ops-audit-icon">
+              {snap.data.audit.intact ? <ShieldAlert size={22} aria-hidden="true" /> : <XCircle size={22} aria-hidden="true" />}
+            </div>
             <div className="ops-audit-body">
               <h2>{snap.data.audit.intact ? "Audit chain intact" : "Audit chain integrity failure"}</h2>
-              <p>{snap.data.audit.intact ? `Hash-chained audit ledger verified. ${snap.data.audit.event_count.toLocaleString()} events.` : "Audit ledger integrity check failed. Escalate immediately."}</p>
+              <p>
+                {snap.data.audit.intact
+                  ? `Hash-chained audit ledger verified. ${snap.data.audit.event_count.toLocaleString()} events.`
+                  : "Audit ledger integrity check failed. Escalate immediately."}
+              </p>
               <span className="ops-checked-at">Checked {fmtRel(snap.data.audit.checked_at)}</span>
             </div>
           </section>
 
           <section className="ops-version-strip" aria-label="Version information">
-            <span><strong>Rule engine</strong> {snap.data.overview.versions.engine_rule_version}</span>
-            <span><strong>Schema</strong> {snap.data.overview.versions.schema_revision ?? "—"}</span>
-            <span><strong>Service</strong> {snap.data.overview.versions.service_name}</span>
+            <span>
+              <strong>Rule engine</strong> {snap.data.overview.versions.engine_rule_version}
+            </span>
+            <span>
+              <strong>Schema</strong> {snap.data.overview.versions.schema_revision ?? "—"}
+            </span>
+            <span>
+              <strong>Service</strong> {snap.data.overview.versions.service_name}
+            </span>
           </section>
         </div>
       )}
@@ -259,27 +368,90 @@ export function OpsConsole() {
   );
 }
 
-function Traces({ traces }: { traces: readonly OpsTrace[] }) {
-  const max = useMemo(() => Math.max(1, ...traces.map((t) => t.duration_ms)), [traces]);
-  if (traces.length === 0) return <div className="ops-empty-state"><Timer size={24} aria-hidden="true" /><p>No recent traces.</p></div>;
+function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
+  const max = useMemo(() => Math.max(1, ...series.map((s) => s.value)), [series]);
   return (
     <div className="ops-table-wrap">
       <table className="ops-table">
-        <thead><tr><th scope="col">Root operation</th><th scope="col">Service</th><th scope="col">Started</th><th scope="col">Duration</th></tr></thead>
+        <thead>
+          <tr>
+            <th scope="col">Metric</th>
+            <th scope="col">Labels</th>
+            <th scope="col" className="ops-numeric">
+              Value
+            </th>
+          </tr>
+        </thead>
         <tbody>
-          {traces.map((t) => (
-            <tr key={t.trace_id}>
-              <td className="ops-trace-name"><code title={t.trace_id}>{t.root_name}</code></td>
-              <td>{t.service}</td>
-              <td>{fmtRel(t.start_time)}</td>
-              <td>
-                <div className="ops-duration">
-                  <span className="ops-duration-bar"><span className="ops-duration-fill" style={{ width: `${(t.duration_ms / max) * 100}%` }} /></span>
-                  <span className="ops-duration-value">{t.duration_ms.toLocaleString()} ms</span>
-                </div>
-              </td>
-            </tr>
-          ))}
+          {series.map((s) => {
+            const labelKey = Object.entries(s.labels)
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([k, v]) => `${k}=${v}`)
+              .join("|");
+            const heat = metricHeatLevel(s.value, max);
+            return (
+              <tr key={`${s.name}::${labelKey}`}>
+                <td className="ops-metric-name">{s.name}</td>
+                <td>
+                  <Labels labels={s.labels} />
+                </td>
+                <td className={`ops-numeric ops-metric-value ops-heat-${heat}`}>{s.value.toLocaleString()}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function Traces({ traces }: { traces: readonly OpsTrace[] }) {
+  const max = useMemo(() => Math.max(1, ...traces.map((t) => t.duration_ms)), [traces]);
+  if (traces.length === 0)
+    return (
+      <div className="ops-empty-state">
+        <Timer size={24} aria-hidden="true" />
+        <p>No recent traces.</p>
+      </div>
+    );
+  return (
+    <div className="ops-table-wrap">
+      <table className="ops-table">
+        <thead>
+          <tr>
+            <th scope="col">Root operation</th>
+            <th scope="col">Service</th>
+            <th scope="col">Started</th>
+            <th scope="col">Duration</th>
+          </tr>
+        </thead>
+        <tbody>
+          {traces.map((t) => {
+            const latency = traceLatencyClass(t.duration_ms);
+            return (
+              <tr key={t.trace_id}>
+                <td className="ops-trace-name">
+                  <strong>{t.root_name}</strong>
+                  <span className="ops-trace-id" title={t.trace_id}>
+                    {t.trace_id}
+                  </span>
+                </td>
+                <td className="ops-trace-service">{t.service}</td>
+                <td className="ops-trace-time">{fmtRel(t.start_time)}</td>
+                <td className="ops-trace-duration">
+                  <span className="ops-trace-bar-bg">
+                    <span
+                      className={`ops-trace-bar ops-trace-bar-${latency}`}
+                      style={{ width: `${(t.duration_ms / max) * 100}%` }}
+                    />
+                  </span>
+                  <span className={`ops-trace-duration-value ops-trace-duration-${latency}`}>
+                    {t.duration_ms.toLocaleString()} ms
+                  </span>
+                </td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </div>
