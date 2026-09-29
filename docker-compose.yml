@@ -119,7 +119,6 @@ services:
       dockerfile: Dockerfile
       args:
         NEXT_PUBLIC_DEMO_MODE: "false"
-        NEXT_PUBLIC_REVIEWER_NAME: ${CLAIMGUARD_REVIEWER_NAME:-reviewer-12}
     environment:
       CLAIMGUARD_API_ORIGIN: http://api:8000
     depends_on:

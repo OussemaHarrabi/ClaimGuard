@@ -1,5 +1,5 @@
-import { ReviewWorkspaceApp } from "../components/review-workspace-app";
+import { ClinicPortal } from "../components/clinic-portal";
 
 export default function Home() {
-  return <ReviewWorkspaceApp />;
+  return <ClinicPortal page="home" />;
 }

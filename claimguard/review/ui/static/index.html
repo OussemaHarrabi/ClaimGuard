@@ -28,9 +28,9 @@
           page, and NOT_IMPLEMENTED is never shown as a pass.
         </p>
         <p>
-          <strong>Reviewer identity is self-declared.</strong> This page has no login, no session
-          and no permission model: whoever types a name into the reviewer field is recorded as the
-          actor of the decision. Do not put personal data in it.
+          <strong>Reviewer identity comes from the clinic session.</strong> The API records the
+          signed-in user as the actor and rejects a different identity. This legacy page is a
+          fallback; the Next.js clinic workspace is the primary interface.
         </p>
         <p>
           <strong>Instructional oracle, not ground truth.</strong> The claims, codes and policy are
@@ -118,8 +118,8 @@
         <div id="detail-error"></div>
         <div id="detail-meta"></div>
         <label class="actor-field">
-          Reviewer (self-declared actor for every decision below)
-          <input id="detail-actor" placeholder="team or reviewer id" />
+          Signed-in reviewer for every decision below
+          <input id="detail-actor" readonly aria-readonly="true" />
         </label>
         <div id="decision-result"></div>
         <div id="detail-findings">
@@ -139,14 +139,13 @@
         <p class="muted">
           A correction is a <strong>new version</strong>: the API re-runs the 15 checks over the
           corrected envelope and leaves the original run, its results and its decisions untouched.
-          The API does not expose the submitted envelope, so this page cannot pre-fill it — paste
-          the corrected envelope as JSON below. It must carry the same
+          The saved source envelope is loaded below for editing. It must carry the same
           <code>claim_id</code> (<span id="recheck-claim-id">open a claim first</span>) or the API
           answers 409.
         </p>
         <label class="actor-field">
-          Reviewer (self-declared actor for this recheck)
-          <input id="recheck-actor" placeholder="team or reviewer id" />
+          Signed-in reviewer for this recheck
+          <input id="recheck-actor" readonly aria-readonly="true" />
         </label>
         <textarea
           id="recheck-claim"

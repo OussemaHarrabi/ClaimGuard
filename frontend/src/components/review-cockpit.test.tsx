@@ -119,8 +119,10 @@ describe("ReviewCockpit", () => {
 
     expect(screen.getByRole("heading", { name: "Claims queue" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Deterministic findings" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Draft explanation" })).toBeInTheDocument();
-    expect(screen.getAllByText("Coverage ended before the service date.")).toHaveLength(2);
+    expect(screen.getByRole("heading", { name: "Explanation & next step" })).toBeInTheDocument();
+    expect(screen.getAllByText("Coverage ended before the service date.")).toHaveLength(1);
+    expect(screen.queryByRole("navigation", { name: "Primary navigation" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "ClaimGuard review workspace" })).not.toBeInTheDocument();
     expect(
       within(screen.getByLabelText("Evidence for R004")).getByText("coverage end date"),
     ).toBeInTheDocument();
@@ -143,13 +145,10 @@ describe("ReviewCockpit", () => {
     expect(within(fallback).getByText(/unsupported citation/i)).toBeInTheDocument();
   });
 
-  it("lets the administrator use a verified SLM recommendation as an editable review note", () => {
+  it("keeps model suggestions separate from the reviewer's evidence note", () => {
     renderCockpit();
-
-    fireEvent.click(screen.getByRole("button", { name: "Use R004 recommendation as review note" }));
-    expect(screen.getByLabelText("Reviewer note for R004")).toHaveValue(
-      "Verify the service date against the eligibility source, then attach current coverage evidence.",
-    );
+    expect(screen.queryByRole("button", { name: "Use R004 recommendation as review note" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Reviewer note for R004")).toHaveValue("");
   });
 
   it("filters the queue by claim id", () => {
@@ -161,6 +160,13 @@ describe("ReviewCockpit", () => {
 
     expect(screen.getByRole("button", { name: /Open claim CLM-240044/i })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Open claim CLM-240031/i })).not.toBeInTheDocument();
+  });
+
+  it("keeps technical provenance behind a disclosure", () => {
+    renderCockpit();
+    expect(screen.getByText("benchmark-candidate")).not.toBeVisible();
+    fireEvent.click(screen.getByText("Technical provenance for R004"));
+    expect(screen.getByText("benchmark-candidate")).toBeVisible();
   });
 
   it("offers all four bounded review actions with a mandatory note", () => {
@@ -249,7 +255,9 @@ describe("ReviewCockpit", () => {
       "Confirmed against the eligibility source.",
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Recheck claim" }));
+    expect(screen.getByRole("heading", { name: "Resolve this claim" })).toBeInTheDocument();
+    expect(screen.getByText(/compare the flagged values with the source documents/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Correct claim & recheck" }));
     expect(handlers.onRecheck).toHaveBeenCalledWith("CLM-240031");
   });
 });

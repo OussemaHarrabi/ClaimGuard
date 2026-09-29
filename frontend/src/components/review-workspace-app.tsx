@@ -2,6 +2,8 @@
 
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Braces, CircleAlert, X } from "lucide-react";
+import { Input } from "./ui/input";
+import { editableEvidencePaths, readPointer, updatePointer } from "../lib/claim-editor";
 
 import { ReviewCockpit, type ReviewWorkspace } from "./review-cockpit";
 import { demoClaim, demoWorkspace } from "../lib/demo-workspace";
@@ -17,10 +19,9 @@ import {
   type QueueResponse,
 } from "../lib/review-api";
 
-const REVIEWER = process.env.NEXT_PUBLIC_REVIEWER_NAME ?? "reviewer-12";
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
-export function ReviewWorkspaceApp() {
+export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { reviewer: string; scope: "mine" | "team"; includeAll?: boolean }) {
   const [workspace, setWorkspace] = useState<ReviewWorkspace>(emptyWorkspace);
   const [queue, setQueue] = useState<QueueResponse | null>(null);
   const [busy, setBusy] = useState(true);
@@ -45,10 +46,11 @@ export function ReviewWorkspaceApp() {
         setDemo(true);
         return;
       }
-      const nextQueue = await getQueue();
+      const nextQueue = await getQueue(scope, undefined, includeAll);
       setQueue(nextQueue);
       setDemo(false);
-      const runId = preferredRunId ?? nextQueue.claims[0]?.run_id;
+      const requestedRunId = preferredRunId ?? new URLSearchParams(window.location.search).get("run");
+      const runId = nextQueue.claims.find((claim) => claim.run_id === requestedRunId)?.run_id ?? nextQueue.claims[0]?.run_id;
       if (runId) await loadSelection(nextQueue, runId);
       else setWorkspace(buildReviewWorkspace(nextQueue, null, null));
     } catch (cause) {
@@ -57,7 +59,7 @@ export function ReviewWorkspaceApp() {
     } finally {
       setBusy(false);
     }
-  }, [loadSelection]);
+  }, [includeAll, loadSelection, scope]);
 
   useEffect(() => {
     const bootstrap = window.setTimeout(() => void load(), 0);
@@ -91,13 +93,13 @@ export function ReviewWorkspaceApp() {
     setBusy(true);
     setError(null);
     try {
-      await recordDecision(runId, { ruleId, action, actor: REVIEWER, reason });
+      await recordDecision(runId, { ruleId, action, actor: reviewer, reason });
       await load(runId);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The decision could not be recorded.");
       setBusy(false);
     }
-  }, [demo, load, workspace.selected?.run.runId]);
+  }, [demo, load, reviewer, workspace.selected?.run.runId]);
 
   const openCorrection = useCallback(async (claimId: string) => {
     const runId = workspace.selected?.run.runId;
@@ -135,16 +137,34 @@ export function ReviewWorkspaceApp() {
     }
     setBusy(true);
     try {
-      const created = await recheckClaim(correction.claimId, claim, REVIEWER);
+      const created = await recheckClaim(correction.claimId, claim, reviewer);
       setCorrection(null);
       await load(created.run.run_id);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "The corrected claim could not be rechecked.");
       setBusy(false);
     }
-  }, [correction, demo, load]);
+  }, [correction, demo, load, reviewer]);
 
   const statusLabel = useMemo(() => demo ? "Demo data · read-only" : "Live review API", [demo]);
+  let parsedCorrection: Record<string, unknown> | null = null;
+  if (correction) {
+    try { parsedCorrection = JSON.parse(correction.text) as Record<string, unknown>; }
+    catch { /* The advanced editor can repair invalid JSON. */ }
+  }
+  const correctionFields = correction && parsedCorrection
+    ? editableEvidencePaths(workspace.selected?.findings ?? [], parsedCorrection)
+    : [];
+
+  function editEvidence(path: string, value: string) {
+    if (!correction) return;
+    try {
+      setCorrection({ ...correction, text: updatePointer(correction.text, path, value) });
+      setError(null);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "This field could not be edited.");
+    }
+  }
 
   return (
     <>
@@ -153,7 +173,7 @@ export function ReviewWorkspaceApp() {
         workspace={workspace}
         busy={busy}
         error={error}
-        reviewer={REVIEWER}
+        reviewer={reviewer}
         onSelectClaim={(runId) => void selectClaim(runId)}
         onRefresh={() => void load(workspace.selected?.run.runId)}
         onRecordDecision={(ruleId, action, reason) => void decide(ruleId, action, reason)}
@@ -182,14 +202,27 @@ export function ReviewWorkspaceApp() {
               <CircleAlert size={17} /> The original run stays unchanged. Saving creates a new version and reruns all deterministic checks.
             </p>
             <form onSubmit={submitCorrection}>
-              <label className="json-editor">
-                <span><Braces size={16} /> Corrected synthetic claim JSON</span>
-                <textarea
-                  value={correction.text}
-                  spellCheck={false}
-                  onChange={(event) => setCorrection({ ...correction, text: event.target.value })}
-                />
-              </label>
+              <section className="guided-fields" aria-labelledby="guided-fields-title">
+                <h3 id="guided-fields-title">Step 1: verify the flagged values</h3>
+                <p>These fields come from non-passing checks. Compare each value with the clinic documents. Change only a documented error. If a fact is missing, close this form and request information instead.</p>
+                {correctionFields.length ? <div className="guided-field-grid">{correctionFields.map((path) => {
+                  const current = readPointer(parsedCorrection, path);
+                  const numeric = typeof current === "number" || (current === null && /(?:amount|price|quantity|total)$/i.test(path));
+                  return <label key={path}><span>{path.slice(1).replaceAll("/", " → ").replaceAll("_", " ")}</span><Input type={numeric ? "number" : "text"} step={numeric ? "any" : undefined} value={current === null ? "" : String(current)} onChange={(event) => editEvidence(path, event.target.value)} /></label>;
+                })}</div> : <p>No scalar evidence fields are available. Use the advanced editor below.</p>}
+              </section>
+              <p className="correction-submit-help">Step 2: create a new claim version. ClaimGuard will rerun all deterministic checks; the original version remains in the audit history.</p>
+              <details className="advanced-json" open={!parsedCorrection}>
+                <summary><Braces size={16} /> Advanced: full claim JSON</summary>
+                <label className="json-editor">
+                  <span>Corrected synthetic claim JSON</span>
+                  <textarea
+                    value={correction.text}
+                    spellCheck={false}
+                    onChange={(event) => setCorrection({ ...correction, text: event.target.value })}
+                  />
+                </label>
+              </details>
               <div className="drawer-actions">
                 <button className="secondary-button" type="button" onClick={() => setCorrection(null)}>Cancel</button>
                 <button className="primary-button" type="submit" disabled={busy}>Create version &amp; recheck</button>

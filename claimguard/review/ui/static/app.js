@@ -3,11 +3,8 @@
 // This file fetches from the review API and puts the answers on the page. It
 // builds no HTML from strings: every node comes from `render.mjs`, which writes
 // all untrusted values as text (see its untrusted-data policy). The only values
-// this file reads from the page are the reviewer's own inputs (actor, reason,
-// filters, the pasted corrected envelope).
-//
-// The page has NO authentication: the actor field is self-declared, exactly as
-// the pack's own review page describes its reviewer identity.
+// this file reads from the page are filters, reasons, and corrected JSON.
+// Actor identity always comes from the signed clinic session.
 
 import * as render from "./render.mjs";
 
@@ -15,6 +12,8 @@ const state = {
   /** The run currently displayed, and every version opened in this page. */
   current: null,
   versions: [],
+  actor: null,
+  role: null,
 };
 
 const byId = (id) => document.getElementById(id);
@@ -50,7 +49,8 @@ function filters() {
 }
 
 async function refreshQueue() {
-  const result = await api(`/v1/queue?${filters().toString()}`);
+  const reviewer = state.role === "rcm_reviewer";
+  const result = await api(reviewer ? "/v1/my-queue" : `/v1/queue?${filters().toString()}`);
   const status = byId("queue-status");
   if (!result.ok) {
     status.replaceChildren();
@@ -62,7 +62,9 @@ async function refreshQueue() {
   status.replaceChildren(
     render.renderNotice(
       document,
-      `Filters applied: ${JSON.stringify(queue.filters)} — counts below describe the ${queue.counts.findings} finding(s) shown.`,
+      reviewer
+        ? `Your assigned claims and self-submitted, unassigned claims: ${queue.claims.length}. Filters on this legacy page apply only to team queues.`
+        : `Filters applied: ${JSON.stringify(queue.filters)} — counts below describe the ${queue.counts.findings} finding(s) shown.`,
       "info",
     ),
   );
@@ -107,7 +109,7 @@ async function openClaim(runId, claimId) {
     render.renderRunHeader(document, run),
     render.renderNotice(
       document,
-      "The reviewer field below is self-declared: this page has no login. It is sent as the decision's actor, and the API refuses a blank actor or a blank reason — leave either empty to see that refusal.",
+      `The signed-in actor is ${state.actor}. The API refuses a blank reason or an actor that differs from this clinic session.`,
       "info",
     ),
     render.renderVersions(document, state.versions, openClaim),
@@ -129,8 +131,8 @@ async function openClaim(runId, claimId) {
   byId("decisions").replaceChildren(render.renderDecisions(document, entries));
   byId("recheck-claim-id").replaceChildren(document.createTextNode(run.claim_id));
   if (!previous || previous.claim_id !== run.claim_id) {
-    // A different claim: the previously pasted envelope belongs to another claim.
-    byId("recheck-claim").value = "";
+    const source = await api(`/v1/runs/${encodeURIComponent(runId)}/claim`);
+    byId("recheck-claim").value = source.ok ? JSON.stringify(source.body.claim, null, 2) : "";
     byId("recheck-result").replaceChildren();
   }
 }
@@ -139,7 +141,7 @@ async function openClaim(runId, claimId) {
 async function decide({ rule_id, action, reason }) {
   const target = state.current;
   if (!target) return;
-  const actor = byId("detail-actor").value;
+  const actor = state.actor;
   const result = await api(`/v1/runs/${encodeURIComponent(target.run_id)}/decisions`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -185,7 +187,7 @@ async function recheck() {
   const result = await api(`/v1/claims/${encodeURIComponent(target.claim_id)}/recheck`, {
     method: "POST",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ claim: envelope, actor: byId("recheck-actor").value }),
+    body: JSON.stringify({ claim: envelope, actor: state.actor }),
   });
   if (!result.ok) {
     showError(box, "The recheck was refused", result);
@@ -218,4 +220,16 @@ byId("recheck-submit").addEventListener("click", recheck);
 // The legend is rendered from the same table the badges use, so a status can
 // never be displayed without the meaning a reviewer has to read with it.
 byId("legend").replaceChildren(render.renderLegend(document));
-refreshQueue();
+async function bootstrap() {
+  const session = await api("/v1/auth/me");
+  if (!session.ok) {
+    showError(byId("queue-error"), "Clinic sign-in is required", session);
+    return;
+  }
+  state.actor = session.body.user_id;
+  state.role = session.body.role;
+  byId("detail-actor").value = state.actor;
+  byId("recheck-actor").value = state.actor;
+  await refreshQueue();
+}
+bootstrap();

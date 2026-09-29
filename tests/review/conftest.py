@@ -37,6 +37,8 @@ import psycopg
 import pytest
 from alembic import command
 from alembic.config import Config
+from claimguard.clinic.directory import MEMBERSHIPS, USERS
+from claimguard.clinic.session import SessionSigner
 from claimguard.config import get_settings
 from claimguard.edu.explain import (
     ModelExplanationProvider,
@@ -53,7 +55,7 @@ from claimguard.review.store import (
     ReviewStore,
     build_engine,
 )
-from sqlalchemy import Engine, delete, select
+from sqlalchemy import Engine, delete, insert, select
 from sqlalchemy.engine import Connection
 
 from tests.edu import RULES_DIR, base_claim
@@ -236,19 +238,64 @@ def purge_claims(engine: Engine, claim_ids: Sequence[str]) -> None:
 
 
 @pytest.fixture
-async def client(store: ReviewStore) -> AsyncIterator[httpx.AsyncClient]:
+async def client(
+    store: ReviewStore, reviewer_session: tuple[SessionSigner, str]
+) -> AsyncIterator[httpx.AsyncClient]:
     """An in-process HTTP client for the review API (no server, no network).
 
     The explanation provider is pinned to the deterministic template, so a
     developer with ``CLAIMGUARD_EXPLAIN_MODEL`` exported runs the same suite CI
     runs: no test here reaches a network or depends on a model's wording.
     """
+    signer, token = reviewer_session
     app = create_app(
-        store=store, rules_dir=RULES_DIR, explain_provider=TemplateExplanationProvider()
+        store=store,
+        rules_dir=RULES_DIR,
+        explain_provider=TemplateExplanationProvider(),
+        signer=signer,
     )
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://review.test") as http:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://review.test",
+        cookies={"claimguard_session": token},
+    ) as http:
         yield http
+
+
+@pytest.fixture(scope="session")
+def reviewer_session(engine: Engine) -> Iterator[tuple[SessionSigner, str]]:
+    """A review-capable lead, which can also inspect the full team queue."""
+    created = False
+    with engine.begin() as connection:
+        existing = connection.execute(
+            select(USERS.c.email).where(USERS.c.user_id == "rev-1")
+        ).scalar_one_or_none()
+        if existing is None:
+            connection.execute(insert(USERS).values(user_id="rev-1", email="rev-1@review.test"))
+            connection.execute(
+                insert(MEMBERSHIPS).values(
+                    tenant_id="clinic-legacy-demo", user_id="rev-1", role="rcm_lead"
+                )
+            )
+            created = True
+        elif (
+            existing != "rev-1@review.test"
+            or connection.execute(
+                select(MEMBERSHIPS.c.role).where(
+                    MEMBERSHIPS.c.tenant_id == "clinic-legacy-demo",
+                    MEMBERSHIPS.c.user_id == "rev-1",
+                )
+            ).scalar_one_or_none()
+            != "rcm_lead"
+        ):
+            raise RuntimeError("test reviewer rev-1 already exists; refusing to overwrite it")
+    signer = SessionSigner(b"test-key-for-review-integration-0123456789")
+    yield signer, signer.issue("rev-1", "clinic-legacy-demo")
+    if created:
+        with engine.begin() as connection:
+            connection.execute(delete(MEMBERSHIPS).where(MEMBERSHIPS.c.user_id == "rev-1"))
+            connection.execute(delete(USERS).where(USERS.c.user_id == "rev-1"))
 
 
 # ---------------------------------------------------------------------------

@@ -39,10 +39,7 @@ async def test_the_page_is_served_as_html(ui_client: httpx.AsyncClient) -> None:
     body = response.text
     assert PACK_PASS_WARNING in body
     assert "NOT_IMPLEMENTED is never shown as a pass" in body
-    # The pack's own review page declares its reviewer identity self-declared; so
-    # does this one, and it says so on the page rather than in a comment.
-    assert "Reviewer identity is self-declared" in body
-    assert "no login" in body
+    assert "Reviewer identity comes from the clinic session" in body
     assert "not clinical or reimbursement ground truth" in body
     # The page is one document with four working areas and no build step.
     assert '<script type="module" src="/review/static/app.js"></script>' in body

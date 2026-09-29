@@ -18,6 +18,7 @@ from typing import Any
 
 import httpx
 import pytest
+from claimguard.clinic.session import SessionSigner
 from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.envelope import RESULT_KEYS, RULE_VERSION
 from claimguard.edu.explain import (
@@ -73,7 +74,7 @@ async def test_health_reports_the_schema_and_the_rule_catalogue(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["schema_revision"] == "0004"
+    assert body["schema_revision"] == "0010"
     assert body["database"] == "ready"
     assert body["rules_ready"] is True
     assert body["engine_rule_version"] == RULE_VERSION
@@ -267,6 +268,8 @@ async def test_the_queue_filters_and_counts_unresolved_checks(
         )
     ).json()
     assert len(passing["items"]) == 11
+    assert passing["counts"]["unresolved"] == 0
+    assert passing["claims"][0]["unresolved"] == 0
 
     assert (await client.get("/v1/queue", params={"status": "nonsense"})).status_code == 422
 
@@ -435,14 +438,19 @@ async def test_the_explanation_replacement_kept_the_fourteen_other_keys(
 
 
 async def test_a_configured_model_drafts_the_text_and_the_run_says_so(
-    store: ReviewStore, sandbox: Sandbox
+    store: ReviewStore, sandbox: Sandbox, reviewer_session: tuple[SessionSigner, str]
 ) -> None:
     """With a model configured the reviewer reads model-assisted wording, and the
     statuses are still the engine's."""
     transport = ScriptedModelTransport()
-    app = create_app(store=store, rules_dir=RULES_DIR, explain_provider=model_provider(transport))
+    signer, token = reviewer_session
+    app = create_app(
+        store=store, rules_dir=RULES_DIR, explain_provider=model_provider(transport), signer=signer
+    )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://review.test",
+        cookies={"claimguard_session": token},
     ) as http:
         envelope = sandbox.coverage_lapse()
         created = await submit(http, envelope)
@@ -466,17 +474,21 @@ async def test_a_configured_model_drafts_the_text_and_the_run_says_so(
 
 
 async def test_a_model_failure_still_creates_the_run_with_deterministic_text(
-    store: ReviewStore, sandbox: Sandbox
+    store: ReviewStore, sandbox: Sandbox, reviewer_session: tuple[SessionSigner, str]
 ) -> None:
     """A model failure never removes a finding, never fails the submission, and
     never changes a status: the run is created, with the reason recorded."""
+    signer, token = reviewer_session
     app = create_app(
         store=store,
         rules_dir=RULES_DIR,
         explain_provider=model_provider(ScriptedModelTransport(fail=True)),
+        signer=signer,
     )
     async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://review.test",
+        cookies={"claimguard_session": token},
     ) as http:
         envelope = sandbox.coverage_lapse()
         created = await submit(http, envelope)

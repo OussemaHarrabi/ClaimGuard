@@ -308,7 +308,8 @@ def test_the_queue_defaults_to_the_checks_that_need_a_human(
     everything = store.queue(QueueFilters(claim_id=envelope["claim_id"], include_all=True))
     assert len(everything.items) == 15
     assert everything.counts.findings == 15
-    assert everything.counts.unresolved == 15
+    assert everything.counts.unresolved == 1
+    assert everything.counts.resolved == 0
     assert everything.counts.by_rule_status["PASS"] == 11
     assert everything.counts.by_rule_status["NOT_APPLICABLE"] == 3
     assert everything.counts.by_review_status == {ReviewStatus.UNREVIEWED.value: 15}
