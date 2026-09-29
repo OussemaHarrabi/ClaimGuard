@@ -27,7 +27,7 @@ import re
 import sys
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 from alembic import context
 from sqlalchemy import create_engine, text
@@ -56,6 +56,24 @@ _DOWN_REVISION_RE = re.compile(
 #: Revision ids are our own file-parsed tokens; anything outside this set is
 #: rejected before it can be embedded into rendered SQL (offline mode).
 _REVISION_TOKEN_RE = re.compile(r"^[A-Za-z0-9_]+$")
+
+#: Schema and qualified name of the Alembic bookkeeping table.
+#:
+#: They MUST be pinned. The connection's default ``search_path`` is
+#: ``"$user", public`` and a schema named after the role (``claimguard``)
+#: exists, so ``"$user"`` resolves to it. An *unqualified*
+#: ``CREATE TABLE IF NOT EXISTS alembic_version`` is therefore created inside
+#: ``claimguard``, and the unqualified ``SELECT`` that follows reads that new,
+#: empty table. The runner then concludes that nothing has been applied and
+#: re-runs migration 0001, which fails with
+#: ``schema "claimguard" already exists`` — so a second
+#: ``docker compose up`` could never start the API.
+#:
+#: The table has always lived in ``public`` (it was created before migration
+#: 0001 brought the ``claimguard`` schema into existence), so pinning it there
+#: keeps existing databases working and gives fresh ones the same home.
+_VERSION_SCHEMA: Final = "public"
+_VERSION_TABLE: Final = "public.alembic_version"
 
 
 class SqlMigration:
@@ -294,8 +312,11 @@ def _split_sql_statements(sql: str) -> list[str]:
 
 
 def _ensure_version_table(connection: Connection) -> None:
+    """Create the bookkeeping table in its pinned schema, never in search_path order."""
+
     connection.exec_driver_sql(
-        "CREATE TABLE IF NOT EXISTS alembic_version ("
+        # _VERSION_TABLE is a repository-owned constant; no external input is interpolated.
+        f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} ("
         "version_num VARCHAR(32) NOT NULL,"
         "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))"
     )
@@ -303,14 +324,16 @@ def _ensure_version_table(connection: Connection) -> None:
 
 def _applied_revisions(connection: Connection) -> set[str]:
     result = connection.execute(
-        text("SELECT version_num FROM alembic_version ORDER BY version_num")
+        # _VERSION_TABLE is a repository-owned constant; no external input is interpolated.
+        text(f"SELECT version_num FROM {_VERSION_TABLE} ORDER BY version_num")  # noqa: S608
     )
     return {str(row) for row in result.scalars()}
 
 
 def _record_revision(connection: Connection, revision: str) -> None:
     connection.execute(
-        text("INSERT INTO alembic_version (version_num) VALUES (:version_num)"),
+        # _VERSION_TABLE is a repository-owned constant; no external input is interpolated.
+        text(f"INSERT INTO {_VERSION_TABLE} (version_num) VALUES (:version_num)"),  # noqa: S608
         {"version_num": revision},
     )
 
@@ -368,6 +391,7 @@ def run_migrations_offline() -> None:
         url=_database_url(),
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
+        version_table_schema=_VERSION_SCHEMA,
     )
     output = context.get_context().output_buffer
     migrations = _order_migrations(
@@ -383,7 +407,8 @@ def run_migrations_offline() -> None:
         output.write("\n")
     output.write("-- version bookkeeping (identical to online mode)\n")
     output.write(
-        "CREATE TABLE IF NOT EXISTS alembic_version (\n"
+        # _VERSION_TABLE is a repository-owned constant; not external input.
+        f"CREATE TABLE IF NOT EXISTS {_VERSION_TABLE} (\n"
         "    version_num VARCHAR(32) NOT NULL,\n"
         "    CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)\n"
         ");\n"
@@ -395,7 +420,7 @@ def run_migrations_offline() -> None:
         literal = _safe_revision_literal(migration.revision)
         # `literal` is repo-owned and constrained to [A-Za-z0-9_]+ by
         # _safe_revision_literal(); not attacker input.
-        stmt = f"INSERT INTO alembic_version (version_num) VALUES ({literal});\n"  # noqa: S608
+        stmt = f"INSERT INTO {_VERSION_TABLE} (version_num) VALUES ({literal});\n"  # noqa: S608
         output.write(stmt)
     output.flush()
 
@@ -405,7 +430,11 @@ def run_migrations_online() -> None:
 
     engine = create_engine(_database_url(), poolclass=NullPool)
     with engine.connect() as connection:
-        context.configure(connection=connection, target_metadata=None)
+        context.configure(
+            connection=connection,
+            target_metadata=None,
+            version_table_schema=_VERSION_SCHEMA,
+        )
         with context.begin_transaction():
             _apply_pending(connection)
     engine.dispose()
