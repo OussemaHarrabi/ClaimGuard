@@ -221,3 +221,12 @@ The right region begins with a clearly labelled **Draft explanation**, followed 
 - **Don't** create a literal Velodoc clone or use another company's private assets, copy, or proprietary identity.
 - **Don't** imply that the AI can adjudicate, submit, or alter a deterministic claim outcome.
 - **Don't** nest cards, use colored side stripes, use gradient text, or hide critical actions behind hover.
+
+---
+
+## Dark operations surface
+
+The technical-manager observability surface (`/ops` and the seven technical
+workspace pages) uses a separate, **dark-first** system documented in
+[`DESIGN-OPS.md`](DESIGN-OPS.md). This file remains authoritative for the light
+Evidence Desk screens — review, queue, findings, intake and clinic admin.
