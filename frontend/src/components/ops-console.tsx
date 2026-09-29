@@ -38,15 +38,41 @@ type Loadable<T> =
   | { state: "error"; message: string };
 type OpsSnapshot = {
   overview: OpsOverviewResponse;
-  metrics: OpsMetricsResponse;
-  traces: OpsTracesResponse;
-  audit: OpsAuditResponse;
+  metrics: OpsMetricsResponse | null;
+  traces: OpsTracesResponse | null;
+  audit: OpsAuditResponse | null;
 };
 
 const fetchSnapshot = async (
   window: OpsWindow,
+  section: OpsConsoleProps["section"],
   signal?: AbortSignal,
 ): Promise<OpsSnapshot> => {
+  if (section === "overview") {
+    const overview = await getOpsOverview(signal);
+    return { overview, metrics: null, traces: null, audit: null };
+  }
+  if (section === "metrics") {
+    const [overview, metrics] = await Promise.all([
+      getOpsOverview(signal),
+      getOpsMetrics(window, signal),
+    ]);
+    return { overview, metrics, traces: null, audit: null };
+  }
+  if (section === "traces") {
+    const [overview, traces] = await Promise.all([
+      getOpsOverview(signal),
+      getOpsTraces(25, signal),
+    ]);
+    return { overview, metrics: null, traces, audit: null };
+  }
+  if (section === "audit") {
+    const [overview, audit] = await Promise.all([
+      getOpsOverview(signal),
+      getOpsAudit(signal),
+    ]);
+    return { overview, metrics: null, traces: null, audit };
+  }
   const [overview, metrics, traces, audit] = await Promise.all([
     getOpsOverview(signal),
     getOpsMetrics(window, signal),
@@ -184,9 +210,17 @@ function traceLatencyClass(ms: number): "fast" | "medium" | "slow" {
 
 type OpsConsoleProps = {
   variant?: "page" | "embedded";
+  section?: "overview" | "metrics" | "traces" | "audit";
 };
 
-export function OpsConsole({ variant = "page" }: OpsConsoleProps) {
+const SECTION_TITLES: Record<OpsConsoleProps["section"] & string, { title: string; subtitle: string }> = {
+  overview: { title: "Operations", subtitle: "Technical reviewer operations overview" },
+  metrics: { title: "Metrics", subtitle: "Operational metrics" },
+  traces: { title: "Traces", subtitle: "Recent distributed traces" },
+  audit: { title: "Audit Integrity", subtitle: "Tamper-evidence audit ledger" },
+};
+
+export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
   const [window, setWindow] = useState<OpsWindow>("5m");
   const [snap, setSnap] = useState<Loadable<OpsSnapshot>>({ state: "loading" });
   const [busy, setBusy] = useState(false);
@@ -196,21 +230,21 @@ export function OpsConsole({ variant = "page" }: OpsConsoleProps) {
     async (signal?: AbortSignal) => {
       setBusy(true);
       try {
-        setSnap({ state: "ok", data: await fetchSnapshot(window, signal) });
+        setSnap({ state: "ok", data: await fetchSnapshot(window, section, signal) });
       } catch (err) {
         setSnap({ state: "error", message: fetchErrorMessage(err) });
       } finally {
         setBusy(false);
       }
     },
-    [window],
+    [window, section],
   );
 
   useEffect(() => {
     const c = new AbortController();
     const tick = async () => {
       try {
-        const data = await fetchSnapshot(window, c.signal);
+        const data = await fetchSnapshot(window, section, c.signal);
         if (c.signal.aborted) return;
         setSnap({ state: "ok", data });
       } catch (err) {
@@ -226,10 +260,16 @@ export function OpsConsole({ variant = "page" }: OpsConsoleProps) {
       c.abort();
       clearInterval(id);
     };
-  }, [window]);
+  }, [window, section]);
 
   const status = snap.state === "ok" ? snap.data.overview.status : "unknown";
   const checkedAt = snap.state === "ok" ? snap.data.overview.checked_at : null;
+  const sectionMeta = section ? SECTION_TITLES[section] : { title: "Operations Console", subtitle: "Technical reviewer operations overview" };
+
+  const showOverview = !section || section === "overview";
+  const showMetrics = !section || section === "metrics";
+  const showTraces = !section || section === "traces";
+  const showAudit = !section || section === "audit";
 
   return (
     <div className={`ops-dark ${embedded ? "ops-dark-embedded" : ""}`}>
@@ -242,10 +282,8 @@ export function OpsConsole({ variant = "page" }: OpsConsoleProps) {
             <div className="ops-title">
               <LayoutDashboard size={22} aria-hidden="true" />
               <div>
-                <h1>Operations Console</h1>
-                <p className="ops-subtitle">
-                  Technical reviewer operations overview
-                </p>
+                <h1>{sectionMeta.title}</h1>
+                <p className="ops-subtitle">{sectionMeta.subtitle}</p>
               </div>
             </div>
             <div
@@ -297,155 +335,175 @@ export function OpsConsole({ variant = "page" }: OpsConsoleProps) {
 
         {snap.state === "loading" && (
           <div className="ops-layout">
-            <section className="ops-panel" aria-label="Components">
-              <h2 className="ops-panel-title">Components</h2>
-              <Skeleton />
-            </section>
-            <section className="ops-panel" aria-label="Sources">
-              <h2 className="ops-panel-title">Source freshness</h2>
-              <Skeleton />
-            </section>
-            <section className="ops-panel" aria-label="Metrics">
-              <div className="ops-panel-header">
-                <h2 className="ops-panel-title">Metrics</h2>
-                <WindowSwitch value={window} onChange={setWindow} />
-              </div>
-              <Skeleton />
-            </section>
-            <section className="ops-panel" aria-label="Traces">
-              <h2 className="ops-panel-title">Traces</h2>
-              <Skeleton />
-            </section>
-            <section className="ops-panel" aria-label="Audit integrity">
-              <h2 className="ops-panel-title">Audit integrity</h2>
-              <Skeleton />
-            </section>
+            {showOverview && (
+              <>
+                <section className="ops-panel" aria-label="Components">
+                  <h2 className="ops-panel-title">Components</h2>
+                  <Skeleton />
+                </section>
+                <section className="ops-panel" aria-label="Sources">
+                  <h2 className="ops-panel-title">Source freshness</h2>
+                  <Skeleton />
+                </section>
+              </>
+            )}
+            {showMetrics && (
+              <section className="ops-panel" aria-label="Metrics">
+                <div className="ops-panel-header">
+                  <h2 className="ops-panel-title">Metrics</h2>
+                  <WindowSwitch value={window} onChange={setWindow} />
+                </div>
+                <Skeleton />
+              </section>
+            )}
+            {showTraces && (
+              <section className="ops-panel" aria-label="Traces">
+                <h2 className="ops-panel-title">Traces</h2>
+                <Skeleton />
+              </section>
+            )}
+            {showAudit && (
+              <section className="ops-panel" aria-label="Audit integrity">
+                <h2 className="ops-panel-title">Audit integrity</h2>
+                <Skeleton />
+              </section>
+            )}
           </div>
         )}
 
         {snap.state === "ok" && (
           <div className="ops-layout">
-            <section className="ops-panel" aria-label="Components">
-              <h2 className="ops-panel-title">Components</h2>
-              <div className="ops-card-grid">
-                {snap.data.overview.components.map((c) => (
-                  <div
-                    key={c.name}
-                    className={`ops-card ops-card-${tone(c.state)}`}
-                  >
-                    <div className="ops-card-top">
-                      {componentIcon(c.name)}
-                      <StateBadge state={c.state} />
-                    </div>
-                    <div className="ops-card-body">
-                      <strong>{c.name}</strong>
-                      <p>{c.detail ?? "No detail provided."}</p>
-                    </div>
-                  </div>
-                ))}
-                {snap.data.overview.components.length === 0 && (
-                  <p className="ops-empty">No components reported.</p>
-                )}
-              </div>
-            </section>
-
-            <section className="ops-panel" aria-label="Sources">
-              <h2 className="ops-panel-title">Source freshness</h2>
-              <div className="ops-card-grid">
-                {snap.data.overview.sources.map((s) => (
-                  <div
-                    key={s.name}
-                    className={`ops-card ops-card-${tone(s.state)} ${s.state === "stale" ? "ops-card-stale" : ""} ${s.state === "unavailable" ? "ops-card-unavailable" : ""}`}
-                  >
-                    <div className="ops-card-top">
-                      {sourceIcon(s.state)}
-                      <StateBadge state={s.state} />
-                    </div>
-                    <div className="ops-card-body">
-                      <strong>{s.name}</strong>
-                      <p>{s.detail ?? "No detail provided."}</p>
-                      <div className="ops-source-meta">
-                        <span>
-                          <Clock size={12} aria-hidden="true" />
-                          Last data: {fmtRel(s.last_data_at)} (
-                          {fmtTime(s.last_data_at)})
-                        </span>
+            {showOverview && (
+              <>
+                <section className="ops-panel" aria-label="Components">
+                  <h2 className="ops-panel-title">Components</h2>
+                  <div className="ops-card-grid">
+                    {snap.data.overview.components.map((c) => (
+                      <div
+                        key={c.name}
+                        className={`ops-card ops-card-${tone(c.state)}`}
+                      >
+                        <div className="ops-card-top">
+                          {componentIcon(c.name)}
+                          <StateBadge state={c.state} />
+                        </div>
+                        <div className="ops-card-body">
+                          <strong>{c.name}</strong>
+                          <p>{c.detail ?? "No detail provided."}</p>
+                        </div>
                       </div>
-                    </div>
+                    ))}
+                    {snap.data.overview.components.length === 0 && (
+                      <p className="ops-empty">No components reported.</p>
+                    )}
                   </div>
-                ))}
-                {snap.data.overview.sources.length === 0 && (
-                  <p className="ops-empty">No sources reported.</p>
-                )}
-              </div>
-            </section>
+                </section>
 
-            <section className="ops-panel" aria-label="Metrics">
-              <div className="ops-panel-header">
-                <h2 className="ops-panel-title">Metrics</h2>
-                <WindowSwitch value={window} onChange={setWindow} />
-              </div>
-              {snap.data.metrics.series.length === 0 ? (
-                <div className="ops-empty-state">
-                  <Activity size={24} aria-hidden="true" />
-                  <p>No metrics available for this window.</p>
-                  <small>Source state: {snap.data.metrics.source.state}</small>
+                <section className="ops-panel" aria-label="Sources">
+                  <h2 className="ops-panel-title">Source freshness</h2>
+                  <div className="ops-card-grid">
+                    {snap.data.overview.sources.map((s) => (
+                      <div
+                        key={s.name}
+                        className={`ops-card ops-card-${tone(s.state)} ${s.state === "stale" ? "ops-card-stale" : ""} ${s.state === "unavailable" ? "ops-card-unavailable" : ""}`}
+                      >
+                        <div className="ops-card-top">
+                          {sourceIcon(s.state)}
+                          <StateBadge state={s.state} />
+                        </div>
+                        <div className="ops-card-body">
+                          <strong>{s.name}</strong>
+                          <p>{s.detail ?? "No detail provided."}</p>
+                          <div className="ops-source-meta">
+                            <span>
+                              <Clock size={12} aria-hidden="true" />
+                              Last data: {fmtRel(s.last_data_at)} (
+                              {fmtTime(s.last_data_at)})
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {snap.data.overview.sources.length === 0 && (
+                      <p className="ops-empty">No sources reported.</p>
+                    )}
+                  </div>
+                </section>
+
+                <section
+                  className="ops-version-strip"
+                  aria-label="Version information"
+                >
+                  <span>
+                    <strong>Rule engine</strong>{" "}
+                    {snap.data.overview.versions.engine_rule_version}
+                  </span>
+                  <span>
+                    <strong>Schema</strong>{" "}
+                    {snap.data.overview.versions.schema_revision ?? "—"}
+                  </span>
+                  <span>
+                    <strong>Service</strong>{" "}
+                    {snap.data.overview.versions.service_name}
+                  </span>
+                </section>
+              </>
+            )}
+
+            {showMetrics && snap.data.metrics && (
+              <section className="ops-panel" aria-label="Metrics">
+                <div className="ops-panel-header">
+                  <h2 className="ops-panel-title">Metrics</h2>
+                  <WindowSwitch value={window} onChange={setWindow} />
                 </div>
-              ) : (
-                <MetricsTable series={snap.data.metrics.series} />
-              )}
-            </section>
-
-            <section className="ops-panel" aria-label="Traces">
-              <h2 className="ops-panel-title">Traces</h2>
-              <Traces traces={snap.data.traces.traces} />
-            </section>
-
-            <section
-              className={`ops-audit-banner ${snap.data.audit.intact ? "ops-audit-ok" : "ops-audit-broken"}`}
-              aria-label="Audit integrity"
-            >
-              <div className="ops-audit-icon">
-                {snap.data.audit.intact ? (
-                  <ShieldAlert size={22} aria-hidden="true" />
+                {snap.data.metrics.series.length === 0 ? (
+                  <div className="ops-empty-state">
+                    <Activity size={24} aria-hidden="true" />
+                    <p>No metrics available for this window.</p>
+                    <small>Source state: {snap.data.metrics.source.state}</small>
+                  </div>
                 ) : (
-                  <XCircle size={22} aria-hidden="true" />
+                  <MetricsTable series={snap.data.metrics.series} />
                 )}
-              </div>
-              <div className="ops-audit-body">
-                <h2>
-                  {snap.data.audit.intact
-                    ? "Audit chain intact"
-                    : "Audit chain integrity failure"}
-                </h2>
-                <p>
-                  {snap.data.audit.intact
-                    ? `Hash-chained audit ledger verified. ${snap.data.audit.event_count.toLocaleString()} events.`
-                    : "Audit ledger integrity check failed. Escalate immediately."}
-                </p>
-                <span className="ops-checked-at">
-                  Checked {fmtRel(snap.data.audit.checked_at)}
-                </span>
-              </div>
-            </section>
+              </section>
+            )}
 
-            <section
-              className="ops-version-strip"
-              aria-label="Version information"
-            >
-              <span>
-                <strong>Rule engine</strong>{" "}
-                {snap.data.overview.versions.engine_rule_version}
-              </span>
-              <span>
-                <strong>Schema</strong>{" "}
-                {snap.data.overview.versions.schema_revision ?? "—"}
-              </span>
-              <span>
-                <strong>Service</strong>{" "}
-                {snap.data.overview.versions.service_name}
-              </span>
-            </section>
+            {showTraces && snap.data.traces && (
+              <section className="ops-panel" aria-label="Traces">
+                <h2 className="ops-panel-title">Traces</h2>
+                <Traces traces={snap.data.traces.traces} />
+              </section>
+            )}
+
+            {showAudit && snap.data.audit && (
+              <section
+                className={`ops-audit-banner ${snap.data.audit.intact ? "ops-audit-ok" : "ops-audit-broken"}`}
+                aria-label="Audit integrity"
+              >
+                <div className="ops-audit-icon">
+                  {snap.data.audit.intact ? (
+                    <ShieldAlert size={22} aria-hidden="true" />
+                  ) : (
+                    <XCircle size={22} aria-hidden="true" />
+                  )}
+                </div>
+                <div className="ops-audit-body">
+                  <h2>
+                    {snap.data.audit.intact
+                      ? "Audit chain intact"
+                      : "Audit chain integrity failure"}
+                  </h2>
+                  <p>
+                    {snap.data.audit.intact
+                      ? `Hash-chained audit ledger verified. ${snap.data.audit.event_count.toLocaleString()} events.`
+                      : "Audit ledger integrity check failed. Escalate immediately."}
+                  </p>
+                  <span className="ops-checked-at">
+                    Checked {fmtRel(snap.data.audit.checked_at)}
+                  </span>
+                </div>
+              </section>
+            )}
           </div>
         )}
       </main>

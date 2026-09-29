@@ -30,8 +30,9 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   activity: Activity, assignments: Workflow, escalations: ShieldEllipsis,
   "review-quality": BarChart3, overview: LayoutDashboard, departments: Workflow,
   "team-access": Users, analytics: BarChart3, audit: ShieldCheck,
-  operations: Gauge, "intake-operations": FolderInput, versions: ListChecks,
-  "redacted-logs": FileText, "audit-integrity": ShieldCheck, configuration: Settings2,
+  operations: Gauge, metrics: BarChart3, traces: Activity,
+  "intake-operations": FolderInput, versions: ListChecks,
+  "audit-integrity": ShieldCheck, configuration: Settings2,
 };
 
 const NAVIGATION: Record<ClinicRole, Destination[]> = {
@@ -62,10 +63,11 @@ const NAVIGATION: Record<ClinicRole, Destination[]> = {
   ],
   technical_manager: [
     { label: "Operations", page: "operations" },
-    { label: "Intake Jobs", page: "intake-operations" },
-    { label: "Model & Rule Versions", page: "versions" },
-    { label: "Redacted Logs", page: "redacted-logs" },
+    { label: "Metrics", page: "metrics" },
+    { label: "Traces", page: "traces" },
     { label: "Audit Integrity", page: "audit-integrity" },
+    { label: "Intake Jobs", page: "intake-operations" },
+    { label: "Versions", page: "versions" },
     { label: "Configuration", page: "configuration" },
   ],
 };
@@ -179,21 +181,24 @@ export function ClinicPortal({ page }: { page: string }) {
           <Button type="button" variant="outline" onClick={() => void leave()}>Sign out</Button>
         </div>
       </aside>
-      <div className="clinic-main" role={cockpit ? undefined : "main"}>
+      <div className={`clinic-main ${session.role === "technical_manager" ? "ops-dark" : ""}`} role={cockpit ? undefined : "main"}>
         {error ? <p role="alert" className="clinic-error">{error}</p> : null}
         {!selected ? <section><h1>Access denied</h1><p>This page is not available to your role.</p></section> : null}
         {selected && cockpit ? (
           <ReviewWorkspaceApp reviewer={session.user_id} scope={["team-queue", "all-claims"].includes(activePage) ? "team" : "mine"} includeAll={activePage === "all-claims"} />
         ) : null}
         {selected && activePage === "assignments" ? <AssignmentsPage claimPage={session.role === "clinic_admin" ? "all-claims" : "team-queue"} /> : null}
-        {selected && activePage === "operations" ? <OpsConsole variant="embedded" /> : null}
+        {selected && activePage === "operations" ? <OpsConsole variant="embedded" section="overview" /> : null}
+        {selected && activePage === "metrics" ? <OpsConsole variant="embedded" section="metrics" /> : null}
+        {selected && activePage === "traces" ? <OpsConsole variant="embedded" section="traces" /> : null}
+        {selected && activePage === "audit-integrity" ? <OpsConsole variant="embedded" section="audit" /> : null}
         {selected && activePage === "team-access" ? <TeamAccessPage /> : null}
         {selected && activePage === "departments" ? <DepartmentsPage /> : null}
         {selected && activePage === "document-intake" ? <DocumentIntakePage /> : null}
         {selected && activePage === "requests" ? <WorkItemsPage kind="requests" /> : null}
         {selected && activePage === "escalations" ? <WorkItemsPage kind="escalations" /> : null}
         {selected && activePage === "configuration" ? <ConfigurationPage /> : null}
-        {selected && ["activity", "review-quality", "overview", "analytics", "audit", "intake-operations", "versions", "redacted-logs", "audit-integrity"].includes(activePage) ? <ClinicReportPage page={activePage} /> : null}
+        {selected && ["activity", "review-quality", "overview", "analytics", "audit", "intake-operations", "versions"].includes(activePage) ? <ClinicReportPage page={activePage} /> : null}
       </div>
     </div>
   );

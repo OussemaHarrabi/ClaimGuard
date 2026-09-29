@@ -1363,3 +1363,96 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
     padding: 14px 12px 28px;
   }
 }
+
+/* Dark overrides for clinic report/configuration pages rendered inside .ops-dark */
+.ops-dark .clinic-page {
+  background: var(--ops-canvas);
+  color: var(--ops-text);
+}
+
+.ops-dark .clinic-page-heading h1 {
+  color: var(--ops-text);
+}
+
+.ops-dark .clinic-page > p {
+  color: var(--ops-muted);
+}
+
+.ops-dark .clinic-page .eyebrow {
+  color: var(--ops-primary);
+}
+
+.ops-dark .clinic-table-wrap {
+  border-color: var(--ops-border);
+  background: var(--ops-panel);
+}
+
+.ops-dark .clinic-table th {
+  background: var(--ops-raised);
+  color: var(--ops-muted);
+}
+
+.ops-dark .clinic-table td {
+  border-bottom-color: var(--ops-border);
+  color: var(--ops-text);
+}
+
+.ops-dark .clinic-table tbody tr:hover {
+  background: oklch(28% 0.035 265 / 0.5);
+}
+
+.ops-dark .clinic-metrics > div,
+.ops-dark .clinic-metrics > [data-slot="card"] {
+  border-color: var(--ops-border);
+  background: var(--ops-panel);
+  box-shadow: 0 5px 18px oklch(12% 0.03 265 / 0.12);
+}
+
+.ops-dark .clinic-metrics > div span,
+.ops-dark .clinic-metrics > [data-slot="card"] span {
+  color: var(--ops-muted);
+}
+
+.ops-dark .clinic-metrics > div strong,
+.ops-dark .clinic-metrics > [data-slot="card"] strong {
+  color: var(--ops-text);
+}
+
+.ops-dark .clinic-empty {
+  border-color: var(--ops-border-strong);
+  background: var(--ops-panel);
+  color: var(--ops-muted);
+}
+
+.ops-dark .clinic-error {
+  background: oklch(22% 0.05 25 / 0.45);
+  color: var(--ops-danger);
+}
+
+.ops-dark .clinic-success {
+  background: oklch(22% 0.06 155 / 0.45);
+  color: var(--ops-success);
+}
+
+.ops-dark .clinic-config-card {
+  border-color: var(--ops-border);
+  background: var(--ops-panel);
+}
+
+.ops-dark .clinic-config-card h2 {
+  color: var(--ops-text);
+}
+
+.ops-dark .clinic-config-card p {
+  color: var(--ops-muted);
+}
+
+.ops-dark .clinic-report-section h2 {
+  color: var(--ops-text);
+}
+
+.ops-dark [data-slot="card"] {
+  background: var(--ops-panel);
+  color: var(--ops-text);
+  --tw-ring-color: oklch(100% 0 0 / 0.1);
+}
