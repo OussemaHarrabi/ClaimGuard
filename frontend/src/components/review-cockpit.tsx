@@ -4,7 +4,6 @@ import { useState } from "react";
 import {
   AlertTriangle,
   Check,
-  ChevronDown,
   CircleAlert,
   FileCheck2,
   History,
@@ -13,6 +12,10 @@ import {
   ShieldCheck,
   Sparkles,
 } from "lucide-react";
+import { Button } from "./ui/button";
+import { Badge } from "./ui/badge";
+import { Input } from "./ui/input";
+import { Textarea } from "./ui/textarea";
 
 export type Evidence = {
   readonly path: string;
@@ -100,6 +103,23 @@ const ALL_REVIEW_ACTIONS: readonly ReviewAction[] = [
   "mark_corrected_for_recheck",
 ];
 
+const RULE_TITLES: Record<string, string> = {
+  R001: "Required claim information", R002: "Service and submission chronology",
+  R003: "Coverage active on service date", R004: "Member and beneficiary consistency",
+  R005: "Provider in the supplied network", R006: "Possible duplicate service lines",
+  R007: "Line arithmetic", R008: "Required authorization reference",
+  R009: "Authorization record matches service", R010: "Required supporting document",
+  R011: "Service code in fictional catalogue", R012: "Claim total equals line amounts",
+  R013: "Quantity and price limits", R014: "Submission window",
+  R015: "Currency matches policy",
+};
+
+function reviewerExplanation(finding: Finding): string {
+  const detected = finding.explanation.match(/Detected:\s*(.*?)\.\s*Evidence\s*\(/s)?.[1];
+  if (detected) return `Issue: ${detected.charAt(0).toUpperCase()}${detected.slice(1)}.`;
+  return finding.explanation.replace(/^\[deterministic\]\s*/, "");
+}
+
 const ALLOWED_ACTIONS_BY_STATUS: Readonly<Record<string, readonly ReviewAction[]>> = {
   unreviewed: ALL_REVIEW_ACTIONS,
   info_requested: ALL_REVIEW_ACTIONS,
@@ -167,7 +187,6 @@ export function ReviewCockpit({
   workspace,
   busy,
   error,
-  reviewer,
   onSelectClaim,
   onRefresh,
   onRecordDecision,
@@ -193,38 +212,6 @@ export function ReviewCockpit({
         Skip to review workspace
       </a>
 
-      <header className="topbar">
-        <a className="brand" href="#review-main" aria-label="ClaimGuard review workspace">
-          <span className="brand-mark" aria-hidden="true">
-            <ShieldCheck size={21} strokeWidth={2.2} />
-          </span>
-          <span>ClaimGuard</span>
-        </a>
-
-        <nav className="primary-nav" aria-label="Primary navigation">
-          <a className="nav-link active" href="#queue" aria-current="page">
-            Queue
-          </a>
-          <a className="nav-link" href="#findings">
-            Review
-          </a>
-          <a className="nav-link" href="#audit">
-            Audit
-          </a>
-        </nav>
-
-        <div className="reviewer">
-          <span className="avatar" aria-hidden="true">
-            {reviewer.slice(0, 2).toUpperCase()}
-          </span>
-          <span className="reviewer-copy">
-            <strong>{reviewer}</strong>
-            <span>Claims reviewer</span>
-          </span>
-          <ChevronDown size={16} aria-hidden="true" />
-        </div>
-      </header>
-
       {error ? (
         <div className="global-error" role="alert">
           <CircleAlert size={18} aria-hidden="true" />
@@ -242,22 +229,24 @@ export function ReviewCockpit({
               <p className="eyebrow">Review workspace</p>
               <h1 id="queue-title">Claims queue</h1>
             </div>
-            <button
+            <Button
               className="icon-button"
+              variant="outline"
+              size="icon"
               type="button"
               aria-label="Refresh claims queue"
               onClick={onRefresh}
               disabled={busy}
             >
               <RefreshCw size={18} aria-hidden="true" />
-            </button>
+            </Button>
           </div>
 
           <label className="search-field">
             <span>Search claims</span>
             <span className="search-control">
               <Search size={17} aria-hidden="true" />
-              <input
+              <Input
                 type="search"
                 placeholder="Claim ID"
                 value={claimQuery}
@@ -320,9 +309,9 @@ export function ReviewCockpit({
                   <p className="eyebrow">Selected claim</p>
                   <div className="claim-title-line">
                     <h2>{selected.run.claimId}</h2>
-                    <span className={`status-chip ${selectedUnresolved ? "danger" : "success"}`}>
+                    <Badge className={`status-chip ${selectedUnresolved ? "danger" : "success"}`} variant={selectedUnresolved ? "destructive" : "secondary"}>
                       {selectedUnresolved ? "Needs review" : "Review complete"}
-                    </span>
+                    </Badge>
                   </div>
                 </div>
                 <dl className="run-facts">
@@ -340,6 +329,21 @@ export function ReviewCockpit({
                   </div>
                 </dl>
               </header>
+
+              {selectedUnresolved ? (
+                <section className="review-resolution" aria-labelledby="review-resolution-title">
+                  <div>
+                    <p className="eyebrow">Next action</p>
+                    <h3 id="review-resolution-title">Resolve this claim</h3>
+                    <p>Compare the flagged values with the source documents. If a value is wrong, correct only what the documents support. Then create a new version to rerun the checks.</p>
+                    <p>If evidence is missing, add a reviewer note below and request information instead.</p>
+                  </div>
+                  <Button className="primary-button" type="button" disabled={busy} onClick={() => onRecheck(selected.run.claimId)}>
+                    <RefreshCw size={17} aria-hidden="true" />
+                    Correct claim &amp; recheck
+                  </Button>
+                </section>
+              ) : null}
 
               <div className="section-heading">
                 <div>
@@ -359,13 +363,12 @@ export function ReviewCockpit({
                       <div className="finding-title">
                         <div>
                           <span className="rule-id">{finding.ruleId}</span>
-                          <h3>{finding.explanation}</h3>
+                          <h3>{RULE_TITLES[finding.ruleId] ?? `Check ${finding.ruleId}`}</h3>
                         </div>
-                        <span className={`status-chip ${statusTone(finding.status)}`}>
+                        <Badge className={`status-chip ${statusTone(finding.status)}`} variant={finding.status === "FAIL" ? "destructive" : "secondary"}>
                           {titleCase(finding.severity)} · {titleCase(finding.status)}
-                        </span>
+                        </Badge>
                       </div>
-                      <p className="corrective-action">{finding.correctiveAction}</p>
                       <div className="evidence-list" aria-label={`Evidence for ${finding.ruleId}`}>
                         {finding.evidence.map((entry) => (
                           <span
@@ -380,7 +383,7 @@ export function ReviewCockpit({
                       <div className="finding-actions">
                         <label className="review-note">
                           <span>Reviewer note for {finding.ruleId}</span>
-                          <textarea
+                          <Textarea
                             rows={2}
                             value={reviewNotes[finding.ruleId] ?? ""}
                             placeholder="Record the evidence behind your decision"
@@ -392,8 +395,10 @@ export function ReviewCockpit({
                             }
                           />
                         </label>
-                        <button
+                        <p className="review-decision-help">These decisions record your review; they do not change claim fields.</p>
+                        <Button
                           className="text-button"
+                          variant="outline"
                           type="button"
                           disabled={decisionDisabled(
                             finding,
@@ -410,9 +415,10 @@ export function ReviewCockpit({
                           }
                         >
                           Request information
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           className="text-button"
+                          variant="outline"
                           type="button"
                           disabled={decisionDisabled(
                             finding,
@@ -429,9 +435,10 @@ export function ReviewCockpit({
                           }
                         >
                           Confirm issue
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           className="text-button"
+                          variant="outline"
                           type="button"
                           disabled={decisionDisabled(
                             finding,
@@ -448,9 +455,10 @@ export function ReviewCockpit({
                           }
                         >
                           Dismiss with reason
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           className="text-button"
+                          variant="outline"
                           type="button"
                           disabled={decisionDisabled(
                             finding,
@@ -467,7 +475,7 @@ export function ReviewCockpit({
                           }
                         >
                           Mark corrected for recheck
-                        </button>
+                        </Button>
                         <span>{titleCase(finding.reviewStatus)}</span>
                       </div>
                     </div>
@@ -475,16 +483,6 @@ export function ReviewCockpit({
                 ))}
               </div>
 
-              <footer className="findings-actions-bar">
-                <button
-                  className="primary-button"
-                  type="button"
-                  onClick={() => onRecheck(selected.run.claimId)}
-                >
-                  <RefreshCw size={17} aria-hidden="true" />
-                  Recheck claim
-                </button>
-              </footer>
             </>
           ) : (
             <div className="empty-state">
@@ -498,8 +496,8 @@ export function ReviewCockpit({
         <aside className="explanation-panel" aria-labelledby="explanation-title">
           <div className="section-heading explanation-heading">
             <div>
-              <p className="eyebrow">Bounded AI assistance</p>
-              <h2 id="explanation-title">Draft explanation</h2>
+              <p className="eyebrow">Human-readable guidance</p>
+              <h2 id="explanation-title">Explanation &amp; next step</h2>
             </div>
             <span className="ai-mark" aria-hidden="true">
               <Sparkles size={17} />
@@ -523,7 +521,7 @@ export function ReviewCockpit({
                     ? "Safe fallback recommendation"
                     : finding.provenance.source === "model"
                       ? "SLM correction recommendation"
-                      : "Deterministic recommendation";
+                      : "Rule-based next step";
                   return (
                     <article
                     className="explanation-block"
@@ -540,7 +538,7 @@ export function ReviewCockpit({
                       </span>
                       <span>{finding.ruleId}</span>
                     </div>
-                    <p>{finding.explanation}</p>
+                    <p>{reviewerExplanation(finding)}</p>
                     <section
                       className="correction-recommendation"
                       aria-label={`${recommendationKind} for ${finding.ruleId}`}
@@ -548,20 +546,8 @@ export function ReviewCockpit({
                       <span>{recommendationKind}</span>
                       <p>{finding.correctionRecommendation}</p>
                       <small>Human review required · no claim field is changed automatically.</small>
-                      <button
-                        aria-label={`Use ${finding.ruleId} recommendation as review note`}
-                        className="recommendation-button"
-                        onClick={() =>
-                          setReviewNotes((current) => ({
-                            ...current,
-                            [finding.ruleId]: finding.correctionRecommendation,
-                          }))
-                        }
-                        type="button"
-                      >
-                        Use as editable note
-                      </button>
                     </section>
+                    <details className="technical-provenance"><summary>Technical provenance for {finding.ruleId}</summary>
                     <dl className="provenance-details" aria-label={`Provenance for ${finding.ruleId}`}>
                       <div>
                         <dt>Provider</dt>
@@ -592,6 +578,7 @@ export function ReviewCockpit({
                         </dd>
                       </div>
                     </dl>
+                    </details>
                     <div className="citation-row">
                       {finding.evidence.map((entry, index) => (
                         <span className="citation" key={entry.path}>
@@ -609,26 +596,6 @@ export function ReviewCockpit({
                   );
                 })}
               </div>
-
-              <section className="suggestion" aria-labelledby="suggestion-title">
-                <div className="suggestion-title">
-                  <span className="suggestion-icon" aria-hidden="true">
-                    <FileCheck2 size={17} />
-                  </span>
-                  <div>
-                    <p className="eyebrow">Human approval required</p>
-                    <h3 id="suggestion-title">Suggested correction</h3>
-                  </div>
-                </div>
-                <p>{selected.findings[0]?.correctiveAction ?? "No correction proposed."}</p>
-                <button
-                  className="secondary-button full-width"
-                  type="button"
-                  onClick={() => onRecheck(selected.run.claimId)}
-                >
-                  Review correction details
-                </button>
-              </section>
 
               <section className="audit-preview" id="audit" aria-labelledby="audit-title">
                 <div className="audit-heading">

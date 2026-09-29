@@ -27,20 +27,24 @@ import shutil
 import subprocess
 from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Final
+from typing import Final, cast
+from unittest.mock import Mock
 
 import httpx
 import pytest
+from claimguard.clinic.access import Role
+from claimguard.clinic.directory import ClinicDirectory
+from claimguard.clinic.session import SessionSigner
 from claimguard.review.app import create_app
 
 from tests.edu import RULES_DIR
 
 # Re-exported so pytest finds them in this test package's conftest chain: the
 # database machinery (migrations, row cleanup) stays owned by tests/review.
-from tests.review.conftest import client, engine, sandbox, store
+from tests.review.conftest import client, engine, reviewer_session, sandbox, store
 
 #: The fixtures this conftest binds for ``tests/review_ui`` (see the note above).
-__all__ = ["client", "engine", "sandbox", "store"]
+__all__ = ["client", "engine", "reviewer_session", "sandbox", "store"]
 
 #: This directory: where the harness and the DOM shim live.
 HERE: Final[Path] = Path(__file__).resolve().parent
@@ -73,8 +77,19 @@ def run_node(*args: str) -> str:
 
 @pytest.fixture
 async def ui_client() -> AsyncIterator[httpx.AsyncClient]:
-    """The app that serves the page. No request here reaches the database."""
-    app = create_app(rules_dir=RULES_DIR)
+    """A signed static-page client; no request here reaches the database."""
+    signer = SessionSigner(b"test-key-for-static-review-page-012345")
+    directory = Mock(spec=ClinicDirectory)
+    directory.membership.return_value = Role.RCM_LEAD
+    app = create_app(
+        rules_dir=RULES_DIR,
+        signer=signer,
+        directory=cast(ClinicDirectory, directory),
+    )
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://review.test") as http:
+    async with httpx.AsyncClient(
+        transport=transport,
+        base_url="http://review.test",
+        cookies={"claimguard_session": signer.issue("rev-ui", "clinic-legacy-demo")},
+    ) as http:
         yield http

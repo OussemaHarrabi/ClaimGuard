@@ -97,6 +97,9 @@ class _UnmigratedStore(ReviewStore):
     def __init__(self) -> None:
         pass
 
+    def for_tenant(self, tenant_id: str) -> ReviewStore:
+        return self
+
     def schema_revision(self) -> str | None:
         return None
 
@@ -117,6 +120,9 @@ class _ReadyStore(ReviewStore):
     def __init__(self) -> None:
         pass
 
+    def for_tenant(self, tenant_id: str) -> ReviewStore:
+        return self
+
     def schema_revision(self) -> str | None:
         return SCHEMA_REVISION
 
@@ -124,11 +130,29 @@ class _ReadyStore(ReviewStore):
         """Nothing to check: no query is ever issued."""
 
 
-async def _client(store: ReviewStore, rules_dir: str | Path) -> httpx.AsyncClient:
+async def _client(store: ReviewStore, rules_dir: str | Path | None) -> httpx.AsyncClient:
+    from claimguard.clinic.access import Role
+    from claimguard.clinic.directory import ClinicDirectory
+    from claimguard.clinic.session import SessionSigner
+
+    class DirectoryStub:
+        def membership(self, user_id: str, tenant_id: str) -> Role | None:
+            return Role.RCM_LEAD if (user_id, tenant_id) == ("r", "clinic-legacy-demo") else None
+
+    signer = SessionSigner(b"test-key-for-review-config-0123456789")
     app = review_app.create_app(
-        store=store, rules_dir=rules_dir, explain_provider=TemplateExplanationProvider()
+        store=store,
+        rules_dir=rules_dir,
+        explain_provider=TemplateExplanationProvider(),
+        signer=signer,
+        directory=cast(ClinicDirectory, DirectoryStub()),
     )
-    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://review.test")
+    token = signer.issue("r", "clinic-legacy-demo")
+    return httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app),
+        base_url="http://review.test",
+        cookies={"claimguard_session": token},
+    )
 
 
 async def _assert_catalogue_503(client: httpx.AsyncClient, envelope: dict[str, Any]) -> None:
@@ -193,10 +217,7 @@ async def test_an_env_configured_but_unusable_catalogue_is_also_a_structured_503
     monkeypatch.setenv(review_app.RULES_DIR_ENV, str(tmp_path))
     monkeypatch.delenv(review_app.PACK_ROOT_ENV, raising=False)
     store = cast(ReviewStore, _ReadyStore())
-    app = review_app.create_app(store=store, explain_provider=TemplateExplanationProvider())
-    async with httpx.AsyncClient(
-        transport=httpx.ASGITransport(app=app), base_url="http://review.test"
-    ) as client:
+    async with await _client(store, None) as client:
         await _assert_catalogue_503(client, base_claim())
 
 

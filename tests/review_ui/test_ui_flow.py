@@ -117,7 +117,7 @@ async def test_the_decision_round_trip_shows_the_apis_own_refusal(
         json={
             "rule_id": FAILING_RULE,
             "action": "confirm_issue",
-            "actor": "rev-ui",
+            "actor": "rev-1",
             "reason": "  ",
         },
     )
@@ -132,7 +132,7 @@ async def test_the_decision_round_trip_shows_the_apis_own_refusal(
         json={
             "rule_id": FAILING_RULE,
             "action": "dismiss_with_reason",
-            "actor": "rev-ui",
+            "actor": "rev-1",
             "reason": "the source record proves the service date",
         },
     )
@@ -144,7 +144,7 @@ async def test_the_decision_round_trip_shows_the_apis_own_refusal(
     assert len(payload["audit"]["chain_hash"]) == 64
 
     history = (await client.get(f"/v1/runs/{run_id}/decisions")).json()
-    assert [entry["decision"]["event"]["actor"] for entry in history["entries"]] == ["rev-ui"]
+    assert [entry["decision"]["event"]["actor"] for entry in history["entries"]] == ["rev-1"]
 
 
 async def test_a_correction_is_a_new_version_and_the_original_stays_readable(
@@ -162,7 +162,7 @@ async def test_a_correction_is_a_new_version_and_the_original_stays_readable(
         json={
             "rule_id": FAILING_RULE,
             "action": "confirm_issue",
-            "actor": "rev-ui",
+            "actor": "rev-1",
             "reason": "the coverage period really does end early",
         },
     )
@@ -171,14 +171,14 @@ async def test_a_correction_is_a_new_version_and_the_original_stays_readable(
     corrected = sandbox.corrected(envelope)
     recheck = await client.post(
         f"/v1/claims/{envelope['claim_id']}/recheck",
-        json={"claim": corrected, "actor": "rev-ui"},
+        json={"claim": corrected, "actor": "rev-1"},
     )
     assert recheck.status_code == 201, recheck.text
     new_run = recheck.json()["run"]
     assert new_run["version"] == 2
     assert new_run["claim_id"] == envelope["claim_id"]
     assert new_run["supersedes_run_id"] == original_run
-    assert new_run["initiated_by"] == "rev-ui"
+    assert new_run["initiated_by"] == "rev-1"
     assert recheck.json()["by_status"]["FAIL"] == 0
     assert recheck.json()["run"]["run_id"] != original_run
 
@@ -205,7 +205,7 @@ async def test_a_correction_is_a_new_version_and_the_original_stays_readable(
         json={
             "rule_id": FAILING_RULE,
             "action": "request_information",
-            "actor": "rev-ui",
+            "actor": "rev-1",
             "reason": "too late: this version is superseded",
         },
     )
@@ -214,7 +214,8 @@ async def test_a_correction_is_a_new_version_and_the_original_stays_readable(
 
     # The default queue lists the checks that need attention. The corrected version
     # has none, so the claim leaves the queue — and with include_all the reviewer
-    # still sees all 15 of its checks, at version 2.
+    # still sees all 15 of its checks, at version 2. Passing checks are not
+    # unresolved findings.
     attention = (await client.get("/v1/queue", params={"claim_id": envelope["claim_id"]})).json()
     assert attention["items"] == []
     assert attention["claims"] == []
@@ -226,7 +227,7 @@ async def test_a_correction_is_a_new_version_and_the_original_stays_readable(
     ).json()
     assert full["counts"]["findings"] == 15
     assert full["claims"][0]["version"] == 2
-    assert full["claims"][0]["unresolved"] == 15
+    assert full["claims"][0]["unresolved"] == 0
     assert all(item["version"] == 2 for item in full["items"])
     assert full["counts"]["by_rule_status"]["FAIL"] == 0
 

@@ -140,8 +140,9 @@ async function responseJson<T>(response: Response): Promise<T> {
   return (await response.json()) as T;
 }
 
-export async function getQueue(signal?: AbortSignal): Promise<QueueResponse> {
-  return responseJson<QueueResponse>(await fetch("/v1/queue", { signal, cache: "no-store" }));
+export async function getQueue(scope: "mine" | "team" = "mine", signal?: AbortSignal, includeAll = false): Promise<QueueResponse> {
+  const path = scope === "mine" ? "/v1/my-queue" : `/v1/queue${includeAll ? "?include_all=true" : ""}`;
+  return responseJson<QueueResponse>(await fetch(path, { signal, cache: "no-store" }));
 }
 
 export async function getRunDetails(
@@ -267,7 +268,10 @@ export function buildReviewWorkspace(
                 explanation: record.explanation,
                 correctiveAction: record.corrective_action,
                 correctionRecommendation:
-                  provenance?.correction_recommendation ?? record.corrective_action,
+                  provenance?.correction_recommendation &&
+                  !/^No SLM correction recommendation was recorded/i.test(provenance.correction_recommendation)
+                    ? provenance.correction_recommendation
+                    : record.corrective_action,
                 evidence: record.evidence,
                 reviewStatus:
                   historicalReviewByRule.get(record.rule_id) ??

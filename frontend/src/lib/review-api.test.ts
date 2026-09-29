@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
-import { buildReviewWorkspace, type QueueResponse, type RunDetailsResponse, type DecisionHistoryResponse } from "./review-api";
+import { buildReviewWorkspace, getQueue, type QueueResponse, type RunDetailsResponse, type DecisionHistoryResponse } from "./review-api";
 
 const queue: QueueResponse = {
   filters: { status: null, severity: null, rule_id: null, claim_id: null, include_all: false },
@@ -135,5 +135,31 @@ describe("buildReviewWorkspace", () => {
       securityDecision: "unrecorded",
       receiptSha256: null,
     });
+  });
+
+  it("uses the rule's actionable step when a legacy run has no model recommendation", () => {
+    const legacy = { ...details, explanations: [{
+      ...details.explanations[0],
+      source: "deterministic" as const,
+      provider: "not-recorded",
+      correction_recommendation: "No SLM correction recommendation was recorded for this legacy run.",
+    }] };
+    const workspace = buildReviewWorkspace(queue, legacy, history);
+    expect(workspace.selected?.findings[0].correctionRecommendation).toBe("Attach current coverage evidence.");
+  });
+});
+
+describe("role-scoped queue fetch", () => {
+  it("loads the assigned queue for a reviewer, not the team queue", async () => {
+    const fetched = vi.fn(async (_url: string) => { void _url; return new Response(JSON.stringify(queue), { status: 200 }); });
+    vi.stubGlobal("fetch", fetched);
+    try {
+      await getQueue("mine");
+      expect(fetched.mock.calls[0][0]).toBe("/v1/my-queue");
+      await getQueue("team", undefined, true);
+      expect(fetched.mock.calls[1][0]).toBe("/v1/queue?include_all=true");
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });

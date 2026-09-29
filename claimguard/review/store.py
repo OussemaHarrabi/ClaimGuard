@@ -99,7 +99,7 @@ from claimguard.review.models import (
 )
 
 #: The Alembic revision this module's tables come from.
-SCHEMA_REVISION: Final = "0004"
+SCHEMA_REVISION: Final = "0010"
 
 #: ``run_id`` prefix (opaque; deliberately carries no claim identifier).
 RUN_ID_PREFIX: Final = "RUN-"
@@ -149,6 +149,7 @@ RUNS = Table(
     "rule_runs",
     _REVIEW_METADATA,
     Column("run_id", Text, primary_key=True),
+    Column("tenant_id", Text, nullable=False),
     Column("claim_id", Text, nullable=False),
     Column("version", INTEGER, nullable=False),
     Column("supersedes_run_id", Text),
@@ -167,6 +168,7 @@ RESULTS = Table(
     "rule_results",
     _REVIEW_METADATA,
     Column("run_id", Text, nullable=False),
+    Column("tenant_id", Text, nullable=False),
     Column("claim_id", Text, nullable=False),
     Column("seq", INTEGER, nullable=False),
     Column("rule_id", Text, nullable=False),
@@ -192,6 +194,7 @@ DECISIONS = Table(
     Column("decision_id", UUID(as_uuid=True), primary_key=True),
     Column("seq", INTEGER, nullable=False),
     Column("run_id", Text, nullable=False),
+    Column("tenant_id", Text, nullable=False),
     Column("claim_id", Text, nullable=False),
     Column("rule_id", Text, nullable=False),
     Column("action", Text, nullable=False),
@@ -210,6 +213,7 @@ EXPLANATIONS = Table(
     "run_explanations",
     _REVIEW_METADATA,
     Column("run_id", Text, nullable=False),
+    Column("tenant_id", Text, nullable=False),
     Column("rule_id", Text, nullable=False),
     Column("seq", INTEGER, nullable=False),
     Column("source", Text, nullable=False),
@@ -241,13 +245,22 @@ _EXPLANATION_COLUMNS: Final[tuple[str, ...]] = (
     "declined_reason",
 )
 
-#: Every table this module reads or writes (migrations 0002 and 0003).
-#: ``ensure_schema`` refuses to serve a database missing any of them.
-_REQUIRED_TABLES: Final[tuple[str, ...]] = (
+#: Tables required before the review API serves requests (migrations 0002-0005).
+#: ``ensure_schema`` refuses a database missing the clinic directory too.
+REQUIRED_TABLES: Final[tuple[str, ...]] = (
     "rule_runs",
     "rule_results",
     "review_decisions",
     "run_explanations",
+    "clinics",
+    "users",
+    "clinic_memberships",
+    "clinic_departments",
+    "claim_assignments",
+    "clinic_requests",
+    "clinic_escalations",
+    "intake_jobs",
+    "clinic_configuration",
 )
 
 
@@ -330,7 +343,7 @@ def new_trace_id() -> str:
     return uuid.uuid4().hex
 
 
-def _lock_claim_writes(connection: Connection, claim_id: str) -> None:
+def _lock_claim_writes(connection: Connection, tenant_id: str, claim_id: str) -> None:
     """Serialize version and decision writes for one claim for this transaction.
 
     A row lock cannot protect the first version because no claim row exists yet.
@@ -339,7 +352,7 @@ def _lock_claim_writes(connection: Connection, claim_id: str) -> None:
     """
     connection.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:claim_key, 0))"),
-        {"claim_key": f"{CLAIM_WRITE_LOCK_NAMESPACE}{claim_id}"},
+        {"claim_key": f"{CLAIM_WRITE_LOCK_NAMESPACE}{tenant_id}:{claim_id}"},
     )
 
 
@@ -425,8 +438,20 @@ class RecordedDecision:
 class ReviewStore:
     """All review-workflow persistence, over an injected engine."""
 
-    def __init__(self, engine: Engine) -> None:
+    def __init__(self, engine: Engine, tenant_id: str = "clinic-legacy-demo") -> None:
+        if not tenant_id.strip():
+            raise ValueError("tenant_id must not be blank")
         self._engine = engine
+        self._tenant_id = tenant_id
+
+    def for_tenant(self, tenant_id: str) -> ReviewStore:
+        """Create a clinic-bound view over the same engine."""
+        return ReviewStore(self._engine, tenant_id)
+
+    @property
+    def engine(self) -> Engine:
+        """The shared database engine used by clinic directory services."""
+        return self._engine
 
     # -- readiness ------------------------------------------------------
 
@@ -447,7 +472,7 @@ class ReviewStore:
         there yet.
         """
         with self._engine.connect() as connection:
-            missing = [name for name in _REQUIRED_TABLES if not _table_present(connection, name)]
+            missing = [name for name in REQUIRED_TABLES if not _table_present(connection, name)]
         if missing:
             raise SchemaNotMigratedError(
                 "the review tables are missing: run `uv run alembic upgrade head` "
@@ -471,7 +496,9 @@ class ReviewStore:
         """Every version of a claim, oldest first — the retained history."""
         with self._engine.connect() as connection:
             rows = connection.execute(
-                _SELECT_RUNS.where(RUNS.c.claim_id == claim_id).order_by(RUNS.c.version)
+                _SELECT_RUNS.where(
+                    RUNS.c.tenant_id == self._tenant_id, RUNS.c.claim_id == claim_id
+                ).order_by(RUNS.c.version)
             ).all()
             return [_run_from_row(row) for row in rows]
 
@@ -484,7 +511,9 @@ class ReviewStore:
         """Return a detached copy of the immutable input envelope for one run."""
         with self._engine.connect() as connection:
             envelope = connection.execute(
-                select(RUNS.c.envelope).where(RUNS.c.run_id == run_id)
+                select(RUNS.c.envelope).where(
+                    RUNS.c.tenant_id == self._tenant_id, RUNS.c.run_id == run_id
+                )
             ).scalar_one_or_none()
             return dict(envelope) if envelope is not None else None
 
@@ -501,11 +530,15 @@ class ReviewStore:
     def get_decisions(self, run_id: str) -> list[StoredDecision]:
         """Every decision recorded against a run, oldest first."""
         with self._engine.connect() as connection:
+            if self._get_run(connection, run_id) is None:
+                return []
             return _stored_decisions(_decision_rows(connection, [run_id]))
 
     def decision_history(self, run_id: str) -> DecisionHistory:
         """Every decision of a run with the review state each one produced."""
         with self._engine.connect() as connection:
+            if self._get_run(connection, run_id) is None:
+                return DecisionHistory(run_id=run_id, entries=[])
             rows = _decision_rows(connection, [run_id])
             counters: dict[str, int] = {}
             entries: list[DecisionHistoryEntry] = []
@@ -560,7 +593,7 @@ class ReviewStore:
             claim_id = envelope.get("claim_id")
             if not isinstance(claim_id, str) or not claim_id:
                 raise ReviewStoreError("the envelope has no claim_id")
-            _lock_claim_writes(connection, claim_id)
+            _lock_claim_writes(connection, self._tenant_id, claim_id)
             digest = envelope_digest(envelope)
             latest = self._latest_run(connection, claim_id)
             if latest is not None and latest.input_hash == digest:
@@ -608,7 +641,7 @@ class ReviewStore:
             claim_id = envelope.get("claim_id")
             if not isinstance(claim_id, str) or not claim_id:
                 raise ReviewStoreError("the envelope has no claim_id")
-            _lock_claim_writes(connection, claim_id)
+            _lock_claim_writes(connection, self._tenant_id, claim_id)
             latest = self._latest_run(connection, claim_id)
             if latest is None:
                 raise RunNotFoundError(f"claim {claim_id!r} has no run to recheck")
@@ -655,6 +688,7 @@ class ReviewStore:
             insert(RUNS)
             .values(
                 run_id=run_id,
+                tenant_id=self._tenant_id,
                 claim_id=envelope["claim_id"],
                 version=version,
                 supersedes_run_id=supersedes_run_id,
@@ -674,6 +708,7 @@ class ReviewStore:
             [
                 {
                     "run_id": run_id,
+                    "tenant_id": self._tenant_id,
                     "claim_id": record.claim_id,
                     "seq": seq,
                     "rule_id": record.rule_id,
@@ -716,6 +751,7 @@ class ReviewStore:
                 [
                     {
                         "run_id": run_id,
+                        "tenant_id": self._tenant_id,
                         "rule_id": provenance.rule_id,
                         "seq": seq,
                         "source": provenance.source,
@@ -739,19 +775,23 @@ class ReviewStore:
         )
 
     def _get_run(self, connection: Connection, run_id: str) -> RuleRun | None:
-        row = connection.execute(_SELECT_RUNS.where(RUNS.c.run_id == run_id)).one_or_none()
+        row = connection.execute(
+            _SELECT_RUNS.where(RUNS.c.tenant_id == self._tenant_id, RUNS.c.run_id == run_id)
+        ).one_or_none()
         return None if row is None else _run_from_row(row)
 
     def _latest_run(self, connection: Connection, claim_id: str) -> RuleRun | None:
         row = connection.execute(
-            _SELECT_RUNS.where(RUNS.c.claim_id == claim_id).order_by(RUNS.c.version.desc()).limit(1)
+            _SELECT_RUNS.where(RUNS.c.tenant_id == self._tenant_id, RUNS.c.claim_id == claim_id)
+            .order_by(RUNS.c.version.desc())
+            .limit(1)
         ).one_or_none()
         return None if row is None else _run_from_row(row)
 
     def _get_results(self, connection: Connection, run_id: str) -> list[ResultRecord]:
         rows = connection.execute(
             select(*[RESULTS.c[name] for name in _RESULT_COLUMNS])
-            .where(RESULTS.c.run_id == run_id)
+            .where(RESULTS.c.tenant_id == self._tenant_id, RESULTS.c.run_id == run_id)
             .order_by(RESULTS.c.seq)
         ).all()
         return [_record_from_row(row) for row in rows]
@@ -759,7 +799,13 @@ class ReviewStore:
     def _get_record(self, connection: Connection, run_id: str, rule_id: str) -> ResultRecord | None:
         row = connection.execute(
             select(*[RESULTS.c[name] for name in _RESULT_COLUMNS])
-            .where(and_(RESULTS.c.run_id == run_id, RESULTS.c.rule_id == rule_id))
+            .where(
+                and_(
+                    RESULTS.c.tenant_id == self._tenant_id,
+                    RESULTS.c.run_id == run_id,
+                    RESULTS.c.rule_id == rule_id,
+                )
+            )
             .limit(1)
         ).one_or_none()
         return None if row is None else _record_from_row(row)
@@ -767,7 +813,7 @@ class ReviewStore:
     def _get_explanations(self, connection: Connection, run_id: str) -> list[ExplanationProvenance]:
         rows = connection.execute(
             select(*[EXPLANATIONS.c[name] for name in _EXPLANATION_COLUMNS])
-            .where(EXPLANATIONS.c.run_id == run_id)
+            .where(EXPLANATIONS.c.tenant_id == self._tenant_id, EXPLANATIONS.c.run_id == run_id)
             .order_by(EXPLANATIONS.c.seq)
         ).all()
         return [_explanation_from_row(row) for row in rows]
@@ -805,7 +851,7 @@ class ReviewStore:
             run = self._get_run(connection, run_id)
             if run is None:
                 raise RunNotFoundError(f"unknown run: {run_id}")
-            _lock_claim_writes(connection, run.claim_id)
+            _lock_claim_writes(connection, self._tenant_id, run.claim_id)
             record = self._get_record(connection, run_id, request.rule_id)
             if record is None:
                 raise FindingNotFoundError(f"run {run_id} has no result for {request.rule_id}")
@@ -821,6 +867,7 @@ class ReviewStore:
                 insert(DECISIONS)
                 .values(
                     decision_id=uuid.uuid4(),
+                    tenant_id=self._tenant_id,
                     run_id=run_id,
                     claim_id=run.claim_id,
                     rule_id=request.rule_id,
@@ -875,9 +922,15 @@ class ReviewStore:
         listed (a failed, abstaining or unimplemented check); ``include_all``
         lists the full 15 per claim so a reviewer can also dismiss a passing check.
         """
+        return self.queue_for_claim_ids(None, filters)
+
+    def queue_for_claim_ids(
+        self, claim_ids: Sequence[str] | None, filters: QueueFilters | None = None
+    ) -> ReviewQueue:
+        """Return only the supplied clinic claims; None means the team queue."""
         applied = filters if filters is not None else QueueFilters()
         with self._engine.connect() as connection:
-            rows = connection.execute(_queue_statement(applied)).all()
+            rows = connection.execute(_queue_statement(applied, self._tenant_id, claim_ids)).all()
             run_ids = list(dict.fromkeys(str(row.run_id) for row in rows))
             reviews = _reviews_for(connection, run_ids)
             items = [
@@ -1006,20 +1059,29 @@ def _reviews_for(
     return states
 
 
-def _queue_statement(filters: QueueFilters) -> Select[Any]:
+def _queue_statement(
+    filters: QueueFilters, tenant_id: str, claim_ids: Sequence[str] | None = None
+) -> Select[Any]:
     """Select the latest version's records, filtered, in claim/rule order."""
-    ranked = select(
-        RUNS.c.run_id,
-        RUNS.c.claim_id,
-        RUNS.c.version,
-        RUNS.c.created_at,
-        func.row_number()
-        .over(partition_by=RUNS.c.claim_id, order_by=RUNS.c.version.desc())
-        .label("rank"),
-    ).subquery("ranked_runs")
+    ranked = (
+        select(
+            RUNS.c.run_id,
+            RUNS.c.tenant_id,
+            RUNS.c.claim_id,
+            RUNS.c.version,
+            RUNS.c.created_at,
+            func.row_number()
+            .over(partition_by=(RUNS.c.tenant_id, RUNS.c.claim_id), order_by=RUNS.c.version.desc())
+            .label("rank"),
+        )
+        .where(RUNS.c.tenant_id == tenant_id)
+        .subquery("ranked_runs")
+    )
     conditions: list[ColumnElement[bool]] = []
     if filters.claim_id:
         conditions.append(RESULTS.c.claim_id == filters.claim_id)
+    if claim_ids is not None:
+        conditions.append(RESULTS.c.claim_id.in_(list(claim_ids)))
     if filters.rule_id:
         conditions.append(RESULTS.c.rule_id == filters.rule_id)
     if filters.status is not None:
@@ -1040,7 +1102,12 @@ def _queue_statement(filters: QueueFilters) -> Select[Any]:
             ranked.c.created_at.label("run_created_at"),
             *[RESULTS.c[name] for name in _RESULT_COLUMNS],
         )
-        .select_from(RESULTS.join(ranked, ranked.c.run_id == RESULTS.c.run_id))
+        .select_from(
+            RESULTS.join(
+                ranked,
+                and_(ranked.c.run_id == RESULTS.c.run_id, RESULTS.c.tenant_id == tenant_id),
+            )
+        )
         .where(ranked.c.rank == 1)
         .where(*conditions)
         .order_by(RESULTS.c.claim_id, RESULTS.c.seq)
@@ -1053,11 +1120,11 @@ def _queue_counts(items: Sequence[FindingView]) -> QueueCounts:
     for item in items:
         by_review[item.review.status.value] = by_review.get(item.review.status.value, 0) + 1
         by_severity[item.record.severity.value] = by_severity.get(item.record.severity.value, 0) + 1
-    unresolved = sum(1 for item in items if item.review.unresolved)
+    unresolved = sum(1 for item in items if item.needs_attention and item.review.unresolved)
     return QueueCounts(
         findings=len(items),
         unresolved=unresolved,
-        resolved=len(items) - unresolved,
+        resolved=sum(1 for item in items if item.needs_attention and not item.review.unresolved),
         by_rule_status=summarize_statuses([item.record for item in items]),
         by_review_status=by_review,
         by_severity=by_severity,
@@ -1078,7 +1145,7 @@ def _claim_summaries(items: Sequence[FindingView]) -> list[ClaimQueueSummary]:
             version=item.version if previous is None else max(previous.version, item.version),
             findings=(0 if previous is None else previous.findings) + 1,
             unresolved=(0 if previous is None else previous.unresolved)
-            + (1 if item.review.unresolved else 0),
+            + (1 if item.needs_attention and item.review.unresolved else 0),
             latest_decision_at=latest,
         )
     return [summaries[key] for key in sorted(summaries)]

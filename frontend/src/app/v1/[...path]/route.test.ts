@@ -34,9 +34,9 @@ function request(method: string, url = "http://127.0.0.1:3000/v1/queue?include_a
 const context = { params: Promise.resolve({ path: ["runs", "RUN-1", "results"] }) };
 
 function mockFetch(behaviour: (target: string) => Response | Promise<Response>) {
-  const calls: Array<{ target: string; method: string; body: unknown }> = [];
+  const calls: Array<{ target: string; method: string; body: unknown; headers: Headers }> = [];
   const fake = vi.fn(async (target: string, init: RequestInit = {}) => {
-    calls.push({ target, method: init.method ?? "GET", body: init.body });
+    calls.push({ target, method: init.method ?? "GET", body: init.body, headers: new Headers(init.headers) });
     return behaviour(target);
   });
   vi.stubGlobal("fetch", fake);
@@ -100,6 +100,57 @@ describe("the /v1 proxy", () => {
     expect(calls[0].method).toBe("POST");
     expect(calls[0].body).toContain("CG-1");
     expect(response.headers.get("cache-control")).toBe("no-store");
+  });
+
+  it("rejects a cross-origin browser POST before forwarding the session", async () => {
+    const calls = mockFetch(() => new Response("{}", { status: 200 }));
+    const forged = new NextRequest("http://127.0.0.1:3000/v1/claims", {
+      method: "POST",
+      headers: { origin: "https://attacker.example", cookie: "claimguard_session=signed", "content-type": "application/json" },
+      body: "{}",
+    });
+    const response = await POST(forged, context);
+    expect(response.status).toBe(403);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("accepts the browser's Host origin when Next normalizes the request URL internally", async () => {
+    const calls = mockFetch(() => new Response("{}", { status: 200 }));
+    const sameOrigin = new NextRequest("http://localhost:3000/v1/auth/login", {
+      method: "POST",
+      headers: { host: "127.0.0.1:3001", origin: "http://127.0.0.1:3001", "sec-fetch-site": "same-origin", "content-type": "application/json" },
+      body: "{}",
+    });
+    const response = await POST(sameOrigin, context);
+    expect(response.status).toBe(200);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("forwards the clinic session and returns the login cookie", async () => {
+    const calls = mockFetch(() => new Response("{}", {
+      status: 200,
+      headers: { "set-cookie": "claimguard_session=signed; HttpOnly; Path=/; SameSite=Strict" },
+    }));
+    const signed = new NextRequest("http://127.0.0.1:3000/v1/auth/me", {
+      headers: { cookie: "claimguard_session=existing" },
+    });
+
+    const response = await GET(signed, context);
+
+    expect(calls[0].headers.get("cookie")).toBe("claimguard_session=existing");
+    expect(response.headers.get("set-cookie")).toContain("claimguard_session=signed");
+  });
+
+  it("marks the browser cookie Secure when the public site is HTTPS", async () => {
+    mockFetch(() => new Response("{}", {
+      status: 200,
+      headers: { "set-cookie": "claimguard_session=signed; HttpOnly; Path=/; SameSite=Strict" },
+    }));
+    const request = new NextRequest("https://clinic.example/v1/auth/login", {
+      method: "POST", headers: { "content-type": "application/json" }, body: "{}",
+    });
+    const response = await POST(request, context);
+    expect(response.headers.get("set-cookie")).toContain("Secure");
   });
 
   it("refuses a method the review API does not expose", async () => {

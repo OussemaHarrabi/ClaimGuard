@@ -69,9 +69,15 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Annotated, Any, Final, cast
 
-from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel, ConfigDict
 
+from claimguard.clinic.access import Action, Principal, Role, authorize
+from claimguard.clinic.assignments import Assignment, AssignmentStore
+from claimguard.clinic.directory import ClinicDirectory, Department, TeamMember
+from claimguard.clinic.session import AuthenticationError, SessionSigner
+from claimguard.clinic.workspaces import WorkspaceStore
 from claimguard.edu.emit import validate_record
 from claimguard.edu.engine import evaluate_claim
 from claimguard.edu.envelope import (
@@ -110,6 +116,7 @@ from claimguard.review.models import (
     summarize_statuses,
 )
 from claimguard.review.store import (
+    SCHEMA_REVISION,
     FindingNotFoundError,
     NoCorrectionError,
     RecordedRun,
@@ -120,9 +127,6 @@ from claimguard.review.store import (
     SchemaNotMigratedError,
     build_engine,
 )
-
-#: Who initiated a run when the caller is the submission surface itself.
-SUBMIT_ACTOR: Final = "api-submit"
 
 #: Environment variables consulted for the rule catalogue (pack convention).
 RULES_DIR_ENV: Final = "CLAIMGUARD_RULES_DIR"
@@ -220,6 +224,8 @@ def create_app(
     store: ReviewStore | None = None,
     rules_dir: str | Path | None = None,
     explain_provider: ExplanationProvider | None = None,
+    signer: SessionSigner | None = None,
+    directory: ClinicDirectory | None = None,
 ) -> FastAPI:
     """Build the review API.
 
@@ -247,11 +253,60 @@ def create_app(
     app.state.rules = _RulesLoader(None if rules_dir is None else Path(rules_dir))
     app.state.explain = explanation_provider() if explain_provider is None else explain_provider
     app.state.schema_checked = False
+    key = os.environ.get("CLAIMGUARD_SESSION_KEY")
+    app.state.signer = (
+        signer if signer is not None else (SessionSigner(key.encode()) if key else None)
+    )
+    app.state.directory = (
+        directory
+        if directory is not None
+        else (ClinicDirectory(app.state.store.engine) if app.state.signer is not None else None)
+    )
+
+    async def require_clinic_session(request: Request, call_next: Any) -> Response:
+        path = request.url.path
+        if request.method in {"POST", "PUT", "PATCH", "DELETE"}:
+            origin = request.headers.get("origin")
+            expected_origin = f"{request.url.scheme}://{request.url.netloc}"
+            if (origin and origin != expected_origin) or request.headers.get(
+                "sec-fetch-site"
+            ) == "cross-site":
+                return JSONResponse(
+                    status_code=403, content={"detail": "cross-origin clinic action denied"}
+                )
+        if path in {"/v1/health", "/v1/auth/login"}:
+            return cast(Response, await call_next(request))
+        active_signer = cast(SessionSigner | None, request.app.state.signer)
+        if active_signer is None:
+            return JSONResponse(
+                status_code=503, content={"detail": "clinic session key is not configured"}
+            )
+        token = request.cookies.get("claimguard_session")
+        if not token:
+            return JSONResponse(status_code=401, content={"detail": "clinic sign-in required"})
+        try:
+            principal = active_signer.resolve(
+                token, membership=cast(ClinicDirectory, request.app.state.directory).membership
+            )
+        except AuthenticationError:
+            return JSONResponse(status_code=401, content={"detail": "clinic session is invalid"})
+        request.state.principal = principal
+        if path.startswith("/review"):
+            try:
+                authorize(principal, Action.READ_CLAIM, tenant_id=principal.tenant_id)
+            except PermissionError:
+                return JSONResponse(status_code=403, content={"detail": "access denied"})
+        return cast(Response, await call_next(request))
+
+    app.middleware("http")(require_clinic_session)
 
     app.add_exception_handler(ReviewStoreError, review_error_handler)
     app.add_exception_handler(IllegalReviewTransitionError, review_error_handler)
     app.add_exception_handler(RuleDirError, review_error_handler)
     app.add_api_route("/v1/health", health, methods=["GET"], response_model=HealthResponse)
+    app.add_api_route("/v1/auth/login", login, methods=["POST"])
+    app.add_api_route("/v1/auth/me", me, methods=["GET"])
+    app.add_api_route("/v1/auth/logout", logout, methods=["POST"])
     app.add_api_route(
         "/v1/claims",
         submit_claim,
@@ -286,6 +341,39 @@ def create_app(
         response_model=DecisionHistory,
     )
     app.add_api_route("/v1/queue", get_queue, methods=["GET"], response_model=ReviewQueue)
+    app.add_api_route("/v1/my-queue", get_my_queue, methods=["GET"], response_model=ReviewQueue)
+    app.add_api_route("/v1/assignments", list_assignments, methods=["GET"])
+    app.add_api_route("/v1/assignments", assign_claim, methods=["POST"])
+    app.add_api_route("/v1/team", list_team, methods=["GET"])
+    app.add_api_route("/v1/team", create_team_member, methods=["POST"], status_code=201)
+    app.add_api_route("/v1/team/{user_id}/status", set_team_member_status, methods=["POST"])
+    app.add_api_route("/v1/departments", list_departments, methods=["GET"])
+    app.add_api_route("/v1/departments", create_department, methods=["POST"], status_code=201)
+    app.add_api_route("/v1/departments/{department_id}/update", update_department, methods=["POST"])
+    app.add_api_route("/v1/operations", operations, methods=["GET"])
+    app.add_api_route("/v1/requests", list_requests, methods=["GET"])
+    app.add_api_route("/v1/requests", create_request, methods=["POST"], status_code=201)
+    app.add_api_route("/v1/requests/{request_id}/resolve", resolve_request, methods=["POST"])
+    app.add_api_route("/v1/escalations", list_escalations, methods=["GET"])
+    app.add_api_route("/v1/escalations", create_escalation, methods=["POST"], status_code=201)
+    app.add_api_route(
+        "/v1/escalations/{escalation_id}/resolve", resolve_escalation, methods=["POST"]
+    )
+    app.add_api_route("/v1/intake-jobs/operations", intake_operations, methods=["GET"])
+    app.add_api_route("/v1/intake-jobs", list_intake_jobs, methods=["GET"])
+    app.add_api_route("/v1/intake-jobs", create_intake_job, methods=["POST"], status_code=201)
+    app.add_api_route("/v1/intake-jobs/{job_id}/submit", submit_intake_job, methods=["POST"])
+    app.add_api_route("/v1/intake-jobs/{job_id}", get_intake_job, methods=["GET"])
+    app.add_api_route("/v1/activity", activity, methods=["GET"])
+    app.add_api_route("/v1/overview", overview, methods=["GET"])
+    app.add_api_route("/v1/analytics", analytics, methods=["GET"])
+    app.add_api_route("/v1/review-quality", review_quality, methods=["GET"])
+    app.add_api_route("/v1/audit", audit, methods=["GET"])
+    app.add_api_route("/v1/versions", versions, methods=["GET"])
+    app.add_api_route("/v1/redacted-logs", redacted_logs, methods=["GET"])
+    app.add_api_route("/v1/audit-integrity", audit_integrity, methods=["GET"])
+    app.add_api_route("/v1/configuration", configuration, methods=["GET"])
+    app.add_api_route("/v1/configuration", set_configuration, methods=["POST"])
     app.add_api_route(
         "/v1/claims/{claim_id}/recheck",
         recheck,
@@ -334,7 +422,13 @@ def health(request: Request) -> HealthResponse:
     database = "unreachable"
     try:
         revision = review_store.schema_revision()
-        database = "ready" if revision is not None else "schema-missing"
+        if revision == SCHEMA_REVISION:
+            review_store.ensure_schema()
+            database = "ready"
+        else:
+            database = "schema-missing"
+    except SchemaNotMigratedError:
+        database = "schema-missing"
     except Exception as exc:  # noqa: BLE001 - readiness reporting must not raise
         database = f"unreachable: {type(exc).__name__}"
     rules_ready = True
@@ -345,7 +439,9 @@ def health(request: Request) -> HealthResponse:
     except RuleDirError:
         rules_ready = False
     return HealthResponse(
-        status="ok" if database == "ready" and rules_ready else "degraded",
+        status="ok"
+        if database == "ready" and rules_ready and request.app.state.signer
+        else "degraded",
         database=database,
         schema_revision=revision,
         rules_dir=rules_dir,
@@ -354,9 +450,57 @@ def health(request: Request) -> HealthResponse:
     )
 
 
+class LoginRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    password: str
+    tenant_id: str
+
+
+def login(request: Request, response: Response, payload: LoginRequest) -> dict[str, str]:
+    active_signer = cast(SessionSigner | None, request.app.state.signer)
+    if active_signer is None:
+        raise HTTPException(status_code=503, detail="clinic session key is not configured")
+    principal = cast(ClinicDirectory, request.app.state.directory).authenticate(
+        payload.email, payload.password, payload.tenant_id
+    )
+    if principal is None:
+        raise HTTPException(status_code=401, detail="invalid clinic credentials")
+    token = active_signer.issue(principal.user_id, principal.tenant_id)
+    response.set_cookie(
+        "claimguard_session",
+        token,
+        max_age=8 * 60 * 60,
+        httponly=True,
+        secure=request.url.scheme == "https",
+        samesite="strict",
+        path="/",
+    )
+    return {
+        "user_id": principal.user_id,
+        "tenant_id": principal.tenant_id,
+        "role": principal.role.value,
+    }
+
+
+def me(request: Request) -> dict[str, str]:
+    principal = cast(Principal, request.state.principal)
+    return {
+        "user_id": principal.user_id,
+        "tenant_id": principal.tenant_id,
+        "role": principal.role.value,
+    }
+
+
+def logout(response: Response) -> dict[str, bool]:
+    response.delete_cookie("claimguard_session", path="/")
+    return {"signed_out": True}
+
+
 def submit_claim(request: Request, payload: SubmitClaimRequest) -> RunResponse:
     """Validate one envelope, run the 15 checks and persist the run."""
-    review_store = _migrated_store(request.app)
+    review_store = _migrated_store(request, Action.CREATE_CLAIM)
     records = _evaluate(request.app, payload.claim)
     explained = _explain(request.app, records, payload.claim)
     recorded = review_store.record_run(
@@ -365,7 +509,7 @@ def submit_claim(request: Request, payload: SubmitClaimRequest) -> RunResponse:
         rule_version=RULE_VERSION,
         model_version=explained.model_version,
         prompt_version=explained.prompt_version,
-        initiated_by=SUBMIT_ACTOR,
+        initiated_by=cast(Principal, request.state.principal).user_id,
         explanations=explained.provenance,
     )
     return _run_response(recorded)
@@ -373,7 +517,7 @@ def submit_claim(request: Request, payload: SubmitClaimRequest) -> RunResponse:
 
 def get_run(request: Request, run_id: str) -> RunResponse:
     """One run's identity, versions, counts and audit stamp."""
-    review_store = _migrated_store(request.app)
+    review_store = _claim_store(request, run_id, Action.READ_CLAIM)
     run = review_store.get_run(run_id)
     if run is None:
         raise RunNotFoundError(f"unknown run: {run_id}")
@@ -384,7 +528,7 @@ def get_run(request: Request, run_id: str) -> RunResponse:
 
 def get_results(request: Request, run_id: str) -> RunResultsResponse:
     """The run's 15 records, exactly as the CLI emits them, with their provenance."""
-    review_store = _migrated_store(request.app)
+    review_store = _claim_store(request, run_id, Action.READ_CLAIM)
     run = review_store.get_run(run_id)
     if run is None:
         raise RunNotFoundError(f"unknown run: {run_id}")
@@ -397,7 +541,7 @@ def get_results(request: Request, run_id: str) -> RunResultsResponse:
 
 def get_claim(request: Request, run_id: str) -> RunClaimResponse:
     """The run's immutable synthetic claim input, for drafting a new version."""
-    review_store = _migrated_store(request.app)
+    review_store = _claim_store(request, run_id, Action.READ_CLAIM)
     run = review_store.get_run(run_id)
     if run is None:
         raise RunNotFoundError(f"unknown run: {run_id}")
@@ -430,12 +574,392 @@ def get_queue(
         claim_id=claim_id,
         include_all=include_all,
     )
-    return _migrated_store(request.app).queue(filters)
+    return _migrated_store(request, Action.ASSIGN_CLAIM).queue(filters)
+
+
+def get_my_queue(request: Request) -> ReviewQueue:
+    """The signed-in reviewer's assigned claims only."""
+    principal = cast(Principal, request.state.principal)
+    review_store = _migrated_store(request, Action.READ_QUEUE)
+    claim_ids = AssignmentStore(review_store.engine).visible_claim_ids(
+        principal.tenant_id, principal.user_id
+    )
+    return review_store.queue_for_claim_ids(claim_ids, QueueFilters(include_all=True))
+
+
+class AssignClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    claim_id: str
+    reviewer_user_id: str
+
+
+def list_assignments(request: Request) -> list[Assignment]:
+    principal = cast(Principal, request.state.principal)
+    review_store = _migrated_store(request, Action.ASSIGN_CLAIM)
+    return AssignmentStore(review_store.engine).list_assignments(principal.tenant_id)
+
+
+def assign_claim(request: Request, payload: AssignClaimRequest) -> Assignment:
+    principal = cast(Principal, request.state.principal)
+    review_store = _migrated_store(request, Action.ASSIGN_CLAIM)
+    try:
+        return AssignmentStore(review_store.engine).assign(
+            principal.tenant_id,
+            payload.claim_id,
+            payload.reviewer_user_id,
+            assigned_by=principal.user_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def list_team(request: Request, include_inactive: bool = False) -> list[TeamMember]:
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.MANAGE_TEAM if include_inactive else Action.ASSIGN_CLAIM)
+    return cast(ClinicDirectory, request.app.state.directory).team(
+        principal.tenant_id, include_inactive=include_inactive
+    )
+
+
+class CreateTeamMemberRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    email: str
+    display_name: str | None = None
+    password: str
+    role: Role
+
+
+def create_team_member(request: Request, payload: CreateTeamMemberRequest) -> TeamMember:
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.MANAGE_TEAM)
+    try:
+        return cast(ClinicDirectory, request.app.state.directory).add_member(
+            principal.tenant_id,
+            email=payload.email,
+            display_name=payload.display_name,
+            password=payload.password,
+            role=payload.role,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class SetMemberStatusRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool
+
+
+def set_team_member_status(
+    request: Request, user_id: str, payload: SetMemberStatusRequest
+) -> TeamMember:
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.MANAGE_TEAM)
+    try:
+        return cast(ClinicDirectory, request.app.state.directory).set_membership_active(
+            principal.tenant_id, user_id, payload.active
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def list_departments(request: Request) -> list[Department]:
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.MANAGE_TEAM)
+    return cast(ClinicDirectory, request.app.state.directory).departments(principal.tenant_id)
+
+
+class CreateDepartmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+
+
+def create_department(request: Request, payload: CreateDepartmentRequest) -> Department:
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.MANAGE_TEAM)
+    try:
+        return cast(ClinicDirectory, request.app.state.directory).add_department(
+            principal.tenant_id, payload.name
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+class UpdateDepartmentRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    active: bool
+
+
+def update_department(
+    request: Request, department_id: str, payload: UpdateDepartmentRequest
+) -> Department:
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.MANAGE_TEAM)
+    try:
+        return cast(ClinicDirectory, request.app.state.directory).update_department(
+            principal.tenant_id, department_id, name=payload.name, active=payload.active
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+def operations(request: Request) -> dict[str, str | bool | None]:
+    """Claim-blind service readiness for technical staff."""
+    principal = cast(Principal, request.state.principal)
+    try:
+        authorize(principal, Action.READ_OPERATIONS, tenant_id=principal.tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="access denied") from exc
+    result = health(request)
+    return {
+        "status": result.status,
+        "database": result.database,
+        "schema_revision": result.schema_revision,
+        "rules_ready": result.rules_ready,
+        "engine_rule_version": result.engine_rule_version,
+    }
+
+
+def _workspaces(request: Request, action: Action) -> tuple[Principal, WorkspaceStore]:
+    principal = cast(Principal, request.state.principal)
+    review_store = _migrated_store(request, action)
+    return principal, WorkspaceStore(review_store.engine)
+
+
+class CreateRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    message: str
+
+
+class ResolveRequestPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    response: str
+
+
+def list_requests(request: Request) -> list[dict[str, Any]]:
+    principal, work = _workspaces(request, Action.READ_CLAIM)
+    return work.requests(principal.tenant_id, _reviewer_visible_claims(request))
+
+
+def create_request(request: Request, payload: CreateRequestPayload) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_CLAIM)
+    _claim_store(request, payload.run_id, Action.READ_CLAIM)
+    if not payload.message.strip():
+        raise HTTPException(status_code=422, detail="request message is required")
+    try:
+        return work.create_request(
+            principal.tenant_id, payload.run_id, payload.message.strip(), principal.user_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def resolve_request(
+    request: Request, request_id: str, payload: ResolveRequestPayload
+) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_CLAIM)
+    if not payload.response.strip():
+        raise HTTPException(status_code=422, detail="response is required")
+    resolved = work.resolve_request(
+        principal.tenant_id,
+        request_id,
+        payload.response.strip(),
+        principal.user_id,
+        _reviewer_visible_claims(request),
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="open request not found in this clinic")
+    return resolved
+
+
+class CreateEscalationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    run_id: str
+    reason: str
+
+
+class ResolveEscalationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    resolution: str
+
+
+def list_escalations(request: Request) -> list[dict[str, Any]]:
+    principal, work = _workspaces(request, Action.ASSIGN_CLAIM)
+    return work.escalations(principal.tenant_id)
+
+
+def create_escalation(request: Request, payload: CreateEscalationPayload) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.ASSIGN_CLAIM)
+    if not payload.reason.strip():
+        raise HTTPException(status_code=422, detail="escalation reason is required")
+    try:
+        return work.create_escalation(
+            principal.tenant_id, payload.run_id, payload.reason.strip(), principal.user_id
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+def resolve_escalation(
+    request: Request, escalation_id: str, payload: ResolveEscalationPayload
+) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.ASSIGN_CLAIM)
+    if not payload.resolution.strip():
+        raise HTTPException(status_code=422, detail="resolution is required")
+    resolved = work.resolve_escalation(
+        principal.tenant_id, escalation_id, payload.resolution.strip(), principal.user_id
+    )
+    if resolved is None:
+        raise HTTPException(status_code=404, detail="open escalation not found in this clinic")
+    return resolved
+
+
+class IntakePayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    filename: str
+    content: str
+
+
+def list_intake_jobs(request: Request) -> list[dict[str, Any]]:
+    principal, work = _workspaces(request, Action.READ_CLAIM)
+    return work.intake_jobs(
+        principal.tenant_id,
+        submitted_by=principal.user_id if principal.role is Role.RCM_REVIEWER else None,
+        allowed_claim_ids=_reviewer_visible_claims(request),
+    )
+
+
+def create_intake_job(request: Request, payload: IntakePayload) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.CREATE_CLAIM)
+    try:
+        return work.create_intake_job(
+            principal.tenant_id, principal.user_id, payload.filename, payload.content
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+def get_intake_job(request: Request, job_id: str) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_CLAIM)
+    job = work.intake_job(
+        principal.tenant_id,
+        job_id,
+        submitted_by=principal.user_id if principal.role is Role.RCM_REVIEWER else None,
+        allowed_claim_ids=_reviewer_visible_claims(request),
+    )
+    if job is None:
+        raise HTTPException(status_code=404, detail="intake job not found in this clinic")
+    return job
+
+
+def submit_intake_job(request: Request, job_id: str) -> RunResponse:
+    principal, work = _workspaces(request, Action.CREATE_CLAIM)
+
+    def check_draft(draft: dict[str, Any]) -> tuple[str, RunResponse]:
+        records = _evaluate(request.app, draft)
+        explained = _explain(request.app, records, draft)
+        recorded = _migrated_store(request, Action.CREATE_CLAIM).record_run(
+            draft,
+            explained.records,
+            rule_version=RULE_VERSION,
+            model_version=explained.model_version,
+            prompt_version=explained.prompt_version,
+            initiated_by=principal.user_id,
+            explanations=explained.provenance,
+        )
+        return recorded.run.run_id, _run_response(recorded)
+
+    try:
+        return work.submit_intake_job(
+            principal.tenant_id,
+            job_id,
+            principal.user_id if principal.role is Role.RCM_REVIEWER else None,
+            check_draft,
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+def activity(request: Request) -> list[dict[str, Any]]:
+    principal, work = _workspaces(request, Action.READ_CLAIM)
+    return work.activity(principal.tenant_id, _reviewer_visible_claims(request))
+
+
+def overview(request: Request) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_ANALYTICS)
+    return work.overview(principal.tenant_id)
+
+
+def analytics(request: Request) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_ANALYTICS)
+    return work.analytics(principal.tenant_id)
+
+
+def review_quality(request: Request) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_ANALYTICS)
+    return work.review_quality(principal.tenant_id)
+
+
+def audit(request: Request) -> list[dict[str, Any]]:
+    principal, work = _workspaces(request, Action.READ_AUDIT)
+    return work.audit(principal.tenant_id)
+
+
+def intake_operations(request: Request) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_OPERATIONS)
+    return work.intake_operations(principal.tenant_id)
+
+
+def versions(request: Request) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_OPERATIONS)
+    return {
+        "active_rule_version": RULE_VERSION,
+        "active_explanation_provider": type(_provider_of(request.app)).__name__,
+        "observed_versions": work.versions(principal.tenant_id),
+    }
+
+
+def redacted_logs(request: Request) -> list[dict[str, Any]]:
+    principal, work = _workspaces(request, Action.READ_OPERATIONS)
+    return work.redacted_logs(principal.tenant_id)
+
+
+def audit_integrity(request: Request) -> dict[str, Any]:
+    principal, work = _workspaces(request, Action.READ_OPERATIONS)
+    return work.audit_integrity(principal.tenant_id)
+
+
+def configuration(request: Request) -> dict[str, bool]:
+    principal, work = _workspaces(request, Action.READ_OPERATIONS)
+    return work.configuration(principal.tenant_id)
+
+
+class ConfigurationPayload(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    intake_enabled: bool
+
+
+def set_configuration(request: Request, payload: ConfigurationPayload) -> dict[str, bool]:
+    principal, work = _workspaces(request, Action.MANAGE_OPERATIONS)
+    return work.set_configuration(principal.tenant_id, principal.user_id, payload.intake_enabled)
 
 
 def record_decision(request: Request, run_id: str, payload: DecisionRequest) -> DecisionResponse:
     """Append one reviewer decision to the ledger and report the new state."""
-    recorded = _migrated_store(request.app).record_decision(run_id, payload)
+    principal = cast(Principal, request.state.principal)
+    if payload.actor != principal.user_id:
+        raise HTTPException(status_code=403, detail="decision actor must match signed-in user")
+    recorded = _claim_store(request, run_id, Action.RECORD_DECISION).record_decision(
+        run_id, payload
+    )
     return DecisionResponse(
         decision=recorded.decision, review=recorded.review, audit=recorded.audit
     )
@@ -443,7 +967,7 @@ def record_decision(request: Request, run_id: str, payload: DecisionRequest) -> 
 
 def list_decisions(request: Request, run_id: str) -> DecisionHistory:
     """Every decision recorded against a run, oldest first."""
-    review_store = _migrated_store(request.app)
+    review_store = _claim_store(request, run_id, Action.READ_CLAIM)
     if review_store.get_run(run_id) is None:
         raise RunNotFoundError(f"unknown run: {run_id}")
     return review_store.decision_history(run_id)
@@ -451,9 +975,16 @@ def list_decisions(request: Request, run_id: str) -> DecisionHistory:
 
 def recheck(request: Request, claim_id: str, payload: RecheckRequest) -> RunResponse:
     """Evaluate a corrected envelope as a NEW version of the claim."""
-    review_store = _migrated_store(request.app)
+    principal = cast(Principal, request.state.principal)
+    if payload.actor != principal.user_id:
+        raise HTTPException(status_code=403, detail="recheck actor must match signed-in user")
+    review_store = _migrated_store(request, Action.RECHECK_CLAIM)
     if review_store.latest_run(claim_id) is None:
         raise RunNotFoundError(f"claim {claim_id!r} has no run to recheck")
+    if principal.role is Role.RCM_REVIEWER and not AssignmentStore(review_store.engine).can_review(
+        principal.tenant_id, claim_id, principal.user_id
+    ):
+        raise HTTPException(status_code=403, detail="claim is not assigned to this reviewer")
     envelope = payload.claim
     if envelope.get("claim_id") != claim_id:
         raise HTTPException(
@@ -482,6 +1013,28 @@ def recheck(request: Request, claim_id: str, payload: RecheckRequest) -> RunResp
 def _store_of(request: Request) -> ReviewStore:
     """The app's review store (``create_app`` always installs one)."""
     return cast(ReviewStore, request.app.state.store)
+
+
+def _reviewer_visible_claims(request: Request) -> list[str] | None:
+    principal = cast(Principal, request.state.principal)
+    if principal.role is not Role.RCM_REVIEWER:
+        return None
+    return AssignmentStore(_store_of(request).engine).visible_claim_ids(
+        principal.tenant_id, principal.user_id
+    )
+
+
+def _claim_store(request: Request, run_id: str, action: Action) -> ReviewStore:
+    review_store = _migrated_store(request, action)
+    run = review_store.get_run(run_id)
+    if run is None:
+        raise RunNotFoundError(f"unknown run: {run_id}")
+    principal = cast(Principal, request.state.principal)
+    if principal.role is Role.RCM_REVIEWER and not AssignmentStore(review_store.engine).can_review(
+        principal.tenant_id, run.claim_id, principal.user_id
+    ):
+        raise HTTPException(status_code=403, detail="claim is not assigned to this reviewer")
+    return review_store
 
 
 def _rules_of(app: FastAPI) -> _RulesLoader:
@@ -517,18 +1070,23 @@ def _explain(
     )
 
 
-def _migrated_store(app: FastAPI) -> ReviewStore:
+def _migrated_store(request: Request, action: Action) -> ReviewStore:
     """The app's store, once its schema is known to be applied.
 
     Checked on the first request and remembered, so a deployment that forgot
     ``alembic upgrade head`` gets a 503 naming the command instead of a 500
     from a missing relation, and steady-state requests pay nothing for it.
     """
-    review_store = cast(ReviewStore, app.state.store)
-    if not app.state.schema_checked:
+    principal = cast(Principal, request.state.principal)
+    try:
+        authorize(principal, action, tenant_id=principal.tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="access denied") from exc
+    review_store = cast(ReviewStore, request.app.state.store)
+    if not request.app.state.schema_checked:
         review_store.ensure_schema()
-        app.state.schema_checked = True
-    return review_store
+        request.app.state.schema_checked = True
+    return review_store.for_tenant(principal.tenant_id)
 
 
 def _error_status(exc: ReviewStoreError) -> int:

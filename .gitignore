@@ -78,3 +78,7 @@ claimguard-plans-local/
 # its history. Keep it local: never `git add -f` it, never paste it into anything the
 # team sees. TEAM-TASKS.md and TEAM-ROADMAP.md are the team-visible briefs.
 HANDOFF.md
+
+# Private senior operator guide contains synthetic local demo credentials.
+# Share it directly with the intended teammate; never force-add it to Git.
+SENIOR-TECHNICAL-ADMIN-GUIDE.md

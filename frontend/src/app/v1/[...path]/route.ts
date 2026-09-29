@@ -21,9 +21,9 @@
  *
  * WHAT IT DELIBERATELY DOES NOT DO
  * --------------------------------
- * It forwards no cookies and no arbitrary headers (the API is unauthenticated by
- * design and does not read them), it caches nothing, and it proxies only the
- * methods the API actually exposes. A wrong or unreachable origin is reported as
+ * It forwards only the ClaimGuard session cookie (never arbitrary browser
+ * cookies), it caches nothing, and it proxies only the methods the API exposes.
+ * A wrong or unreachable origin is reported as
  * a 502 naming the origin, so the failure is legible instead of an empty screen.
  */
 
@@ -56,15 +56,34 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
   if (!PROXIED_METHODS[request.method]) {
     return json({ detail: `The reviewer API does not accept ${request.method}.` }, 405);
   }
+  if (request.method === "POST") {
+    const browserOrigin = request.headers.get("origin");
+    const publicHost = request.headers.get("host") ?? request.nextUrl.host;
+    let sameOrigin = true;
+    if (browserOrigin) {
+      try {
+        const parsed = new URL(browserOrigin);
+        sameOrigin = parsed.host === publicHost && parsed.protocol === request.nextUrl.protocol && parsed.pathname === "/" && !parsed.search && !parsed.hash;
+      } catch {
+        sameOrigin = false;
+      }
+    }
+    if (!sameOrigin || request.headers.get("sec-fetch-site") === "cross-site") {
+      return json({ detail: "Cross-origin clinic action denied." }, 403);
+    }
+  }
   const origin = apiOrigin();
   const target = `${origin}/v1/${path.map(encodeURIComponent).join("/")}${request.nextUrl.search}`;
   const body = request.method === "POST" ? await request.text() : undefined;
+  const headers = new Headers({ "content-type": request.headers.get("content-type") ?? "application/json" });
+  const session = request.cookies.get("claimguard_session")?.value;
+  if (session) headers.set("cookie", `claimguard_session=${session}`);
 
   let upstream: Response;
   try {
     upstream = await fetch(target, {
       method: request.method,
-      headers: { "content-type": request.headers.get("content-type") ?? "application/json" },
+      headers,
       body,
       cache: "no-store",
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
@@ -75,12 +94,19 @@ async function proxy(request: NextRequest, path: string[]): Promise<Response> {
     return json({ detail: `The review API at ${origin} is unreachable (${reason}).` }, 502);
   }
 
+  const responseHeaders = new Headers({
+    "content-type": upstream.headers.get("content-type") ?? "application/json",
+    "cache-control": "no-store",
+  });
+  const loginCookie = upstream.headers.get("set-cookie");
+  if (loginCookie?.startsWith("claimguard_session=")) {
+    const localHost = ["localhost", "127.0.0.1", "[::1]"].includes(request.nextUrl.hostname);
+    const requiresSecure = request.nextUrl.protocol === "https:" || !localHost;
+    responseHeaders.set("set-cookie", requiresSecure && !/;\s*Secure(?:;|$)/i.test(loginCookie) ? `${loginCookie}; Secure` : loginCookie);
+  }
   return new Response(await upstream.text(), {
     status: upstream.status,
-    headers: {
-      "content-type": upstream.headers.get("content-type") ?? "application/json",
-      "cache-control": "no-store",
-    },
+    headers: responseHeaders,
   });
 }
 
