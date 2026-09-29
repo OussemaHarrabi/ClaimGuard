@@ -211,6 +211,9 @@ export function ReviewCockpit({
           <a className="nav-link" href="#audit">
             Audit
           </a>
+          <a className="nav-link" href="/ops">
+            Ops
+          </a>
         </nav>
 
         <div className="reviewer">

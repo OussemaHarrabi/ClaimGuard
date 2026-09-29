@@ -29,8 +29,16 @@ from fastapi import FastAPI
 def _isolated(  # pyright: ignore[reportUnusedFunction]
     monkeypatch: pytest.MonkeyPatch,
 ) -> Generator[None, None, None]:
-    """Start from an unset switch and an uninitialized module, every test."""
-    monkeypatch.delenv(telemetry.OTEL_ENABLED_ENV, raising=False)
+    """Start from an explicit "off" switch and an uninitialized module, every test.
+
+    The switch is set to a falsy value rather than deleted on purpose:
+    :func:`telemetry_enabled` consults the raw environment first, so deleting it
+    would fall through to ``Settings.ops_otel_enabled``, which pydantic-settings
+    populates from ``.env``. A developer whose ``.env`` opts in would then see
+    this file fail for a reason that has nothing to do with the behaviour under
+    test — the module would be "off by default" in the code, yet "on" here.
+    """
+    monkeypatch.setenv(telemetry.OTEL_ENABLED_ENV, "false")
     shutdown_telemetry()
     yield
     shutdown_telemetry()

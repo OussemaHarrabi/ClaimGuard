@@ -45,6 +45,13 @@ class Settings(BaseSettings):
     # Gates the optional P1 telemetry wiring: off by default so no SDK provider
     # is registered and no network call is made unless an operator opts in.
     ops_otel_enabled: bool = False
+    # P2 operations console sources. The backend is the only client of these;
+    # inside Docker Compose they are the otel-lgtm service ports:
+    #   CLAIMGUARD_OPS_METRICS_URL=http://otel-lgtm:9090
+    #   CLAIMGUARD_OPS_TRACES_URL=http://otel-lgtm:3200
+    ops_metrics_url: str = "http://localhost:9090"
+    ops_traces_url: str = "http://localhost:3200"
+    ops_source_timeout_seconds: float = 2.0
 
     # --- runtime -----------------------------------------------------------
     log_level: str = "INFO"
