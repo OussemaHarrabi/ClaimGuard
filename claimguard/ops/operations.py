@@ -70,6 +70,12 @@ _OVERVIEW_WINDOW_SECONDS: Final = 300
 #: The trace page used for the overview's reachability probe.
 _OVERVIEW_TRACE_LIMIT: Final = 1
 
+#: Honest detail for a source that answered but had no data in the window. A
+#: reachable source with nothing to show is not a failure, but it must not
+#: imply data either: the timestamp stays null and this says why.
+_NO_SAMPLES_DETAIL: Final = "reachable; no samples in this window"
+_NO_TRACES_DETAIL: Final = "reachable; no traces in this window"
+
 #: The only metric windows the API accepts, and their length in seconds.
 Window = Literal["5m", "15m", "1h"]
 _WINDOW_SECONDS: Final[dict[str, int]] = {"5m": 300, "15m": 900, "1h": 3600}
@@ -315,9 +321,8 @@ def _overview(app: FastAPI) -> OverviewResponse:
 
 def _metrics(app: FastAPI, window: Window) -> MetricsResponse:
     """Query Prometheus for ``window``, or return an unavailable source."""
-    series: list[MetricSeries] = []
     try:
-        series = _prometheus_source(app).query_samples(_WINDOW_SECONDS[window])
+        samples = _prometheus_source(app).query_samples(_WINDOW_SECONDS[window])
     except SourceUnavailable as exc:
         return MetricsResponse(
             source=SourceStatus(state=SourceState.UNAVAILABLE, detail=_short(str(exc))),
@@ -334,7 +339,13 @@ def _metrics(app: FastAPI, window: Window) -> MetricsResponse:
             series=[],
         )
     return MetricsResponse(
-        source=SourceStatus(state=SourceState.HEALTHY), window=window, series=series
+        source=SourceStatus(
+            state=SourceState.HEALTHY,
+            last_data_at=samples.last_sample_at,
+            detail=None if samples.series else _NO_SAMPLES_DETAIL,
+        ),
+        window=window,
+        series=samples.series,
     )
 
 
@@ -357,7 +368,11 @@ def _traces(app: FastAPI, limit: int) -> TracesResponse:
             traces=[],
         )
     return TracesResponse(
-        source=SourceStatus(state=SourceState.HEALTHY, last_data_at=_latest(traces)),
+        source=SourceStatus(
+            state=SourceState.HEALTHY,
+            last_data_at=_latest(traces),
+            detail=None if traces else _NO_TRACES_DETAIL,
+        ),
         traces=traces,
     )
 
@@ -383,9 +398,15 @@ def _audit(app: FastAPI) -> AuditResponse:
 
 
 def _prometheus_status(app: FastAPI) -> NamedSourceStatus:
-    """Reachability of Prometheus, as a source status (never raises)."""
+    """Reachability of Prometheus, as a source status (never raises).
+
+    A source that answers with samples is healthy and carries the newest sample
+    time it reported. A source that answers with no samples is still reachable,
+    so it stays healthy with a null ``last_data_at`` and a detail that says so —
+    the console must never render a fabricated time.
+    """
     try:
-        _prometheus_source(app).query_samples(_OVERVIEW_WINDOW_SECONDS)
+        samples = _prometheus_source(app).query_samples(_OVERVIEW_WINDOW_SECONDS)
     except SourceUnavailable as exc:
         return NamedSourceStatus(
             name="prometheus", state=SourceState.UNAVAILABLE, detail=_short(str(exc))
@@ -396,7 +417,12 @@ def _prometheus_status(app: FastAPI) -> NamedSourceStatus:
             state=SourceState.UNAVAILABLE,
             detail=f"prometheus check failed ({type(exc).__name__})",
         )
-    return NamedSourceStatus(name="prometheus", state=SourceState.HEALTHY)
+    return NamedSourceStatus(
+        name="prometheus",
+        state=SourceState.HEALTHY,
+        last_data_at=samples.last_sample_at,
+        detail=None if samples.series else _NO_SAMPLES_DETAIL,
+    )
 
 
 def _tempo_status(app: FastAPI) -> NamedSourceStatus:
@@ -413,7 +439,12 @@ def _tempo_status(app: FastAPI) -> NamedSourceStatus:
             state=SourceState.UNAVAILABLE,
             detail=f"tempo check failed ({type(exc).__name__})",
         )
-    return NamedSourceStatus(name="tempo", state=SourceState.HEALTHY, last_data_at=_latest(traces))
+    return NamedSourceStatus(
+        name="tempo",
+        state=SourceState.HEALTHY,
+        last_data_at=_latest(traces),
+        detail=None if traces else _NO_TRACES_DETAIL,
+    )
 
 
 def _database_check(app: FastAPI) -> tuple[ComponentStatus, str | None]:

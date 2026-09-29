@@ -16,6 +16,7 @@ import httpx
 import pytest
 from claimguard.ops.sources import (
     MetricSeries,
+    PrometheusSamples,
     PrometheusSource,
     SourceUnavailable,
     TempoSource,
@@ -25,6 +26,9 @@ from claimguard.ops.sources import (
 pytestmark = pytest.mark.unit
 
 _METRIC = "claimguard_http_requests_total"
+
+#: The timestamp the shared Prometheus fixture attached to its single sample.
+_SAMPLE_AT = datetime.fromtimestamp(1727000000, tz=UTC)
 
 
 def _prometheus(transport: httpx.MockTransport) -> PrometheusSource:
@@ -72,14 +76,79 @@ def test_prometheus_returns_parsed_series() -> None:
     transport = httpx.MockTransport(
         lambda request: httpx.Response(200, json=_prometheus_vector(_METRIC, "7"))
     )
-    series = _prometheus(transport).query_samples(300)
-    assert series == [
+    samples = _prometheus(transport).query_samples(300)
+    assert samples.series == [
         MetricSeries(
             name=_METRIC,
             labels={"route_template": "/v1/health", "status_class": "2xx"},
             value=7.0,
         )
     ]
+    assert samples.last_sample_at == _SAMPLE_AT
+
+
+def test_prometheus_surfaces_the_newest_sample_timestamp() -> None:
+    payload = {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": [
+                {
+                    "metric": {"__name__": _METRIC, "route_template": "/a"},
+                    "value": [1727000000.0, "1"],
+                },
+                {
+                    "metric": {"__name__": _METRIC, "route_template": "/b"},
+                    "value": [1727000300.0, "2"],
+                },
+                {
+                    "metric": {"__name__": _METRIC, "route_template": "/c"},
+                    "value": [1726999000.0, "3"],
+                },
+            ],
+        },
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    samples = _prometheus(transport).query_samples(300)
+    assert samples.last_sample_at == datetime.fromtimestamp(1727000300, tz=UTC)
+    assert len(samples.series) == 3
+
+
+@pytest.mark.parametrize("bad_timestamp", ["not-a-number", None, True, {}])
+def test_prometheus_ignores_an_unusable_sample_timestamp(bad_timestamp: object) -> None:
+    payload: dict[str, object] = {
+        "status": "success",
+        "data": {
+            "resultType": "vector",
+            "result": [
+                {
+                    "metric": {"__name__": _METRIC, "route_template": "/v1/health"},
+                    "value": [bad_timestamp, "5"],
+                },
+            ],
+        },
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    samples = _prometheus(transport).query_samples(300)
+    assert samples.last_sample_at is None
+    assert samples.series == [
+        MetricSeries(
+            name=_METRIC,
+            labels={"route_template": "/v1/health"},
+            value=5.0,
+        )
+    ]
+
+
+def test_prometheus_with_no_samples_surfaces_an_empty_result() -> None:
+    payload: dict[str, object] = {
+        "status": "success",
+        "data": {"resultType": "vector", "result": []},
+    }
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    assert _prometheus(transport).query_samples(300) == PrometheusSamples(
+        series=[], last_sample_at=None
+    )
 
 
 def test_prometheus_builds_the_query_from_allow_listed_parts() -> None:

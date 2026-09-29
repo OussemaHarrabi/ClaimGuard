@@ -21,6 +21,7 @@ silently rendering an empty page that looks like "healthy, no data".
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Final, cast
@@ -65,6 +66,21 @@ class MetricSeries(BaseModel):
     name: str
     labels: dict[str, str]
     value: float
+
+
+@dataclass(frozen=True)
+class PrometheusSamples:
+    """The latest samples plus the newest sample time actually observed.
+
+    ``last_sample_at`` is the timestamp Prometheus attached to the newest sample
+    it returned, or ``None`` when the source answered but no returned sample
+    carried a usable timestamp. It is never invented: an absent or malformed
+    timestamp stays absent, so the console can tell "reachable, no data" apart
+    from "data seen at ...".
+    """
+
+    series: list[MetricSeries]
+    last_sample_at: datetime | None
 
 
 class TraceSummary(BaseModel):
@@ -183,20 +199,31 @@ class PrometheusSource(_JsonSource):
             )
         self._metric_names = tuple(metric_names)
 
-    def query_samples(self, window_seconds: int) -> list[MetricSeries]:
-        """Return the latest sample of every allow-listed metric within ``window_seconds``."""
+    def query_samples(self, window_seconds: int) -> PrometheusSamples:
+        """Return the latest samples and the newest real sample timestamp observed.
+
+        Each Prometheus sample carries its own timestamp alongside its value; the
+        newest of them across every allow-listed metric is surfaced as
+        :attr:`PrometheusSamples.last_sample_at`, so a healthy source can report
+        when data was actually seen instead of an empty placeholder.
+        """
         seconds = _positive_int(window_seconds, name="window_seconds", maximum=MAX_WINDOW_SECONDS)
         series: list[MetricSeries] = []
+        last_sample_at: datetime | None = None
         for name in self._metric_names:
             query = f"last_over_time({name}[{seconds}s])"
             payload = self._get_json("/api/v1/query", {"query": query}, source="prometheus")
             try:
-                series.extend(_parse_prometheus(payload, name))
+                parsed = _parse_prometheus(payload, name)
             except SourceUnavailable:
                 raise
             except (KeyError, TypeError, ValueError) as exc:
                 raise SourceUnavailable("prometheus returned an unparsable sample") from exc
-        return series
+            series.extend(parsed.series)
+            newest = parsed.last_sample_at
+            if newest is not None:
+                last_sample_at = newest if last_sample_at is None else max(last_sample_at, newest)
+        return PrometheusSamples(series=series, last_sample_at=last_sample_at)
 
 
 class TempoSource(_JsonSource):
@@ -227,8 +254,14 @@ class TempoSource(_JsonSource):
 # ---------------------------------------------------------------------------
 
 
-def _parse_prometheus(payload: Any, fallback_name: str) -> list[MetricSeries]:
-    """Parse a Prometheus ``/api/v1/query`` vector response into metric series."""
+def _parse_prometheus(payload: Any, fallback_name: str) -> PrometheusSamples:
+    """Parse a Prometheus ``/api/v1/query`` vector response into samples.
+
+    Each ``value`` pair is ``[<unix seconds>, "<value>"]``; the newest usable
+    timestamp becomes :attr:`PrometheusSamples.last_sample_at`. A malformed or
+    missing timestamp is ignored rather than fabricated, while an unparsable
+    metric or value still raises :class:`SourceUnavailable`.
+    """
     root = _as_object(payload)
     if root is None:
         raise SourceUnavailable("prometheus returned a non-object payload")
@@ -239,6 +272,7 @@ def _parse_prometheus(payload: Any, fallback_name: str) -> list[MetricSeries]:
     if not isinstance(result, list):
         raise SourceUnavailable("prometheus response has no result list")
     series: list[MetricSeries] = []
+    last_sample_at: datetime | None = None
     for item in cast("list[Any]", result):
         entry = _as_object(item)
         if entry is None:
@@ -255,7 +289,25 @@ def _parse_prometheus(payload: Any, fallback_name: str) -> list[MetricSeries]:
         name = metric.get("__name__", fallback_name)
         labels = {str(key): str(value) for key, value in metric.items() if key != "__name__"}
         series.append(MetricSeries(name=str(name), labels=labels, value=float(sample[1])))
-    return series
+        observed = _sample_time(sample[0])
+        if observed is not None and (last_sample_at is None or observed > last_sample_at):
+            last_sample_at = observed
+    return PrometheusSamples(series=series, last_sample_at=last_sample_at)
+
+
+def _sample_time(raw: object) -> datetime | None:
+    """One Prometheus sample's unix-seconds timestamp, or None when unusable.
+
+    Prometheus encodes the timestamp as a JSON number of seconds. A missing,
+    boolean or non-numeric timestamp returns ``None`` so it is never mistaken
+    for a real observation time.
+    """
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(float(raw), tz=UTC)
+    except (OverflowError, OSError, ValueError):
+        return None
 
 
 def _parse_tempo(payload: Any) -> list[TraceSummary]:

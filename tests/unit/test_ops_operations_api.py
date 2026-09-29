@@ -24,7 +24,7 @@ from claimguard.ops.operations import (
     OperationsCache,
     router,
 )
-from claimguard.ops.sources import MetricSeries, SourceUnavailable, TraceSummary
+from claimguard.ops.sources import MetricSeries, PrometheusSamples, SourceUnavailable, TraceSummary
 from fastapi import FastAPI, Request, Response
 
 pytestmark = pytest.mark.unit
@@ -56,16 +56,33 @@ class _UnavailableTempo:
 
 
 class _HealthyPrometheus:
-    """A Prometheus answering with one sample."""
+    """A Prometheus answering with one timestamped sample."""
 
-    def query_samples(self, window_seconds: int) -> list[MetricSeries]:
-        return [
-            MetricSeries(
-                name="claimguard_http_requests_total",
-                labels={"status_class": "2xx"},
-                value=3.0,
-            )
-        ]
+    def query_samples(self, window_seconds: int) -> PrometheusSamples:
+        return PrometheusSamples(
+            series=[
+                MetricSeries(
+                    name="claimguard_http_requests_total",
+                    labels={"status_class": "2xx"},
+                    value=3.0,
+                )
+            ],
+            last_sample_at=datetime(2026, 1, 1, tzinfo=UTC),
+        )
+
+
+class _EmptyPrometheus:
+    """A Prometheus that answers but has no samples in the window."""
+
+    def query_samples(self, window_seconds: int) -> PrometheusSamples:
+        return PrometheusSamples(series=[], last_sample_at=None)
+
+
+class _EmptyTempo:
+    """A Tempo that answers but has no traces in the window."""
+
+    def search_traces(self, limit: int) -> list[TraceSummary]:
+        return []
 
 
 class _HealthyTempo:
@@ -205,6 +222,64 @@ async def test_overview_is_ok_when_components_and_sources_are_healthy() -> None:
     assert body["versions"]["schema_revision"] == "0004"
     assert all(component["state"] == "healthy" for component in body["components"])
     assert all(source["state"] == "healthy" for source in body["sources"])
+
+
+async def test_a_healthy_source_reports_when_data_was_seen() -> None:
+    app = _app(
+        prometheus=_HealthyPrometheus(),
+        tempo=_HealthyTempo(),
+        store=_ReadyStore(),
+        rules=_ReadyRules(),
+    )
+    body = (await _get(app, "/v1/operations/overview")).json()
+    sources = {source["name"]: source for source in body["sources"]}
+    assert sources["prometheus"]["state"] == "healthy"
+    assert sources["prometheus"]["last_data_at"] is not None
+    assert sources["prometheus"]["detail"] is None
+    assert sources["tempo"]["last_data_at"] is not None
+
+
+async def test_a_reachable_but_empty_source_stays_healthy_without_a_time() -> None:
+    app = _app(
+        prometheus=_EmptyPrometheus(),
+        tempo=_EmptyTempo(),
+        store=_ReadyStore(),
+        rules=_ReadyRules(),
+    )
+    body = (await _get(app, "/v1/operations/overview")).json()
+    sources = {source["name"]: source for source in body["sources"]}
+    assert sources["prometheus"]["state"] == "healthy"
+    assert sources["prometheus"]["last_data_at"] is None
+    assert "no samples" in sources["prometheus"]["detail"]
+    assert sources["tempo"]["state"] == "healthy"
+    assert sources["tempo"]["last_data_at"] is None
+    assert "no traces" in sources["tempo"]["detail"]
+
+
+async def test_metrics_reports_the_observed_sample_time() -> None:
+    app = _app(prometheus=_HealthyPrometheus(), tempo=_HealthyTempo())
+    body = (await _get(app, "/v1/operations/metrics")).json()
+    assert body["source"]["state"] == "healthy"
+    assert body["source"]["last_data_at"] is not None
+    assert body["source"]["detail"] is None
+
+
+async def test_metrics_states_an_empty_window_without_inventing_a_time() -> None:
+    app = _app(prometheus=_EmptyPrometheus(), tempo=_HealthyTempo())
+    body = (await _get(app, "/v1/operations/metrics")).json()
+    assert body["source"]["state"] == "healthy"
+    assert body["source"]["last_data_at"] is None
+    assert "no samples" in body["source"]["detail"]
+    assert body["series"] == []
+
+
+async def test_traces_states_an_empty_window_without_inventing_a_time() -> None:
+    app = _app(prometheus=_HealthyPrometheus(), tempo=_EmptyTempo())
+    body = (await _get(app, "/v1/operations/traces")).json()
+    assert body["source"]["state"] == "healthy"
+    assert body["source"]["last_data_at"] is None
+    assert "no traces" in body["source"]["detail"]
+    assert body["traces"] == []
 
 
 # ---------------------------------------------------------------------------
