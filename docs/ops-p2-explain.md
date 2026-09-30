@@ -31,7 +31,7 @@ behind our API, never a screen the reviewer has to learn.
 
 ## 2. Capability map — what exists today
 
-Seven pages in the technical-manager workspace, all on the dark surface:
+Nine pages in the technical-manager workspace, all on the dark surface:
 
 | Page | What the reviewer gets | Where the data comes from |
 |---|---|---|
@@ -42,6 +42,8 @@ Seven pages in the technical-manager workspace, all on the dark surface:
 | **Intake Jobs** | intake job counts by status | PostgreSQL |
 | **Versions** | active rule / model / provider versions | PostgreSQL |
 | **Configuration** | tenant-scoped intake toggle — audited | PostgreSQL |
+| **Platform Activity** | who did what, in which area, with what outcome — filterable, live | PostgreSQL (real actor columns) |
+| **Roles** | every role, its members, its recent activity, its areas — drillable | PostgreSQL (memberships + activity) |
 
 ---
 
@@ -251,8 +253,24 @@ flowchart LR
     AU --> IJ["Intake Jobs"]
     IJ --> VE["Versions"]
     VE --> CF["Configuration"]
+    CF --> AC["Platform Activity<br/>who did what"]
+    AC --> RO["Roles<br/>per-role drill-down"]
     style OV fill:#1e1e1e,stroke:#7c6cf0,color:#dadada
+    style AC fill:#1e1e1e,stroke:#7c6cf0,color:#dadada
 ```
+
+**The first seven pages answer "is the platform healthy?" The last two answer "what
+have people done in it?"** Health is necessary but not sufficient: a reviewer who can
+see green components and still cannot tell whether the lead reviewed anything, or
+whether intake is being used at all, is flying on instruments alone. Activity and
+Roles close that gap — see §15.
+
+**Why Activity is a page and not a chart.** The question "what happened?" is answered
+by a list of attributable acts, not an aggregate: an aggregate would say *twelve
+claims were submitted* and hide *by whom, in what order, with what outcome*. So the
+feed keeps the act as the unit of display, with the actor, role, area, outcome and
+time all visible — and it is filterable **by role and by area**, so the same feed
+answers both "what did the lead do?" and "what happened to intake?".
 
 **Reading a trace row.** Traces are the least self-explanatory signal, so the page
 does the explaining rather than assuming the reader knows how to read a timeline:
@@ -314,6 +332,20 @@ the API origin directly, because a Next HTTP proxy route cannot upgrade. Fine on
 localhost (same-site), but a real deployment needs a reverse proxy that upgrades -
 or SSE if everything must stay strictly same-origin.
 
+**Two gaps in the activity/trace work, also stated rather than hidden:**
+
+1. **The business `trace_id` and the OpenTelemetry trace id are not unified.** A run
+   carries its own 32-hex `trace_id` in `rule_runs` (the business correlation id the
+   audit ledger is built on), and the OTel spans carry a *different* id minted by the
+   SDK. Verified directly: fetching Tempo with the business id returns **0 spans**.
+   The run is therefore traceable in the ledger and traceable in Tempo, but the two
+   cannot yet be joined by a single id — you cannot click a run and land on its trace.
+   This is a real limitation, not a display bug, and it is the top item in §14.
+2. **`audit_events` contributes nothing to the activity feed** (see §15, "Why
+   `audit_events` is excluded"). The audit ledger is the tamper-evident record; the
+   activity feed is the *attributable* record. They are different questions, and only
+   the second has an actor column today.
+
 ---
 
 ## 11. Defects found and fixed (why the visual checks mattered)
@@ -343,8 +375,8 @@ readable. The screenshot review caught what 60+ tests could not.
 
 | Gate | Result |
 |---|---|
-| Backend suite | **846 passed**, 46 skipped |
-| Frontend suite | **62 passed** |
+| Backend suite | **875 passed**, 46 skipped |
+| Frontend suite | **64 passed** |
 | ruff · ruff format · pyright | clean · clean · 0 errors (1 pre-existing warning) |
 | Live WS: unauthenticated | closed **4401** |
 | Live WS: reviewer | closed **4403** |
@@ -352,6 +384,13 @@ readable. The screenshot review caught what 60+ tests could not.
 | Live WS: real change | pushed to an **open** socket in **1.8s** |
 | Live WS: idle | **no** snapshots while nothing changed |
 | Role isolation | reviewer gets **403** on `/v1/operations/*` |
+| Activity: all three roles | reviewer, lead and admin each acted live; all three appear, attributed `rcm_reviewer` / `rcm_lead` / `clinic_admin` |
+| Activity: all three areas | `claim_submission`, `review_decision` and `intake` all represented |
+| Activity: confidentiality | no claim content in the payload (asserted) |
+| Trace depth | a real submission produced one trace carrying `claim.submit` → `claim.evaluate` → `claim.explain` → `claim.persist` → `claim.audit` plus SQLAlchemy DB spans |
+| Trace id unification | **not unified** — business `trace_id` returns 0 spans in Tempo |
+| Decision authorisation | a decision with an `actor` that is not the signed-in user id is rejected **403** (correct: the API forbids impersonation) |
+
 
 ---
 
@@ -362,7 +401,7 @@ readable. The screenshot review caught what 60+ tests could not.
 docker compose up -d --build
 
 # gates
-uv run pytest -m "not llm and not e2e" -q      # 846 passed
+uv run pytest -m "not llm and not e2e" -q      # 875 passed
 cd frontend && npm run lint && npm run typecheck && npm test
 
 # sign in as the technical manager and open Operations
@@ -377,12 +416,156 @@ JavaScript, not the server, was the cause of one confusing report during this wo
 
 ## 14. What is next
 
-1. **Logs** — ship structured, redacted logs to Loki, then add the log viewer.
-2. **Alerts and incidents** — thresholds measured from a real baseline, an in-app
+1. **Unify the trace ids** — mint the run's business `trace_id` *as* the OpenTelemetry
+   trace id, so a run in the audit ledger and a trace in Tempo are the same object.
+   This is the one gap that stops the UI from offering "run → its trace".
+2. **Logs** — ship structured, redacted logs to Loki, then add the log viewer.
+3. **Alerts and incidents** — thresholds measured from a real baseline, an in-app
    inbox, and acknowledge/assign/comment/resolve recorded in the audit chain.
-3. **Per-tenant operations** — once the tenant model lands, the same endpoints
+4. **Per-tenant operations** — once the tenant model lands, the same endpoints
    become tenant-filtered without a contract change.
-4. **Reverse proxy** for the WebSocket upgrade in a real deployment.
-5. **Visual regression** — Playwright is not installed, so the visual check is
+5. **Reverse proxy** for the WebSocket upgrade in a real deployment.
+6. **Visual regression** — Playwright is not installed, so the visual check is
    still human-driven; adding it would make these four bug classes catchable
    automatically.
+
+---
+
+## 15. Platform-wide activity and roles (added after the first review)
+
+### 15.1 The gap this closes
+
+The first seven pages answer **"is the platform healthy?"** They can all be green
+while nobody can answer **"what has anyone actually done?"** — whether the lead
+reviewed the queue, whether intake is used at all, which role is idle. Health
+without activity is a dashboard that cannot tell working from unused.
+
+The requirement was explicit: *the technical manager must be able to see what
+happened in every role, and fix problems from the UI.* So the work had two halves:
+make every role's actions **recorded and attributable**, then make them **visible**.
+
+### 15.2 Where activity comes from, and why
+
+Activity is read from **PostgreSQL, from real actor columns that already exist** —
+not derived, not inferred, not synthesised:
+
+| Area | Table | Actor column |
+|---|---|---|
+| `claim_submission` | `rule_runs` | `initiated_by` |
+| `review_decision` | `review_decisions` | `actor` |
+| `intake` | `intake_jobs` | `submitted_by` |
+
+Each actor is then resolved to a **role** through `clinic_memberships`, so the feed
+can say *"rcm_lead recorded a decision"* rather than showing a bare id.
+
+**Why `audit_events` is excluded** — and this matters for the honesty of the whole
+page. The audit ledger is the tamper-evident record of what the *system* did, and it
+has **no actor column**. The activity feed is the record of what *people* did. They
+answer different questions. Deriving "who" from the audit ledger would mean inventing
+an attribution that the ledger does not contain, so the feed simply does not use it.
+The audit ledger keeps its own page and its own job.
+
+**Why the tenant comes from the session.** `/v1/operations/activity` takes the tenant
+from the authenticated principal, never from a query parameter. A reviewer cannot ask
+for another tenant's activity by editing a URL — the same claim-blindness rule that
+governs the rest of the operations surface.
+
+**Limits are bounded** at both ends (`limit`, `window_days`), and the query runs with
+a statement timeout, so a large tenant cannot turn the feed into a table scan. A
+database fault returns an honest `degraded` 200 rather than a 500: the page says it
+could not read, instead of pretending there was nothing to read.
+
+### 15.3 How the feed flows
+
+```mermaid
+flowchart TD
+    ACT["reviewer submits a claim<br/>lead records a decision<br/>admin ingests a document"] --> PG[("PostgreSQL<br/>rule_runs · review_decisions · intake_jobs")]
+    PG --> UNION["union of real actor columns"]
+    MEM[("clinic_memberships")] --> UNION
+    UNION --> RESOLVE["resolve actor to role"]
+    RESOLVE --> FEED["ActivityEntry[]<br/>at · role · actor · area · action · outcome · ref"]
+    FEED --> REST["GET /v1/operations/activity<br/>+ /v1/operations/roles"]
+    FEED --> WS["WS section=activity|roles"]
+    REST --> UI["Platform Activity + Roles pages"]
+    WS --> UI
+    UI -->|"filter by role or area"| UI
+    AGENT["any role acts"] -.->|"next push"| WS
+```
+
+The same payload feeds both the initial fetch and the live socket, so the page does
+not have two sources of truth: what you load is what updates.
+
+### 15.4 Trace depth — the other half
+
+Traces existed but were **shallow**: they showed the request and its duration, and
+nothing about what happened *inside* the request. A trace that says `POST /v1/claims`
+took 400ms does not tell a reviewer whether the time went into the rule engine, the
+database, or the explanation step.
+
+The submit and recheck paths now emit named spans for each stage, and SQLAlchemy
+instrumentation is applied so database work appears as child spans. A real submission
+now produces exactly this, verified live:
+
+```
+POST /v1/claims                      <- request root span
+├── claim.submit
+├── claim.evaluate
+├── claim.explain
+├── claim.persist
+├── claim.audit
+└── SQLAlchemy: connect · SELECT claimguard · INSERT claimguard
+```
+
+Everything here is **fail-open**: if the tracer cannot start or close a span, the
+claim still processes. Observability is never allowed to become a dependency of the
+claim flow. Span attributes follow the same policy as metric labels — route template,
+method and version only; **never** a claim id, member id or free text.
+
+### 15.5 Verified live, with the exact run
+
+Three different roles each performed one real action against the running stack, then
+the technical manager read the feed:
+
+```
+reviewer submitted      run=RUN-9430ea0a...   trace=a68cb8164bf1
+lead recorded a decision -> 201
+admin ingested a document -> 201
+
+19:11:54  clinic_admin  admin.local@...    intake             document_ingested  needs_review
+19:11:53  rcm_lead      lead.local@...     review_decision    decision_recorded  confirm_issue
+19:11:52  rcm_reviewer  reviewer.local@... claim_submission   claim_submitted    initial
+
+roles:  rcm_reviewer recent=12 · rcm_lead recent=1 · clinic_admin recent=2
+```
+
+All three roles appear, attributed to the correct role, across all three areas, with
+**no claim content in the payload**.
+
+### 15.6 One thing that looked like a bug and was not
+
+The first attempt at the lead's decision failed with:
+
+```
+403  {"detail": "decision actor must match signed-in user"}
+```
+
+This is **correct behaviour, working as designed.** A decision's `actor` must be the
+signed-in user's id, so that one user cannot record a decision on another's behalf.
+The test had been sending the user's *email* instead of their id. The API refused an
+impersonation attempt — the security control did its job and the test was wrong.
+
+**Lesson recorded:** when a live check fails, establish first whether the *system* is
+wrong or the *check* is wrong. Here the check was, and "fixing" the API to accept it
+would have removed an authorisation guarantee.
+
+### 15.7 What the pages do
+
+- **Platform Activity** — a live feed of attributable acts: *who*, in which *area*,
+  with what *outcome*, and an opaque *reference*. Filterable by role and by area, so
+  it answers both "what did the lead do?" and "what happened to intake?". Rows read as
+  sentences; the reference stays monospace and reveals the full id on hover.
+- **Roles** — every role with member count, recent action count, the areas it touches
+  and when it was last active. Selecting a role drills into its members and its own
+  filtered feed. A role with no activity says so rather than showing zeroes as if they
+  were data.
+
