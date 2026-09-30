@@ -31,6 +31,8 @@ type PingFrame = {
 type ServerFrame = SnapshotFrame | PingFrame;
 
 const DEFAULT_STREAM_URL = "ws://127.0.0.1:8000/v1/operations/stream";
+const STREAM_PORT = "8000";
+const STREAM_PATH = "/v1/operations/stream";
 const MIN_RECONNECT_MS = 1_000;
 const MAX_RECONNECT_MS = 15_000;
 const BACKOFF_MULTIPLIER = 2;
@@ -39,13 +41,27 @@ const OFFLINE_AFTER_ATTEMPTS = 5;
 function getStreamUrl(): string {
   const configured =
     typeof process !== "undefined" ? process.env.NEXT_PUBLIC_OPS_STREAM_URL : undefined;
-  let url = configured ?? DEFAULT_STREAM_URL;
+  if (configured) return upgradeToSecure(configured);
+
+  // Default to the SAME HOST the page is served from, not a hardcoded address.
+  // The session cookie is bound to that host, and browsers do not share cookies
+  // between `localhost` and `127.0.0.1` — connecting across the two would send
+  // no cookie at all and the server would close the socket with 4401.
+  if (typeof window !== "undefined" && window.location.hostname) {
+    const scheme = window.location.protocol === "https:" ? "wss" : "ws";
+    return `${scheme}://${window.location.hostname}:${STREAM_PORT}${STREAM_PATH}`;
+  }
+
+  return DEFAULT_STREAM_URL;
+}
+
+function upgradeToSecure(url: string): string {
   if (
     typeof window !== "undefined" &&
     window.location.protocol === "https:" &&
     url.startsWith("ws:")
   ) {
-    url = `wss${url.slice(2)}`;
+    return `wss${url.slice(2)}`;
   }
   return url;
 }

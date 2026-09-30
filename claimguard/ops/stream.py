@@ -70,7 +70,6 @@ from claimguard.ops.operations import (
     build_metrics,
     build_overview,
     build_traces,
-    cache_for,
 )
 
 #: Default cadence at which the handler re-fingerprints a payload, in seconds.
@@ -287,17 +286,20 @@ async def _build_payload(app: FastAPI, subscription: _Subscription) -> _Payload:
 
 
 def _payload_for(app: FastAPI, section: Section, window: Window) -> _Payload:
-    """Reuse the REST builders and their cache, so both surfaces degrade alike."""
-    cache = cache_for(app)
+    """Build a FRESH payload; the stream must not read its own change signal from a cache.
+
+    The REST cache holds entries for ~5s while this loop re-checks every ~3s, so
+    serving the stream from that cache would both delay a real change and mask it
+    entirely for as long as the entry lived. Change detection has to see the
+    current truth, so these builders are called directly.
+    """
     if section == "overview":
-        return cache.get_or_set("overview", lambda: build_overview(app))
+        return build_overview(app)
     if section == "metrics":
-        return cache.get_or_set(("metrics", window), lambda: build_metrics(app, window))
+        return build_metrics(app, window)
     if section == "traces":
-        return cache.get_or_set(
-            ("traces", TRACE_PAGE_LIMIT), lambda: build_traces(app, TRACE_PAGE_LIMIT)
-        )
-    return cache.get_or_set("audit", lambda: build_audit(app))
+        return build_traces(app, TRACE_PAGE_LIMIT)
+    return build_audit(app)
 
 
 def _initial_subscription(websocket: WebSocket) -> tuple[Section, Window]:
@@ -327,9 +329,21 @@ def _apply_switch(subscription: _Subscription, message: object) -> bool:
     return applied
 
 
+#: Fields stamped fresh on every build rather than describing the platform's
+#: state. They must not take part in change detection: including them would make
+#: every poll look like a change and turn the stream into a firehose of
+#: identical snapshots every few seconds.
+_VOLATILE_KEYS: Final = frozenset({"checked_at"})
+
+
 def _fingerprint(payload: _Payload) -> str:
-    """A stable fingerprint of the serialised payload, for change detection."""
-    return json.dumps(payload.model_dump(mode="json"), sort_keys=True, default=str)
+    """A fingerprint of the payload's STATE, ignoring per-build metadata."""
+    stable = {
+        key: value
+        for key, value in payload.model_dump(mode="json").items()
+        if key not in _VOLATILE_KEYS
+    }
+    return json.dumps(stable, sort_keys=True, default=str)
 
 
 def _utc_now() -> str:

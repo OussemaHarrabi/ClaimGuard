@@ -192,7 +192,13 @@ def test_the_immediate_snapshot_matches_the_rest_overview() -> None:
     assert message["type"] == "snapshot"
     assert message["section"] == "overview"
     assert isinstance(message["at"], str)
-    assert message["payload"] == rest.json()
+    # `checked_at` is stamped per build on both surfaces, so it is expected to
+    # differ; everything else must match the REST view exactly.
+    stream_payload = dict(message["payload"])
+    rest_payload = dict(rest.json())
+    stream_payload.pop("checked_at", None)
+    rest_payload.pop("checked_at", None)
+    assert stream_payload == rest_payload
 
 
 def test_section_and_window_select_the_payload_and_switching_reroutes() -> None:
