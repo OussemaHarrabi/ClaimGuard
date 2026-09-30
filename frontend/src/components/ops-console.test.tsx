@@ -1,6 +1,7 @@
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
+import { MockWebSocket } from "@/lib/ops-stream-mock";
 import {
   getOpsAudit,
   getOpsMetrics,
@@ -97,6 +98,8 @@ function mockSnapshot(
 
 beforeEach(() => {
   vi.resetAllMocks();
+  MockWebSocket.lastInstance = null;
+  vi.stubGlobal("WebSocket", MockWebSocket);
 });
 
 describe("OpsConsole", () => {
@@ -184,5 +187,89 @@ describe("OpsConsole", () => {
       screen.getByText("Audit ledger integrity check failed. Escalate immediately."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Audit chain intact")).not.toBeInTheDocument();
+  });
+
+  it("updates rendered data when a stream snapshot arrives", async () => {
+    mockSnapshot();
+    render(<OpsConsole />);
+
+    expect(await screen.findByText("Platform ok")).toBeInTheDocument();
+
+    const ws = MockWebSocket.lastInstance;
+    ws?.simulateOpen();
+    ws?.simulateMessage({
+      type: "snapshot",
+      section: "overview",
+      at: "2026-09-29T10:05:00Z",
+      payload: makeOverview({
+        status: "degraded",
+        sources: [
+          healthySource("prometheus"),
+          { name: "tempo", state: "unavailable", last_data_at: null, detail: "Down" },
+        ],
+      }),
+    });
+
+    expect(await screen.findByText("Platform degraded")).toBeInTheDocument();
+    expect(screen.queryByText("Platform ok")).not.toBeInTheDocument();
+  });
+
+  it("does not disturb state on ping frames", async () => {
+    mockSnapshot();
+    render(<OpsConsole />);
+
+    expect(await screen.findByText("Platform ok")).toBeInTheDocument();
+
+    const ws = MockWebSocket.lastInstance;
+    ws?.simulateOpen();
+    ws?.simulateMessage({ type: "ping", at: "2026-09-29T10:00:01Z" });
+
+    await waitFor(() => {
+      expect(screen.getByText("Platform ok")).toBeInTheDocument();
+    });
+  });
+
+  it("reports live when the socket opens and reconnecting/offline when it closes", async () => {
+    mockSnapshot();
+    render(<OpsConsole />);
+
+    const indicator = await screen.findByLabelText("Stream status");
+    expect(indicator.textContent).toBe("connecting");
+
+    const first = MockWebSocket.lastInstance;
+    first?.simulateOpen();
+    await waitFor(() => expect(indicator.textContent).toBe("live"));
+
+    first?.simulateClose(1006);
+    await waitFor(() => expect(indicator.textContent).not.toBe("live"));
+  });
+
+  it("recovers to live after a reconnect", async () => {
+    mockSnapshot();
+    render(<OpsConsole />);
+
+    const indicator = await screen.findByLabelText("Stream status");
+    const first = MockWebSocket.lastInstance;
+    first?.simulateOpen();
+    await waitFor(() => expect(indicator.textContent).toBe("live"));
+
+    first?.simulateClose(1006);
+    await waitFor(() => expect(indicator.textContent).toBe("reconnecting"));
+
+    // Wait for the first reconnect attempt (1 s + small buffer).
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    const second = MockWebSocket.lastInstance;
+    expect(second).not.toBe(first);
+    second?.simulateOpen();
+    await waitFor(() => expect(indicator.textContent).toBe("live"));
+  });
+
+  it("still renders data via fallback fetch when the socket never connects", async () => {
+    mockSnapshot();
+    render(<OpsConsole />);
+
+    expect(await screen.findByText("Platform ok")).toBeInTheDocument();
+    expect(MockWebSocket.lastInstance?.readyState).toBe(0);
   });
 });

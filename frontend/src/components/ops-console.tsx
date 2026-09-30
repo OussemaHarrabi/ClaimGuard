@@ -1,6 +1,13 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import {
   Activity,
   AlertTriangle,
@@ -23,11 +30,17 @@ import {
   type OpsAuditResponse,
   type OpsVersions,
 } from "@/lib/ops-api";
+import {
+  subscribeOpsStream,
+  type OpsStreamSection,
+  type OpsStreamStatus,
+} from "@/lib/ops-stream";
 
 const REFRESH_INTERVAL_MS = 30_000;
 const STAGGER_MS = 35;
 const MAX_STAGGER_NODES = 8;
 const MAX_AUDIT_BLOCKS = 14;
+const COUNT_UP_MS = 250;
 
 type Loadable<T> =
   | { state: "loading" }
@@ -77,6 +90,26 @@ const fetchSnapshot = async (
     getOpsAudit(signal),
   ]);
   return { overview, metrics, traces, audit };
+};
+
+const activeField = (
+  section: OpsConsoleProps["section"],
+): keyof OpsSnapshot | null => {
+  if (!section) return null;
+  if (section === "overview") return "overview";
+  if (section === "metrics") return "metrics";
+  if (section === "traces") return "traces";
+  return "audit";
+};
+
+const mergeWithFallback = (
+  streamData: OpsSnapshot,
+  fetched: OpsSnapshot,
+  section: OpsConsoleProps["section"],
+): OpsSnapshot => {
+  const field = activeField(section);
+  if (!field) return fetched;
+  return { ...fetched, [field]: streamData[field] ?? fetched[field] };
 };
 
 const fetchErrorMessage = (err: unknown): string =>
@@ -226,12 +259,57 @@ function usePrefersReducedMotion() {
   );
 }
 
-function SignalRail({ alive, pulseKey }: { alive: boolean; pulseKey: number }) {
+function useAnimatedValue(target: number, duration: number, reduced: boolean): number {
+  const [animated, setAnimated] = useState(target);
+  const displayRef = useRef(target);
+  const rafRef = useRef(0);
+
+  useEffect(() => {
+    if (reduced) {
+      displayRef.current = target;
+      cancelAnimationFrame(rafRef.current);
+      return;
+    }
+    const from = displayRef.current;
+    if (from === target) return;
+    const start = performance.now();
+    const step = (now: number) => {
+      const progress = Math.min(1, (now - start) / duration);
+      const eased = 1 - (1 - progress) ** 3;
+      const value = Math.round(from + (target - from) * eased);
+      displayRef.current = value;
+      setAnimated(value);
+      if (progress < 1) {
+        rafRef.current = requestAnimationFrame(step);
+      } else {
+        displayRef.current = target;
+      }
+    };
+    rafRef.current = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(rafRef.current);
+  }, [target, duration, reduced]);
+
+  return reduced ? target : animated;
+}
+
+function AnimatedNumber({
+  value,
+  reduced,
+  className,
+}: {
+  value: number;
+  reduced: boolean;
+  className?: string;
+}) {
+  const display = useAnimatedValue(value, COUNT_UP_MS, reduced);
+  return <span className={className}>{display.toLocaleString()}</span>;
+}
+
+function SignalRail({ alive }: { alive: boolean }) {
   return (
     <div className={`ops-signal-rail ${alive ? "ops-signal-rail-alive" : "ops-signal-rail-dead"}`} aria-hidden="true">
       <svg preserveAspectRatio="none" viewBox="0 0 1200 24" aria-hidden="true">
         <polyline
-          key={alive ? pulseKey : "static"}
           className="ops-signal-polyline"
           points="0,20 120,4 260,18 420,8 580,16 760,6 920,14 1080,10 1200,20"
           fill="none"
@@ -309,12 +387,10 @@ function SignalMap({
   components,
   sources,
   versions,
-  pulseKey,
 }: {
   components: readonly { name: string; state: string; detail: string | null }[];
   sources: readonly { name: string; state: string; detail: string | null; last_data_at: string | null }[];
   versions: OpsVersions | null;
-  pulseKey: number;
 }) {
   const reduced = usePrefersReducedMotion();
 
@@ -338,7 +414,6 @@ function SignalMap({
                 node={{ ...c, kind: "component" }}
                 index={i}
                 versions={versions}
-                pulseKey={pulseKey}
                 reduced={reduced}
               />
             ))}
@@ -357,7 +432,6 @@ function SignalMap({
                 node={{ ...s, kind: "source" }}
                 index={i + components.length}
                 versions={versions}
-                pulseKey={pulseKey}
                 reduced={reduced}
               />
             ))}
@@ -375,13 +449,11 @@ function SignalNode({
   node,
   index,
   versions,
-  pulseKey,
   reduced,
 }: {
   node: SignalMapNode;
   index: number;
   versions: OpsVersions | null;
-  pulseKey: number;
   reduced: boolean;
 }) {
   const t = tone(node.state);
@@ -412,7 +484,7 @@ function SignalNode({
       }
     >
       <div className="ops-spine-row-main">
-        <span className="ops-spine-led" key={pulseKey} aria-hidden="true">
+        <span className="ops-spine-led" aria-hidden="true">
           <span
             className={`ops-spine-led-dot ${reduced ? "" : "ops-spine-led-pulse"}`}
           />
@@ -456,7 +528,11 @@ function HashChain({ intact, eventCount, checkedAt }: { intact: boolean; eventCo
     >
       <div className="ops-audit-hero">
         <div className="ops-audit-count">
-          <span className="ops-audit-count-value">{eventCount.toLocaleString()}</span>
+          <AnimatedNumber
+            value={eventCount}
+            reduced={reduced}
+            className="ops-audit-count-value"
+          />
           <span className="ops-audit-count-label">events</span>
         </div>
         <time className="ops-audit-checked" dateTime={checkedAt}>
@@ -516,42 +592,130 @@ const SECTION_TITLES: Record<OpsConsoleProps["section"] & string, { title: strin
   audit: { title: "Audit Integrity", subtitle: "Tamper-evidence audit ledger" },
 };
 
+function LiveIndicator({
+  status,
+  reduced,
+}: {
+  status: OpsStreamStatus;
+  reduced: boolean;
+}) {
+  const toneClass =
+    status === "live"
+      ? "ops-live-indicator-live"
+      : status === "reconnecting"
+        ? "ops-live-indicator-reconnecting"
+        : "ops-live-indicator-offline";
+
+  return (
+    <span
+      className={`ops-live-indicator ${toneClass}`}
+      role="status"
+      aria-label="Stream status"
+      title={`Stream: ${status}`}
+    >
+      <span
+        className={`ops-live-dot ${status === "live" && !reduced ? "ops-live-dot-pulse" : ""}`}
+        aria-hidden="true"
+      />
+      <span>{status}</span>
+    </span>
+  );
+}
+
 export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
   const [window, setWindow] = useState<OpsWindow>("5m");
   const [snap, setSnap] = useState<Loadable<OpsSnapshot>>({ state: "loading" });
   const [busy, setBusy] = useState(false);
-  const [pulseKey, setPulseKey] = useState(0);
+  const [streamStatus, setStreamStatus] = useState<OpsStreamStatus>("connecting");
   const embedded = variant === "embedded";
+  const reduced = usePrefersReducedMotion();
 
-  const setOk = useCallback((data: OpsSnapshot) => {
-    setSnap({ state: "ok", data });
-    setPulseKey((k) => k + 1);
-  }, []);
+  const mergeSnapshot = useCallback(
+    (streamSection: OpsStreamSection, payload: unknown) => {
+      setSnap((prev) => {
+        if (prev.state !== "ok") {
+          if (streamSection !== "overview") return prev;
+          return {
+            state: "ok",
+            data: {
+              overview: payload as OpsOverviewResponse,
+              metrics: null,
+              traces: null,
+              audit: null,
+            },
+          };
+        }
+        const next = { ...prev.data };
+        if (streamSection === "overview") {
+          next.overview = payload as OpsOverviewResponse;
+        } else if (streamSection === "metrics") {
+          next.metrics = payload as OpsMetricsResponse;
+        } else if (streamSection === "traces") {
+          next.traces = payload as OpsTracesResponse;
+        } else if (streamSection === "audit") {
+          next.audit = payload as OpsAuditResponse;
+        }
+        return { state: "ok", data: next };
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    if (typeof WebSocket === "undefined") {
+      setStreamStatus("offline");
+      return;
+    }
+    const streamSection: OpsStreamSection = section ?? "overview";
+    return subscribeOpsStream({
+      section: streamSection,
+      window,
+      onSnapshot: (snapshot) => mergeSnapshot(snapshot.section, snapshot.payload),
+      onStatus: setStreamStatus,
+    });
+  }, [section, window, mergeSnapshot]);
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
       setBusy(true);
       try {
-        setOk(await fetchSnapshot(window, section, signal));
+        const data = await fetchSnapshot(window, section, signal);
+        setSnap((prev) =>
+          prev.state === "ok" && streamStatus === "live"
+            ? { state: "ok", data: mergeWithFallback(prev.data, data, section) }
+            : { state: "ok", data },
+        );
       } catch (err) {
-        setSnap({ state: "error", message: fetchErrorMessage(err) });
+        setSnap((prev) =>
+          prev.state === "ok" ? prev : { state: "error", message: fetchErrorMessage(err) },
+        );
       } finally {
         setBusy(false);
       }
     },
-    [window, section, setOk],
+    [window, section, streamStatus],
   );
 
   useEffect(() => {
+    // When the stream is live the snapshot is the primary source; polling is
+    // only the fallback for when the socket is down or reconnecting.
+    if (streamStatus === "live") return;
+
     const c = new AbortController();
     const tick = async () => {
       try {
         const data = await fetchSnapshot(window, section, c.signal);
         if (c.signal.aborted) return;
-        setOk(data);
+        setSnap((prev) =>
+          prev.state === "ok"
+            ? { state: "ok", data: mergeWithFallback(prev.data, data, section) }
+            : { state: "ok", data },
+        );
       } catch (err) {
         if (c.signal.aborted) return;
-        setSnap({ state: "error", message: fetchErrorMessage(err) });
+        setSnap((prev) =>
+          prev.state === "ok" ? prev : { state: "error", message: fetchErrorMessage(err) },
+        );
       }
     };
     void tick();
@@ -562,7 +726,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
       c.abort();
       clearInterval(id);
     };
-  }, [window, section, setOk]);
+  }, [window, section, streamStatus]);
 
   const status = snap.state === "ok" ? snap.data.overview.status : "unknown";
   const checkedAt = snap.state === "ok" ? snap.data.overview.checked_at : null;
@@ -575,7 +739,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
 
   return (
     <div className={`ops-dark ${embedded ? "ops-dark-embedded" : ""}`}>
-      <SignalRail alive={snap.state === "ok"} pulseKey={pulseKey} />
+      <SignalRail alive={snap.state === "ok"} />
       <main
         className={`ops-console ${embedded ? "ops-console-embedded" : ""}`}
         aria-label="Operations console"
@@ -592,6 +756,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
             {!showOverview && <VerdictGauge status={status} />}
           </div>
           <div className="ops-header-meta">
+            <LiveIndicator status={streamStatus} reduced={reduced} />
             <span className="ops-checked-at">
               <Clock size={13} aria-hidden="true" />
               Checked {fmtRel(checkedAt)}
@@ -683,7 +848,6 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
                     components={snap.data.overview.components}
                     sources={snap.data.overview.sources}
                     versions={snap.data.overview.versions}
-                    pulseKey={pulseKey}
                   />
                 </div>
 
@@ -819,9 +983,11 @@ function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
                     style={{ "--series-delay": delay } as React.CSSProperties}
                   >
                     <div className="ops-signal-series-figure">
-                      <span className={`ops-signal-value ops-signal-heat-${heat}`}>
-                        {s.value.toLocaleString()}
-                      </span>
+                      <AnimatedNumber
+                        value={s.value}
+                        reduced={reduced}
+                        className={`ops-signal-value ops-signal-heat-${heat}`}
+                      />
                       <MetricLabels labels={s.labels} />
                     </div>
                     <div className="ops-signal-bar-wrap" aria-hidden="true">
@@ -866,10 +1032,10 @@ function Traces({ traces }: { traces: readonly OpsTrace[] }) {
         <span className="ops-traces-strip-title">Traces</span>
         <div className="ops-traces-figures">
           <span className="ops-traces-figure">
-            total <strong>{traces.length.toLocaleString()}</strong>
+            total <AnimatedNumber value={traces.length} reduced={reduced} />
           </span>
           <span className="ops-traces-figure">
-            slowest <strong>{slowest.toLocaleString()} ms</strong>
+            slowest <AnimatedNumber value={slowest} reduced={reduced} /> ms
           </span>
         </div>
       </div>
@@ -927,7 +1093,7 @@ function Traces({ traces }: { traces: readonly OpsTrace[] }) {
                           className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
                           style={{
                             left: `${left}%`,
-                            width: `${width}%`,
+                            "--bar-scale": String(width / 100),
                             "--bar-simple": `${simpleWidth}%`,
                             "--bar-delay": delay,
                           } as React.CSSProperties}
