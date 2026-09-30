@@ -92,6 +92,12 @@ from claimguard.edu.envelope import (
 )
 from claimguard.edu.policy import RuleContext, RuleDirError
 from claimguard.ops.operations import router as operations_router
+from claimguard.ops.stream import (
+    SessionMissing,
+    SessionUnavailable,
+    resolve_session_principal,
+)
+from claimguard.ops.stream import router as operations_stream_router
 from claimguard.ops.telemetry import install_telemetry
 from claimguard.review import ui as review_ui
 from claimguard.review.explanations import (
@@ -278,18 +284,18 @@ def create_app(
                 )
         if path in {"/v1/health", "/v1/auth/login"}:
             return cast(Response, await call_next(request))
-        active_signer = cast(SessionSigner | None, request.app.state.signer)
-        if active_signer is None:
+        try:
+            principal = resolve_session_principal(
+                signer=cast(SessionSigner | None, request.app.state.signer),
+                directory=cast(ClinicDirectory, request.app.state.directory),
+                token=request.cookies.get("claimguard_session"),
+            )
+        except SessionUnavailable:
             return JSONResponse(
                 status_code=503, content={"detail": "clinic session key is not configured"}
             )
-        token = request.cookies.get("claimguard_session")
-        if not token:
+        except SessionMissing:
             return JSONResponse(status_code=401, content={"detail": "clinic sign-in required"})
-        try:
-            principal = active_signer.resolve(
-                token, membership=cast(ClinicDirectory, request.app.state.directory).membership
-            )
         except AuthenticationError:
             return JSONResponse(status_code=401, content={"detail": "clinic session is invalid"})
         request.state.principal = principal
@@ -385,6 +391,7 @@ def create_app(
     )
     app.include_router(review_ui.router)
     app.include_router(operations_router)
+    app.include_router(operations_stream_router)
     install_telemetry(app)
     return app
 

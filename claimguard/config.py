@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     ops_metrics_url: str = "http://localhost:9090"
     ops_traces_url: str = "http://localhost:3200"
     ops_source_timeout_seconds: float = 2.0
+    # Change-detection cadence for WS /v1/operations/stream, in seconds. ~3s
+    # balances console freshness against load on Prometheus/Tempo.
+    ops_stream_interval_seconds: float = 3.0
 
     # --- runtime -----------------------------------------------------------
     log_level: str = "INFO"

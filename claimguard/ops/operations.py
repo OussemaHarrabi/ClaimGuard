@@ -218,7 +218,7 @@ class OperationsCache:
         return value
 
 
-def _cache_for(app: FastAPI) -> OperationsCache:
+def cache_for(app: FastAPI) -> OperationsCache:
     """The app's operations cache, created once per application."""
     cache = getattr(app.state, _CACHE_ATTR, None)
     if not isinstance(cache, OperationsCache):
@@ -259,7 +259,7 @@ router = APIRouter(
 @router.get("/overview", response_model=OverviewResponse)
 def overview(request: Request) -> OverviewResponse:
     """Platform health: components, source reachability and versions."""
-    return _cache_for(request.app).get_or_set("overview", lambda: _overview(request.app))
+    return cache_for(request.app).get_or_set("overview", lambda: build_overview(request.app))
 
 
 @router.get("/metrics", response_model=MetricsResponse)
@@ -268,8 +268,8 @@ def metrics(
     window: Annotated[Window, Query()] = "15m",
 ) -> MetricsResponse:
     """The latest samples of the allow-listed HTTP metrics over a bounded window."""
-    return _cache_for(request.app).get_or_set(
-        ("metrics", window), lambda: _metrics(request.app, window)
+    return cache_for(request.app).get_or_set(
+        ("metrics", window), lambda: build_metrics(request.app, window)
     )
 
 
@@ -279,15 +279,15 @@ def traces(
     limit: Annotated[int, Query(ge=1, le=100)] = 20,
 ) -> TracesResponse:
     """A bounded page of recent traces."""
-    return _cache_for(request.app).get_or_set(
-        ("traces", limit), lambda: _traces(request.app, limit)
+    return cache_for(request.app).get_or_set(
+        ("traces", limit), lambda: build_traces(request.app, limit)
     )
 
 
 @router.get("/audit", response_model=AuditResponse)
 def audit(request: Request) -> AuditResponse:
     """Whether the append-only audit chain verifies; never claims unverified success."""
-    return _cache_for(request.app).get_or_set("audit", lambda: _audit(request.app))
+    return cache_for(request.app).get_or_set("audit", lambda: build_audit(request.app))
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +295,7 @@ def audit(request: Request) -> AuditResponse:
 # ---------------------------------------------------------------------------
 
 
-def _overview(app: FastAPI) -> OverviewResponse:
+def build_overview(app: FastAPI) -> OverviewResponse:
     """Assemble the overview, degrading any source that cannot answer."""
     database, revision = _database_check(app)
     rules = _rules_check(app)
@@ -319,7 +319,7 @@ def _overview(app: FastAPI) -> OverviewResponse:
     )
 
 
-def _metrics(app: FastAPI, window: Window) -> MetricsResponse:
+def build_metrics(app: FastAPI, window: Window) -> MetricsResponse:
     """Query Prometheus for ``window``, or return an unavailable source."""
     try:
         samples = _prometheus_source(app).query_samples(_WINDOW_SECONDS[window])
@@ -349,7 +349,7 @@ def _metrics(app: FastAPI, window: Window) -> MetricsResponse:
     )
 
 
-def _traces(app: FastAPI, limit: int) -> TracesResponse:
+def build_traces(app: FastAPI, limit: int) -> TracesResponse:
     """Query Tempo for ``limit`` traces, or return an unavailable source."""
     traces: list[TraceSummary] = []
     try:
@@ -377,7 +377,7 @@ def _traces(app: FastAPI, limit: int) -> TracesResponse:
     )
 
 
-def _audit(app: FastAPI) -> AuditResponse:
+def build_audit(app: FastAPI) -> AuditResponse:
     """Verify the audit chain; a check that cannot complete reports no success."""
     checked_at = datetime.now(UTC)
     try:
