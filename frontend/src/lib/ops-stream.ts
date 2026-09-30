@@ -1,12 +1,14 @@
 import type {
+  OpsActivityResponse,
   OpsAuditResponse,
   OpsMetricsResponse,
   OpsOverviewResponse,
+  OpsRolesResponse,
   OpsTracesResponse,
   OpsWindow,
 } from "./ops-api";
 
-export type OpsStreamSection = "overview" | "metrics" | "traces" | "audit";
+export type OpsStreamSection = "overview" | "metrics" | "traces" | "audit" | "activity" | "roles";
 
 export type OpsStreamStatus = "connecting" | "live" | "reconnecting" | "offline";
 
@@ -14,7 +16,9 @@ export type OpsStreamSnapshot =
   | { readonly section: "overview"; readonly payload: OpsOverviewResponse }
   | { readonly section: "metrics"; readonly payload: OpsMetricsResponse }
   | { readonly section: "traces"; readonly payload: OpsTracesResponse }
-  | { readonly section: "audit"; readonly payload: OpsAuditResponse };
+  | { readonly section: "audit"; readonly payload: OpsAuditResponse }
+  | { readonly section: "activity"; readonly payload: OpsActivityResponse }
+  | { readonly section: "roles"; readonly payload: OpsRolesResponse };
 
 type SnapshotFrame = {
   readonly type: "snapshot";
@@ -95,6 +99,7 @@ function parseFrame(data: unknown): ServerFrame | null {
 export type SubscribeOpsStreamOptions = {
   readonly section: OpsStreamSection;
   readonly window: OpsWindow;
+  readonly filters?: Record<string, string | null>;
   readonly onSnapshot: (snapshot: OpsStreamSnapshot) => void;
   readonly onStatus: (status: OpsStreamStatus) => void;
 };
@@ -102,6 +107,7 @@ export type SubscribeOpsStreamOptions = {
 export function subscribeOpsStream({
   section,
   window,
+  filters,
   onSnapshot,
   onStatus,
 }: SubscribeOpsStreamOptions): () => void {
@@ -137,7 +143,15 @@ export function subscribeOpsStream({
 
   const sendSubscription = () => {
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ section, window }));
+      const message: Record<string, unknown> = { section, window };
+      if (filters) {
+        for (const [key, value] of Object.entries(filters)) {
+          if (value !== null && value !== undefined && value !== "") {
+            message[key] = value;
+          }
+        }
+      }
+      ws.send(JSON.stringify(message));
     }
   };
 

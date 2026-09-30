@@ -12,24 +12,34 @@ import {
   Activity,
   AlertTriangle,
   ChevronDown,
+  ChevronLeft,
   Clock,
   LayoutDashboard,
   RefreshCw,
   Timer,
+  Users,
 } from "lucide-react";
 import {
-  getOpsOverview,
-  getOpsMetrics,
-  getOpsTraces,
+  getOpsActivity,
   getOpsAudit,
-  type OpsTrace,
-  type OpsWindow,
-  type OpsOverviewResponse,
-  type OpsMetricsResponse,
-  type OpsMetricSeries,
-  type OpsTracesResponse,
+  getOpsMetrics,
+  getOpsOverview,
+  getOpsRoles,
+  getOpsTraces,
+  type OpsActivityAction,
+  type OpsActivityArea,
+  type OpsActivityEntry,
+  type OpsActivityResponse,
   type OpsAuditResponse,
+  type OpsMetricSeries,
+  type OpsMetricsResponse,
+  type OpsOverviewResponse,
+  type OpsRole,
+  type OpsRolesResponse,
+  type OpsTrace,
+  type OpsTracesResponse,
   type OpsVersions,
+  type OpsWindow,
 } from "@/lib/ops-api";
 import {
   subscribeOpsStream,
@@ -42,6 +52,12 @@ const STAGGER_MS = 35;
 const MAX_STAGGER_NODES = 8;
 const MAX_AUDIT_BLOCKS = 14;
 const COUNT_UP_MS = 250;
+const ACTIVITY_LIMIT = 50;
+
+type ActivityFilters = {
+  role: string | null;
+  area: OpsActivityArea | null;
+};
 
 type Loadable<T> =
   | { state: "loading" }
@@ -52,37 +68,54 @@ type OpsSnapshot = {
   metrics: OpsMetricsResponse | null;
   traces: OpsTracesResponse | null;
   audit: OpsAuditResponse | null;
+  activity: OpsActivityResponse | null;
+  roles: OpsRolesResponse | null;
 };
 
 const fetchSnapshot = async (
   window: OpsWindow,
   section: OpsConsoleProps["section"],
+  activityFilters: ActivityFilters,
   signal?: AbortSignal,
 ): Promise<OpsSnapshot> => {
   if (section === "overview") {
     const overview = await getOpsOverview(signal);
-    return { overview, metrics: null, traces: null, audit: null };
+    return { overview, metrics: null, traces: null, audit: null, activity: null, roles: null };
   }
   if (section === "metrics") {
     const [overview, metrics] = await Promise.all([
       getOpsOverview(signal),
       getOpsMetrics(window, signal),
     ]);
-    return { overview, metrics, traces: null, audit: null };
+    return { overview, metrics, traces: null, audit: null, activity: null, roles: null };
   }
   if (section === "traces") {
     const [overview, traces] = await Promise.all([
       getOpsOverview(signal),
       getOpsTraces(25, signal),
     ]);
-    return { overview, metrics: null, traces, audit: null };
+    return { overview, metrics: null, traces, audit: null, activity: null, roles: null };
   }
   if (section === "audit") {
     const [overview, audit] = await Promise.all([
       getOpsOverview(signal),
       getOpsAudit(signal),
     ]);
-    return { overview, metrics: null, traces: null, audit };
+    return { overview, metrics: null, traces: null, audit, activity: null, roles: null };
+  }
+  if (section === "activity") {
+    const [overview, activity] = await Promise.all([
+      getOpsOverview(signal),
+      getOpsActivity({ role: activityFilters.role, area: activityFilters.area, limit: ACTIVITY_LIMIT }, signal),
+    ]);
+    return { overview, metrics: null, traces: null, audit: null, activity, roles: null };
+  }
+  if (section === "roles") {
+    const [overview, roles] = await Promise.all([
+      getOpsOverview(signal),
+      getOpsRoles(signal),
+    ]);
+    return { overview, metrics: null, traces: null, audit: null, activity: null, roles };
   }
   const [overview, metrics, traces, audit] = await Promise.all([
     getOpsOverview(signal),
@@ -90,7 +123,7 @@ const fetchSnapshot = async (
     getOpsTraces(25, signal),
     getOpsAudit(signal),
   ]);
-  return { overview, metrics, traces, audit };
+  return { overview, metrics, traces, audit, activity: null, roles: null };
 };
 
 const activeField = (
@@ -100,7 +133,10 @@ const activeField = (
   if (section === "overview") return "overview";
   if (section === "metrics") return "metrics";
   if (section === "traces") return "traces";
-  return "audit";
+  if (section === "audit") return "audit";
+  if (section === "activity") return "activity";
+  if (section === "roles") return "roles";
+  return null;
 };
 
 const mergeWithFallback = (
@@ -254,7 +290,7 @@ function traceTitle(rootName: string): string {
 
 type OpsConsoleProps = {
   variant?: "page" | "embedded";
-  section?: "overview" | "metrics" | "traces" | "audit";
+  section?: "overview" | "metrics" | "traces" | "audit" | "activity" | "roles";
 };
 
 const clamp = (value: number, min: number, max: number) =>
@@ -607,6 +643,8 @@ const SECTION_TITLES: Record<OpsConsoleProps["section"] & string, { title: strin
   metrics: { title: "Metrics", subtitle: "Operational metrics" },
   traces: { title: "Traces", subtitle: "Recent distributed traces" },
   audit: { title: "Audit Integrity", subtitle: "Tamper-evidence audit ledger" },
+  activity: { title: "Platform activity", subtitle: "What happened across the platform" },
+  roles: { title: "Roles", subtitle: "Platform roles and recent activity" },
 };
 
 function LiveIndicator({
@@ -641,6 +679,7 @@ function LiveIndicator({
 
 export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
   const [window, setWindow] = useState<OpsWindow>("5m");
+  const [activityFilters, setActivityFilters] = useState<ActivityFilters>({ role: null, area: null });
   const [snap, setSnap] = useState<Loadable<OpsSnapshot>>({ state: "loading" });
   const [busy, setBusy] = useState(false);
   const [streamStatus, setStreamStatus] = useState<OpsStreamStatus>("connecting");
@@ -663,6 +702,8 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
               metrics: null,
               traces: null,
               audit: null,
+              activity: null,
+              roles: null,
             },
           };
         }
@@ -675,12 +716,24 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
           next.traces = payload as OpsTracesResponse;
         } else if (streamSection === "audit") {
           next.audit = payload as OpsAuditResponse;
+        } else if (streamSection === "activity") {
+          next.activity = payload as OpsActivityResponse;
+        } else if (streamSection === "roles") {
+          next.roles = payload as OpsRolesResponse;
         }
         return { state: "ok", data: next };
       });
     },
     [],
   );
+
+  const streamFilters = useMemo(() => {
+    if (section !== "activity") return undefined;
+    return {
+      role: activityFilters.role,
+      area: activityFilters.area,
+    };
+  }, [section, activityFilters.role, activityFilters.area]);
 
   useEffect(() => {
     if (typeof WebSocket === "undefined") {
@@ -691,16 +744,17 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
     return subscribeOpsStream({
       section: streamSection,
       window,
+      filters: streamFilters,
       onSnapshot: (snapshot) => mergeSnapshot(snapshot.section, snapshot.payload),
       onStatus: setStreamStatus,
     });
-  }, [section, window, mergeSnapshot]);
+  }, [section, window, streamFilters, mergeSnapshot]);
 
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
       setBusy(true);
       try {
-        const data = await fetchSnapshot(window, section, signal);
+        const data = await fetchSnapshot(window, section, activityFilters, signal);
         setSnap((prev) =>
           prev.state === "ok" && streamStatus === "live"
             ? { state: "ok", data: mergeWithFallback(prev.data, data, section) }
@@ -714,13 +768,13 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
         setBusy(false);
       }
     },
-    [window, section, streamStatus],
+    [window, section, streamStatus, activityFilters],
   );
 
   const loadOnce = useCallback(
     async (signal?: AbortSignal) => {
       try {
-        const data = await fetchSnapshot(window, section, signal);
+        const data = await fetchSnapshot(window, section, activityFilters, signal);
         if (signal?.aborted) return;
         setSnap((prev) =>
           prev.state === "ok"
@@ -734,7 +788,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
         );
       }
     },
-    [window, section],
+    [window, section, activityFilters],
   );
 
   useEffect(() => {
@@ -767,6 +821,8 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
   const showMetrics = !section || section === "metrics";
   const showTraces = !section || section === "traces";
   const showAudit = !section || section === "audit";
+  const showActivity = !section || section === "activity";
+  const showRoles = !section || section === "roles";
 
   return (
     <div className={`ops-dark ${embedded ? "ops-dark-embedded" : ""}`}>
@@ -867,6 +923,27 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
                 <Skeleton />
               </section>
             )}
+            {showActivity && (
+              <section className="ops-activity-surface" aria-label="Platform activity">
+                <div className="ops-activity-header">
+                  <span className="ops-panel-title">Platform activity</span>
+                  <ActivityFiltersSkeleton />
+                </div>
+                <Skeleton />
+              </section>
+            )}
+            {showRoles && (
+              <section className="ops-roles-surface" aria-label="Roles">
+                <div className="ops-roles-grid">
+                  {Array.from({ length: 4 }).map((_, i) => (
+                    <div key={`role-skel-${i.toString()}`} className="ops-role-card">
+                      <div className="ops-skeleton-line" style={{ width: "60%" }} />
+                      <div className="ops-skeleton-line" style={{ width: "40%" }} />
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </div>
         )}
 
@@ -939,6 +1016,19 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
                 eventCount={snap.data.audit.event_count}
                 checkedAt={snap.data.audit.checked_at}
               />
+            )}
+
+            {showActivity && snap.data.activity && (
+              <ActivitySurface
+                activity={snap.data.activity}
+                filters={activityFilters}
+                onFiltersChange={setActivityFilters}
+                reduced={reduced}
+              />
+            )}
+
+            {showRoles && snap.data.roles && (
+              <RolesSurface roles={snap.data.roles} reduced={reduced} />
             )}
           </div>
         )}
@@ -1324,5 +1414,392 @@ function Traces({ traces }: { traces: readonly OpsTrace[] }) {
         </div>
       )}
     </>
+  );
+}
+
+const AREA_LABELS: Record<OpsActivityArea, string> = {
+  claim_submission: "claim",
+  review_decision: "review",
+  intake: "intake",
+};
+
+const ACTION_PHRASES: Record<OpsActivityAction, string> = {
+  claim_submitted: "submitted a claim",
+  decision_recorded: "recorded a decision",
+  document_ingested: "ingested a document",
+};
+
+const AREA_OPTIONS: OpsActivityArea[] = ["claim_submission", "review_decision", "intake"];
+
+function areaLabel(area: OpsActivityArea): string {
+  return AREA_LABELS[area] ?? area;
+}
+
+function activitySentence(entry: OpsActivityEntry): string {
+  const phrase = ACTION_PHRASES[entry.action] ?? entry.action;
+  return `${entry.actor} ${phrase} on ${entry.reference}`;
+}
+
+function roleDisplayName(role: string): string {
+  return role.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function AreaBadge({ area }: { area: OpsActivityArea }) {
+  return <span className="ops-area-badge">{areaLabel(area)}</span>;
+}
+
+function OutcomeChip({ outcome }: { outcome: string }) {
+  return <span className="ops-outcome-chip">{outcome}</span>;
+}
+
+function ActivityFiltersSkeleton() {
+  return (
+    <div className="ops-activity-filters" aria-hidden="true">
+      <div className="ops-activity-filter-skel" />
+      <div className="ops-activity-filter-skel" />
+    </div>
+  );
+}
+
+type ActivityFiltersProps = {
+  filters: ActivityFilters;
+  roleOptions: readonly string[];
+  onChange: (filters: ActivityFilters) => void;
+};
+
+function ActivityFilters({ filters, roleOptions, onChange }: ActivityFiltersProps) {
+  return (
+    <div className="ops-activity-filters">
+      <fieldset className="ops-activity-filter-group">
+        <legend className="ops-sr-only">Filter by area</legend>
+        <div className="ops-activity-segments">
+          <button
+            type="button"
+            className={filters.area === null ? "ops-active" : ""}
+            onClick={() => onChange({ ...filters, area: null })}
+            aria-pressed={filters.area === null}
+          >
+            all areas
+          </button>
+          {AREA_OPTIONS.map((area) => (
+            <button
+              key={area}
+              type="button"
+              className={filters.area === area ? "ops-active" : ""}
+              onClick={() => onChange({ ...filters, area })}
+              aria-pressed={filters.area === area}
+            >
+              {areaLabel(area)}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset className="ops-activity-filter-group">
+        <legend className="ops-sr-only">Filter by role</legend>
+        <div className="ops-activity-segments">
+          <button
+            type="button"
+            className={filters.role === null ? "ops-active" : ""}
+            onClick={() => onChange({ ...filters, role: null })}
+            aria-pressed={filters.role === null}
+          >
+            all roles
+          </button>
+          {roleOptions.map((role) => (
+            <button
+              key={role}
+              type="button"
+              className={filters.role === role ? "ops-active" : ""}
+              onClick={() => onChange({ ...filters, role })}
+              aria-pressed={filters.role === role}
+            >
+              {roleDisplayName(role)}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+    </div>
+  );
+}
+
+type ActivitySurfaceProps = {
+  activity: OpsActivityResponse;
+  filters: ActivityFilters;
+  onFiltersChange: (filters: ActivityFilters) => void;
+  reduced: boolean;
+};
+
+function ActivitySurface({ activity, filters, onFiltersChange, reduced }: ActivitySurfaceProps) {
+  const roleOptions = useMemo(() => {
+    const set = new Set<string>();
+    if (filters.role) set.add(filters.role);
+    for (const entry of activity.entries) {
+      if (entry.role) set.add(entry.role);
+    }
+    return Array.from(set).sort();
+  }, [activity.entries, filters.role]);
+
+  const empty = activity.entries.length === 0;
+
+  return (
+    <section className="ops-activity-surface" aria-label="Platform activity">
+      <div className="ops-activity-header">
+        <div className="ops-activity-title">
+          <span className="ops-panel-title">Platform activity</span>
+          <span className="ops-activity-meta">
+            {activity.source} · {activity.entries.length} entries
+          </span>
+        </div>
+        <ActivityFilters
+          filters={filters}
+          roleOptions={roleOptions}
+          onChange={onFiltersChange}
+        />
+      </div>
+
+      {empty ? (
+        <div className="ops-empty-state">
+          <Activity size={24} aria-hidden="true" />
+          <p>No activity for the selected filters.</p>
+        </div>
+      ) : (
+        <ul className="ops-activity-list" aria-label="Activity entries">
+          {activity.entries.map((entry, index) => (
+            <ActivityRow
+              key={`${entry.at}-${entry.actor}-${entry.reference}`}
+              entry={entry}
+              index={index}
+              reduced={reduced}
+            />
+          ))}
+        </ul>
+      )}
+    </section>
+  );
+}
+
+type ActivityRowProps = {
+  entry: OpsActivityEntry;
+  index: number;
+  reduced: boolean;
+};
+
+function ActivityRow({ entry, index, reduced }: ActivityRowProps) {
+  const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+  const sentence = activitySentence(entry);
+
+  return (
+    <li
+      className={`ops-activity-row ${reduced ? "" : "ops-activity-row-enter"}`}
+      style={{ "--row-delay": delay } as React.CSSProperties}
+    >
+      <div className="ops-activity-row-main">
+        <span className="ops-activity-row-sentence" title={`${sentence} · ${fmtRel(entry.at)}`}>
+          {sentence} · {fmtRel(entry.at)}
+        </span>
+        <span className="ops-activity-row-badges">
+          <AreaBadge area={entry.area} />
+          <OutcomeChip outcome={entry.outcome} />
+        </span>
+      </div>
+      <div className="ops-activity-row-detail">
+        {entry.role !== null ? (
+          <span className="ops-activity-row-role">{entry.role}</span>
+        ) : (
+          <span className="ops-activity-row-role ops-activity-row-role-unknown">unknown role</span>
+        )}
+        <time className="ops-activity-row-time" dateTime={entry.at} title={entry.at}>
+          {fmtTime(entry.at)}
+        </time>
+      </div>
+    </li>
+  );
+}
+
+type RolesSurfaceProps = {
+  roles: OpsRolesResponse;
+  reduced: boolean;
+};
+
+function RolesSurface({ roles, reduced }: RolesSurfaceProps) {
+  const [selectedRole, setSelectedRole] = useState<string | null>(null);
+
+  const selected = useMemo(
+    () => roles.roles.find((r) => r.role === selectedRole) ?? null,
+    [roles.roles, selectedRole],
+  );
+
+  return (
+    <section className="ops-roles-surface" aria-label="Roles">
+      {selected ? (
+        <RoleDetail
+          role={selected}
+          onBack={() => setSelectedRole(null)}
+          reduced={reduced}
+        />
+      ) : (
+        <>
+          <div className="ops-roles-header">
+            <div className="ops-roles-title">
+              <span className="ops-panel-title">Roles</span>
+              <span className="ops-roles-meta">
+                {roles.roles.length} roles · checked {fmtRel(roles.checked_at)}
+              </span>
+            </div>
+          </div>
+          <ul className="ops-roles-grid">
+            {roles.roles.map((role, index) => (
+              <li key={role.role}>
+                <RoleCard
+                  role={role}
+                  index={index}
+                  reduced={reduced}
+                  onSelect={() => setSelectedRole(role.role)}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+type RoleCardProps = {
+  role: OpsRole;
+  index: number;
+  reduced: boolean;
+  onSelect: () => void;
+};
+
+function RoleCard({ role, index, reduced, onSelect }: RoleCardProps) {
+  const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+
+  return (
+    <button
+      type="button"
+      className={`ops-role-card ${reduced ? "" : "ops-role-card-enter"}`}
+      style={{ "--card-delay": delay } as React.CSSProperties}
+      onClick={onSelect}
+      aria-label={`${roleDisplayName(role.role)} role, ${role.active_members} active members`}
+    >
+      <div className="ops-role-card-top">
+        <Users size={16} aria-hidden="true" />
+        <span className="ops-role-card-last">{fmtRel(role.last_active_at)}</span>
+      </div>
+      <div className="ops-role-card-body">
+        <strong>{roleDisplayName(role.role)}</strong>
+        <div className="ops-role-card-stats">
+          <span>{role.active_members} active</span>
+          <span aria-hidden="true">·</span>
+          <span>{role.recent_actions} actions</span>
+        </div>
+      </div>
+      <div className="ops-role-card-areas">
+        {role.areas.map((area) => (
+          <AreaBadge key={area} area={area} />
+        ))}
+      </div>
+    </button>
+  );
+}
+
+type RoleDetailProps = {
+  role: OpsRole;
+  onBack: () => void;
+  reduced: boolean;
+};
+
+function RoleDetail({ role, onBack, reduced }: RoleDetailProps) {
+  const [activity, setActivity] = useState<Loadable<OpsActivityResponse>>({ state: "loading" });
+
+  useEffect(() => {
+    const controller = new AbortController();
+    const load = async () => {
+      try {
+        const data = await getOpsActivity({ role: role.role, limit: ACTIVITY_LIMIT }, controller.signal);
+        if (controller.signal.aborted) return;
+        setActivity({ state: "ok", data });
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setActivity({ state: "error", message: fetchErrorMessage(err) });
+      }
+    };
+    void load();
+    return () => controller.abort();
+  }, [role.role]);
+
+  return (
+    <div className="ops-role-detail">
+      <div className="ops-role-detail-header">
+        <button
+          type="button"
+          className="ops-role-detail-back"
+          onClick={onBack}
+          aria-label="Back to roles"
+        >
+          <ChevronLeft size={16} aria-hidden="true" />
+          <span>Back to roles</span>
+        </button>
+        <div className="ops-role-detail-title">
+          <span className="ops-panel-title">{roleDisplayName(role.role)}</span>
+          <span className="ops-role-detail-meta">
+            {role.active_members} active members · {role.recent_actions} recent actions
+          </span>
+        </div>
+      </div>
+
+      <div className="ops-role-members">
+        <span className="ops-panel-title">Members</span>
+        <ul className="ops-role-member-list">
+          {role.members.map((email) => (
+            <li key={email} className="ops-role-member">
+              <code>{email}</code>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="ops-role-activity">
+        <span className="ops-panel-title">Recent activity</span>
+        {activity.state === "loading" && <Skeleton />}
+        {activity.state === "error" && (
+          <div className="ops-error-card">
+            <AlertTriangle size={18} aria-hidden="true" />
+            <span>{activity.message}</span>
+            <button
+              type="button"
+              onClick={() => {
+                setActivity({ state: "loading" });
+                void getOpsActivity({ role: role.role, limit: ACTIVITY_LIMIT })
+                  .then((data) => setActivity({ state: "ok", data }))
+                  .catch((err) => setActivity({ state: "error", message: fetchErrorMessage(err) }));
+              }}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {activity.state === "ok" && activity.data.entries.length === 0 && (
+          <div className="ops-empty-state">
+            <Activity size={24} aria-hidden="true" />
+            <p>No recent activity for this role.</p>
+          </div>
+        )}
+        {activity.state === "ok" && activity.data.entries.length > 0 && (
+          <ul className="ops-activity-list" aria-label={`Activity for ${roleDisplayName(role.role)}`}>
+            {activity.data.entries.map((entry, index) => (
+              <ActivityRow
+                key={`${entry.at}-${entry.actor}-${entry.reference}`}
+                entry={entry}
+                index={index}
+                reduced={reduced}
+              />
+            ))}
+          </ul>
+        )}
+      </div>
+    </div>
   );
 }

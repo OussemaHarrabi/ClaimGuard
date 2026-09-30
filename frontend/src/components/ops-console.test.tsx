@@ -3,13 +3,17 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { MockWebSocket } from "@/lib/ops-stream-mock";
 import {
+  getOpsActivity,
   getOpsAudit,
   getOpsMetrics,
   getOpsOverview,
+  getOpsRoles,
   getOpsTraces,
+  type OpsActivityResponse,
   type OpsAuditResponse,
   type OpsMetricsResponse,
   type OpsOverviewResponse,
+  type OpsRolesResponse,
   type OpsSource,
   type OpsTracesResponse,
 } from "@/lib/ops-api";
@@ -21,12 +25,16 @@ vi.mock("@/lib/ops-api", () => ({
   getOpsMetrics: vi.fn(),
   getOpsTraces: vi.fn(),
   getOpsAudit: vi.fn(),
+  getOpsActivity: vi.fn(),
+  getOpsRoles: vi.fn(),
 }));
 
 const overviewMock = vi.mocked(getOpsOverview);
 const metricsMock = vi.mocked(getOpsMetrics);
 const tracesMock = vi.mocked(getOpsTraces);
 const auditMock = vi.mocked(getOpsAudit);
+const activityMock = vi.mocked(getOpsActivity);
+const rolesMock = vi.mocked(getOpsRoles);
 
 const CHECKED_AT = "2026-09-29T10:00:00Z";
 
@@ -82,18 +90,56 @@ const makeAudit = (overrides: Partial<OpsAuditResponse> = {}): OpsAuditResponse 
   ...overrides,
 });
 
+const makeActivity = (overrides: Partial<OpsActivityResponse> = {}): OpsActivityResponse => ({
+  source: "operations",
+  role: null,
+  area: null,
+  limit: 50,
+  entries: [
+    {
+      at: CHECKED_AT,
+      role: "rcm_reviewer",
+      actor: "reviewer.local@example.test",
+      area: "review_decision",
+      action: "decision_recorded",
+      outcome: "resolved",
+      reference: "run-ab12cd34",
+    },
+  ],
+  ...overrides,
+});
+
+const makeRoles = (overrides: Partial<OpsRolesResponse> = {}): OpsRolesResponse => ({
+  checked_at: CHECKED_AT,
+  roles: [
+    {
+      role: "rcm_reviewer",
+      active_members: 2,
+      members: ["reviewer.local@example.test"],
+      recent_actions: 12,
+      areas: ["claim_submission", "review_decision"],
+      last_active_at: CHECKED_AT,
+    },
+  ],
+  ...overrides,
+});
+
 function mockSnapshot(
   snapshot: {
     overview?: OpsOverviewResponse;
     metrics?: OpsMetricsResponse;
     traces?: OpsTracesResponse;
     audit?: OpsAuditResponse;
+    activity?: OpsActivityResponse;
+    roles?: OpsRolesResponse;
   } = {},
 ): void {
   overviewMock.mockResolvedValue(snapshot.overview ?? makeOverview());
   metricsMock.mockResolvedValue(snapshot.metrics ?? makeMetrics());
   tracesMock.mockResolvedValue(snapshot.traces ?? makeTraces());
   auditMock.mockResolvedValue(snapshot.audit ?? makeAudit());
+  activityMock.mockResolvedValue(snapshot.activity ?? makeActivity());
+  rolesMock.mockResolvedValue(snapshot.roles ?? makeRoles());
 }
 
 beforeEach(() => {
@@ -285,5 +331,68 @@ describe("OpsConsole", () => {
 
     expect(await screen.findByText("Platform ok")).toBeInTheDocument();
     expect(MockWebSocket.lastInstance?.readyState).toBe(0);
+  });
+
+  it("renders the activity feed with sentence rows, area badge, and outcome chip", async () => {
+    mockSnapshot({
+      activity: makeActivity({
+        entries: [
+          {
+            at: CHECKED_AT,
+            role: "rcm_reviewer",
+            actor: "reviewer.local@example.test",
+            area: "review_decision",
+            action: "decision_recorded",
+            outcome: "resolved",
+            reference: "run-ab12cd34",
+          },
+        ],
+      }),
+    });
+    render(<OpsConsole section="activity" variant="embedded" />);
+
+    expect(await screen.findByText(/reviewer.local@example.test recorded a decision on run-ab12cd34/)).toBeInTheDocument();
+    const row = screen.getByText(/reviewer.local@example.test recorded a decision/).closest("li");
+    expect(row).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("review")).toBeInTheDocument();
+    expect(within(row as HTMLElement).getByText("resolved")).toBeInTheDocument();
+  });
+
+  it("renders the roles grid and drills into a role's members and activity", async () => {
+    mockSnapshot({
+      roles: makeRoles({
+        roles: [
+          {
+            role: "rcm_reviewer",
+            active_members: 1,
+            members: ["reviewer.local@example.test"],
+            recent_actions: 5,
+            areas: ["claim_submission", "review_decision"],
+            last_active_at: CHECKED_AT,
+          },
+        ],
+      }),
+      activity: makeActivity({
+        role: "rcm_reviewer",
+        entries: [
+          {
+            at: CHECKED_AT,
+            role: "rcm_reviewer",
+            actor: "reviewer.local@example.test",
+            area: "review_decision",
+            action: "decision_recorded",
+            outcome: "resolved",
+            reference: "run-ab12cd34",
+          },
+        ],
+      }),
+    });
+    render(<OpsConsole section="roles" variant="embedded" />);
+
+    expect(await screen.findByText("Rcm Reviewer")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: /Rcm Reviewer role/i }));
+
+    expect(await screen.findByText("reviewer.local@example.test")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Back to roles" })).toBeInTheDocument();
   });
 });

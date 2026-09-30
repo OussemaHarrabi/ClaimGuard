@@ -66,6 +66,42 @@ export type OpsAuditResponse = {
   readonly event_count: number;
 };
 
+export type OpsActivityArea = "claim_submission" | "review_decision" | "intake";
+
+export type OpsActivityAction = "claim_submitted" | "decision_recorded" | "document_ingested";
+
+export type OpsActivityEntry = {
+  readonly at: string;
+  readonly role: string | null;
+  readonly actor: string;
+  readonly area: OpsActivityArea;
+  readonly action: OpsActivityAction;
+  readonly outcome: string;
+  readonly reference: string;
+};
+
+export type OpsActivityResponse = {
+  readonly source: string;
+  readonly role: string | null;
+  readonly area: OpsActivityArea | null;
+  readonly limit: number;
+  readonly entries: readonly OpsActivityEntry[];
+};
+
+export type OpsRole = {
+  readonly role: string;
+  readonly active_members: number;
+  readonly members: readonly string[];
+  readonly recent_actions: number;
+  readonly areas: readonly OpsActivityArea[];
+  readonly last_active_at: string;
+};
+
+export type OpsRolesResponse = {
+  readonly checked_at: string;
+  readonly roles: readonly OpsRole[];
+};
+
 export type OpsFetchError = {
   readonly kind: "error";
   readonly message: string;
@@ -124,4 +160,20 @@ export async function getOpsTraces(
 
 export async function getOpsAudit(signal?: AbortSignal): Promise<OpsAuditResponse> {
   return fetchOps<OpsAuditResponse>("/v1/operations/audit", signal);
+}
+
+export async function getOpsActivity(
+  filters: { role?: string | null; area?: OpsActivityArea | null; limit?: number } = {},
+  signal?: AbortSignal,
+): Promise<OpsActivityResponse> {
+  const params = new URLSearchParams();
+  if (filters.role) params.set("role", filters.role);
+  if (filters.area) params.set("area", filters.area);
+  if (filters.limit !== undefined && filters.limit > 0) params.set("limit", String(filters.limit));
+  const query = params.toString();
+  return fetchOps<OpsActivityResponse>(`/v1/operations/activity${query ? `?${query}` : ""}`, signal);
+}
+
+export async function getOpsRoles(signal?: AbortSignal): Promise<OpsRolesResponse> {
+  return fetchOps<OpsRolesResponse>("/v1/operations/roles", signal);
 }

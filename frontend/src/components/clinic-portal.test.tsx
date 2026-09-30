@@ -19,7 +19,7 @@ describe("clinic portal", () => {
     ["rcm_reviewer", ["My Queue", "Document Intake", "Requests", "Activity"]],
     ["rcm_lead", ["Team Queue", "Assignments", "Escalations", "Review Quality"]],
     ["clinic_admin", ["Overview", "All Claims", "Assignments", "Departments", "Team & Access", "Analytics", "Audit"]],
-    ["technical_manager", ["Operations", "Metrics", "Traces", "Audit Integrity", "Intake Jobs", "Versions", "Configuration"]],
+    ["technical_manager", ["Operations", "Metrics", "Traces", "Audit Integrity", "Intake Jobs", "Versions", "Configuration", "Platform Activity", "Roles"]],
   ])("shows the complete %s workspace", async (role, labels) => {
     getSession.mockResolvedValue({ user_id: "person-1", tenant_id: "clinic-a", role });
     render(<ClinicPortal page="unknown" />);

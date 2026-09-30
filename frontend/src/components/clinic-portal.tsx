@@ -33,6 +33,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   operations: Gauge, metrics: BarChart3, traces: Activity,
   "intake-operations": FolderInput, versions: ListChecks,
   "audit-integrity": ShieldCheck, configuration: Settings2,
+  roles: Users,
 };
 
 const NAVIGATION: Record<ClinicRole, Destination[]> = {
@@ -69,6 +70,8 @@ const NAVIGATION: Record<ClinicRole, Destination[]> = {
     { label: "Intake Jobs", page: "intake-operations" },
     { label: "Versions", page: "versions" },
     { label: "Configuration", page: "configuration" },
+    { label: "Platform Activity", page: "activity" },
+    { label: "Roles", page: "roles" },
   ],
 };
 
@@ -192,6 +195,8 @@ export function ClinicPortal({ page }: { page: string }) {
         {selected && activePage === "metrics" ? <OpsConsole variant="embedded" section="metrics" /> : null}
         {selected && activePage === "traces" ? <OpsConsole variant="embedded" section="traces" /> : null}
         {selected && activePage === "audit-integrity" ? <OpsConsole variant="embedded" section="audit" /> : null}
+        {selected && activePage === "activity" ? <OpsConsole variant="embedded" section="activity" /> : null}
+        {selected && activePage === "roles" ? <OpsConsole variant="embedded" section="roles" /> : null}
         {selected && activePage === "team-access" ? <TeamAccessPage /> : null}
         {selected && activePage === "departments" ? <DepartmentsPage /> : null}
         {selected && activePage === "document-intake" ? <DocumentIntakePage /> : null}
