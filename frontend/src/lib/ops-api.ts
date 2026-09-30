@@ -21,6 +21,13 @@ export type OpsSource = {
   readonly detail: string | null;
 };
 
+/** A source's status without a name, which is how the activity feed reports it. */
+export type OpsSourceStatus = {
+  readonly state: SourceState;
+  readonly last_data_at: string | null;
+  readonly detail: string | null;
+};
+
 export type OpsVersions = {
   readonly engine_rule_version: string;
   readonly schema_revision: string | null;
@@ -81,7 +88,7 @@ export type OpsActivityEntry = {
 };
 
 export type OpsActivityResponse = {
-  readonly source: string;
+  readonly source: OpsSourceStatus;
   readonly role: string | null;
   readonly area: OpsActivityArea | null;
   readonly limit: number;

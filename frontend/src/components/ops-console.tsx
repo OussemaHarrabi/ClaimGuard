@@ -1531,7 +1531,7 @@ function TraceCategoryCard({ category, summary, index, reduced, onSelect }: Trac
       className={`ops-category-card ${reduced ? "" : "ops-category-card-enter"} ${count === 0 ? "ops-category-card-empty" : ""}`}
       style={{ "--card-delay": delay } as React.CSSProperties}
       onClick={onSelect}
-      aria-label={`${category.title}: ${count} traces`}
+      aria-label={`${category.title}: ${count} ${count === 1 ? "trace" : "traces"}`}
     >
       <div className="ops-category-card-top">
         <span className="ops-category-card-count">
@@ -1539,7 +1539,8 @@ function TraceCategoryCard({ category, summary, index, reduced, onSelect }: Trac
             "no traffic"
           ) : (
             <>
-              <AnimatedNumber value={count} reduced={reduced} /> traces
+              <AnimatedNumber value={count} reduced={reduced} />{" "}
+              {count === 1 ? "trace" : "traces"}
             </>
           )}
         </span>
@@ -1819,7 +1820,8 @@ function ActivitySurface({ activity, filters, onFiltersChange, reduced }: Activi
         <div className="ops-activity-title">
           <span className="ops-panel-title">Platform activity</span>
           <span className="ops-activity-meta">
-            {activity.source} · {activity.entries.length} entries
+            <StateBadge state={activity.source.state} /> · {activity.entries.length}{" "}
+            {activity.entries.length === 1 ? "entry" : "entries"}
           </span>
         </div>
         <ActivityFilters

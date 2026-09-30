@@ -91,7 +91,7 @@ const makeAudit = (overrides: Partial<OpsAuditResponse> = {}): OpsAuditResponse 
 });
 
 const makeActivity = (overrides: Partial<OpsActivityResponse> = {}): OpsActivityResponse => ({
-  source: "operations",
+  source: { state: "healthy", last_data_at: CHECKED_AT, detail: null },
   role: null,
   area: null,
   limit: 50,
@@ -246,7 +246,7 @@ describe("OpsConsole", () => {
 
     MockWebSocket.lastInstance?.simulateOpen();
 
-    const traceCard = await screen.findByRole("button", { name: /Claim queries: 1 traces/i });
+    const traceCard = await screen.findByRole("button", { name: "Claim queries: 1 trace" });
     expect(traceCard).toBeInTheDocument();
   });
 
@@ -358,7 +358,7 @@ describe("OpsConsole", () => {
     mockSnapshot();
     render(<OpsConsole section="traces" variant="embedded" />);
 
-    const claimCard = await screen.findByRole("button", { name: /Claim queries: 1 traces/i });
+    const claimCard = await screen.findByRole("button", { name: "Claim queries: 1 trace" });
     expect(claimCard).toBeInTheDocument();
     fireEvent.click(claimCard);
 
@@ -389,6 +389,25 @@ describe("OpsConsole", () => {
     expect(row).toBeInTheDocument();
     expect(within(row as HTMLElement).getByText("review")).toBeInTheDocument();
     expect(within(row as HTMLElement).getByText("resolved")).toBeInTheDocument();
+  });
+
+  // Regression: the activity endpoint returns `source` as an object {state,last_data_at,detail}, but the
+  // client typed it as a string and rendered it directly. React threw "objects are not valid as a React
+  // child", which took the whole page down behind an error boundary. The fixture used to mock a string,
+  // so it agreed with the wrong type and every test passed. Render the real wire shape instead.
+  it("renders the activity source from the real object shape without crashing", async () => {
+    mockSnapshot({
+      activity: makeActivity({
+        source: { state: "degraded", last_data_at: CHECKED_AT, detail: "collector lagging" },
+      }),
+    });
+    render(<OpsConsole section="activity" variant="embedded" />);
+
+    // The badge proves the object `source` rendered as text rather than as an object.
+    expect(await screen.findByText("degraded")).toBeInTheDocument();
+    // And the source meta line exists at all — it never rendered while the page was crashing.
+    const meta = screen.getByLabelText("Platform activity").querySelector(".ops-activity-meta");
+    expect(meta?.textContent).toMatch(/entr(y|ies)/);
   });
 
   it("renders the roles grid and drills into a role's members and activity", async () => {
