@@ -189,7 +189,8 @@ describe("OpsConsole", () => {
     render(<OpsConsole />);
 
     expect(await screen.findByText("No metrics available for this window.")).toBeInTheDocument();
-    expect(await screen.findByText("No recent traces.")).toBeInTheDocument();
+    expect(await screen.findByText("Trace categories")).toBeInTheDocument();
+    expect(screen.getAllByText("no traffic").length).toBeGreaterThan(0);
   });
 
   it("shows the error state with Retry and recovers on a successful refetch", async () => {
@@ -245,8 +246,8 @@ describe("OpsConsole", () => {
 
     MockWebSocket.lastInstance?.simulateOpen();
 
-    expect(await screen.findByText("GET /v1/claims")).toBeInTheDocument();
-    expect(screen.queryByText("No recent traces.")).not.toBeInTheDocument();
+    const traceCard = await screen.findByRole("button", { name: /Claim queries: 1 traces/i });
+    expect(traceCard).toBeInTheDocument();
   });
 
   it("updates rendered data when a stream snapshot arrives", async () => {
@@ -331,6 +332,38 @@ describe("OpsConsole", () => {
 
     expect(await screen.findByText("Platform ok")).toBeInTheDocument();
     expect(MockWebSocket.lastInstance?.readyState).toBe(0);
+  });
+
+  it("renders metric category cards and drills into a category's series", async () => {
+    mockSnapshot({
+      metrics: makeMetrics({
+        series: [
+          { name: "http_requests_total", labels: { route: "/v1/claims" }, value: 42 },
+          { name: "http_request_duration_seconds", labels: { route: "/v1/claims" }, value: 120 },
+        ],
+      }),
+    });
+    render(<OpsConsole section="metrics" variant="embedded" />);
+
+    expect(screen.getByText("Metric categories")).toBeInTheDocument();
+    const httpCard = await screen.findByRole("button", { name: /HTTP requests:/i });
+    expect(httpCard).toBeInTheDocument();
+
+    fireEvent.click(httpCard);
+    expect(await screen.findByText("Back to categories")).toBeInTheDocument();
+    expect(screen.getByText("http_requests_total")).toBeInTheDocument();
+  });
+
+  it("renders trace category cards and drills into a category's traces", async () => {
+    mockSnapshot();
+    render(<OpsConsole section="traces" variant="embedded" />);
+
+    const claimCard = await screen.findByRole("button", { name: /Claim queries: 1 traces/i });
+    expect(claimCard).toBeInTheDocument();
+    fireEvent.click(claimCard);
+
+    expect(await screen.findByText("Back to categories")).toBeInTheDocument();
+    expect(screen.getByText("GET /v1/claims")).toBeInTheDocument();
   });
 
   it("renders the activity feed with sentence rows, area badge, and outcome chip", async () => {

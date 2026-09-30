@@ -67,8 +67,8 @@ Current page set (one section per page, all dark):
 | Page | Content |
 |---|---|
 | Operations | platform verdict, components, source freshness, version strip |
-| Metrics | throughput, error mix, latency; 5m/15m/1h |
-| Traces | recent traces, latency buckets |
+| Metrics | category cards by signal family; drill to series; 5m/15m/1h |
+| Traces | category cards by request family; drill to trace timeline |
 | Audit Integrity | chain verification seal + event count |
 | Intake Jobs | job counts by status |
 | Versions | rule / model / prompt versions |
@@ -83,17 +83,24 @@ Current page set (one section per page, all dark):
 
 ## 5. Data presentation
 
-**Metrics:** a top row of 3–5 key numbers with tiny sparklines; one accent colour
-per chart; **direct labels instead of legends**; always show the time range
-selector and the last-updated time. Counter magnitude may be heat-encoded, but
-never let the ramp imply an alarm about a metric that is merely large.
+**Metrics:** category cards that group Prometheus series by signal family (HTTP
+requests, latency, business events, runtime, queue, database, other). Each card
+shows a title, description, series count and aggregated total. Clicking a card
+opens a detail view listing the individual series with their labels, current
+value and a proportional heat bar. A window switcher (5m/15m/1h) lives in the
+header. Counter magnitude may be heat-encoded, but never let the ramp imply an
+alarm about a metric that is merely large.
 
 **Logs:** virtualized (TanStack Virtual); level as a small dot or 2-letter tag,
 never a coloured row; a visible **Pause**, with auto-pause on scroll-up; search
 syntax like `level:error service:api`; collapsible JSON.
 
-**Traces:** proportional duration bars bucketed by latency; monospace durations;
-the trace id available but subordinate.
+**Traces:** category cards that group recent traces by request family (claim
+submission, claims, review, intake, auth, ops, other). Each card shows a title,
+description, trace count and the slowest duration in the family. Clicking a card
+opens a detail timeline with method, route, duration against a baseline,
+status-class badge and trace id. Empty categories stay visible and read
+"no traffic" so the manager can see what parts of the API surface are idle.
 
 ## 6. Motion
 

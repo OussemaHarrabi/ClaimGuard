@@ -11,7 +11,6 @@ import {
 import {
   Activity,
   AlertTriangle,
-  ChevronDown,
   ChevronLeft,
   Clock,
   LayoutDashboard,
@@ -286,6 +285,141 @@ function traceTitle(rootName: string): string {
   const path = rootName.replace(/^[A-Z]+\s+/, "");
   if (path.startsWith("/v1/operations/")) return "Operations API";
   return rootName;
+}
+
+type MetricCategory = {
+  key: string;
+  title: string;
+  description: string;
+};
+
+function metricCategory(name: string): MetricCategory {
+  const lower = name.toLowerCase();
+  if (lower.startsWith("http_") || lower.includes("_http_")) {
+    return {
+      key: "http",
+      title: "HTTP requests",
+      description: "Request throughput, status codes, and sizes for the REST API surface.",
+    };
+  }
+  if (
+    lower.includes("_duration_") ||
+    lower.includes("_latency_") ||
+    lower.endsWith("_duration_seconds") ||
+    lower.endsWith("_latency_seconds")
+  ) {
+    return {
+      key: "latency",
+      title: "Latency",
+      description: "How long operations take to complete across services.",
+    };
+  }
+  if (
+    lower.startsWith("claimguard_") ||
+    lower.includes("claim") ||
+    lower.includes("finding") ||
+    lower.includes("review") ||
+    lower.includes("decision") ||
+    lower.includes("intake")
+  ) {
+    return {
+      key: "business",
+      title: "Business operations",
+      description: "Counters for claims, findings, reviews, and intake workflows.",
+    };
+  }
+  if (
+    lower === "up" ||
+    lower.startsWith("scrape_") ||
+    lower.startsWith("process_") ||
+    lower.startsWith("node_") ||
+    lower.startsWith("container_") ||
+    lower.includes("memory") ||
+    lower.includes("cpu")
+  ) {
+    return {
+      key: "runtime",
+      title: "Runtime health",
+      description: "Process, host, and scraper health signals.",
+    };
+  }
+  if (lower.includes("queue") || lower.includes("worker") || lower.includes("job")) {
+    return {
+      key: "queue",
+      title: "Queue & workers",
+      description: "Background job and worker queue depth and throughput.",
+    };
+  }
+  if (lower.startsWith("db_") || lower.startsWith("database_") || lower.includes("_sql_")) {
+    return {
+      key: "database",
+      title: "Database",
+      description: "Database connection and query metrics.",
+    };
+  }
+  return {
+    key: "other",
+    title: "Other telemetry",
+    description: "Additional metrics not grouped into a known category.",
+  };
+}
+
+type TraceCategory = {
+  key: string;
+  title: string;
+  description: string;
+};
+
+function traceCategory(rootName: string): TraceCategory {
+  const method = rootName.split(" ")[0] ?? "";
+  const path = rootName.replace(/^[A-Z]+\s+/, "").toLowerCase();
+  if (path.startsWith("/v1/claims") && method === "POST") {
+    return {
+      key: "claim_submission",
+      title: "Claim submission",
+      description: "Requests that create or submit new claims.",
+    };
+  }
+  if (path.startsWith("/v1/claims")) {
+    return {
+      key: "claims",
+      title: "Claim queries",
+      description: "Requests that read or list claim data.",
+    };
+  }
+  if (path.startsWith("/v1/queue") || path.includes("/review") || path.includes("/decision")) {
+    return {
+      key: "review",
+      title: "Review decisions",
+      description: "Requests that fetch or record review decisions.",
+    };
+  }
+  if (path.startsWith("/v1/intake") || path.includes("/documents") || path.includes("/upload")) {
+    return {
+      key: "intake",
+      title: "Intake",
+      description: "Document and intake ingestion requests.",
+    };
+  }
+  if (path.startsWith("/v1/auth")) {
+    return {
+      key: "auth",
+      title: "Authentication",
+      description: "Sign-in, session, and authentication checks.",
+    };
+  }
+  if (path.startsWith("/v1/health") || path.startsWith("/v1/operations")) {
+    return {
+      key: "ops",
+      title: "Operations & health",
+      description: "Health checks and operations telemetry endpoints.",
+    };
+  }
+  return {
+    key: "other",
+    title: "Other requests",
+    description: "Requests that do not belong to a known business category.",
+  };
 }
 
 type OpsConsoleProps = {
@@ -890,31 +1024,20 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
               </>
             )}
             {showMetrics && (
-              <section className="ops-signal-wall" aria-label="Metrics">
-                <div className="ops-signal-wall-controls">
-                  <span className="ops-signal-wall-updated">—</span>
+              <section className="ops-metrics-surface" aria-label="Metrics">
+                <div className="ops-metrics-header">
+                  <span className="ops-panel-title">Metric categories</span>
                   <WindowSwitch value={window} onChange={setWindow} />
                 </div>
-                <MetricsSkeleton />
+                <CategoryGridSkeleton />
               </section>
             )}
             {showTraces && (
               <section className="ops-traces-surface" aria-label="Traces">
-                <div className="ops-traces-strip">
-                  <span className="ops-traces-strip-title">Traces</span>
-                  <div className="ops-traces-figures">
-                    <span className="ops-traces-figure">
-                      requests <strong>—</strong>
-                    </span>
-                    <span className="ops-traces-figure">
-                      slowest <strong>—</strong>
-                    </span>
-                    <span className="ops-traces-figure">
-                      typical <strong>—</strong>
-                    </span>
-                  </div>
+                <div className="ops-traces-header">
+                  <span className="ops-panel-title">Trace categories</span>
                 </div>
-                <Skeleton />
+                <CategoryGridSkeleton />
               </section>
             )}
             {showAudit && (
@@ -983,31 +1106,11 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
             )}
 
             {showMetrics && snap.data.metrics && (
-              <section className="ops-signal-wall" aria-label="Metrics">
-                <div className="ops-signal-wall-controls">
-                  <span
-                    className="ops-signal-wall-updated"
-                    title={snap.data.metrics.source.last_data_at ?? snap.data.overview.checked_at}
-                  >
-                    Updated {fmtRel(snap.data.metrics.source.last_data_at ?? snap.data.overview.checked_at)}
-                  </span>
-                  <WindowSwitch value={window} onChange={setWindow} />
-                </div>
-                {snap.data.metrics.series.length === 0 ? (
-                  <div className="ops-empty-state">
-                    <Activity size={24} aria-hidden="true" />
-                    <p>No metrics available for this window.</p>
-                  </div>
-                ) : (
-                  <MetricsTable metrics={snap.data.metrics} />
-                )}
-              </section>
+              <MetricsSurface metrics={snap.data.metrics} window={window} reduced={reduced} />
             )}
 
             {showTraces && snap.data.traces && (
-              <section className="ops-traces-surface" aria-label="Traces">
-                <Traces traces={snap.data.traces.traces} />
-              </section>
+              <TracesSurface traces={snap.data.traces} reduced={reduced} />
             )}
 
             {showAudit && snap.data.audit && (
@@ -1037,10 +1140,6 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
   );
 }
 
-const SKEL_BANDS = ["a", "b", "c"];
-const SKEL_SERIES = ["1", "2", "3", "4"];
-const COLLAPSED_PREVIEW_COUNT = 3;
-
 function usePreviousMetricValues(series: readonly OpsMetricSeries[]): ReadonlyMap<string, number> {
   const previousRef = useRef<ReadonlyMap<string, number>>(new Map());
   const current = useMemo(() => {
@@ -1059,68 +1158,6 @@ function usePreviousMetricValues(series: readonly OpsMetricSeries[]): ReadonlyMa
   return previous;
 }
 
-function rankLabel(index: number, total: number): string {
-  if (total === 1) return "1 series";
-  if (index === 0) return "largest";
-  if (index === 1) return "2nd";
-  if (index === 2) return "3rd";
-  return `${index + 1}th`;
-}
-
-function MetricsSkeleton() {
-  return (
-    <ul className="ops-metric-cards" aria-hidden="true">
-      {SKEL_BANDS.map((bandId) => (
-        <li key={`skel-card-${bandId}`} className="ops-metric-card">
-          <div className="ops-metric-card-header">
-            <div className="ops-skeleton-line" style={{ width: "160px" }} />
-            <div className="ops-skeleton-line" style={{ width: "80px" }} />
-          </div>
-          <div className="ops-metric-summary-row">
-            {SKEL_SERIES.slice(0, COLLAPSED_PREVIEW_COUNT).map((seriesId) => (
-              <div key={`skel-summary-${bandId}-${seriesId}`} className="ops-metric-summary-item">
-                <div className="ops-skeleton-value" />
-                <div className="ops-skeleton-line" style={{ width: "70%" }} />
-                <div className="ops-metric-summary-bar-wrap">
-                  <div className="ops-skeleton-bar" />
-                </div>
-              </div>
-            ))}
-          </div>
-        </li>
-      ))}
-    </ul>
-  );
-}
-
-type MetricSummaryItemProps = {
-  series: OpsMetricSeries;
-  groupMax: number;
-  changed: boolean;
-  reduced: boolean;
-};
-
-function MetricSummaryItem({ series, groupMax, changed, reduced }: MetricSummaryItemProps) {
-  const share = groupMax > 0 ? series.value / groupMax : 0;
-  const heat = metricHeatLevel(series.value, groupMax);
-  return (
-    <div className={`ops-metric-summary-item ${changed ? "ops-metric-summary-item-changed" : ""}`}>
-      <AnimatedNumber
-        value={series.value}
-        reduced={reduced}
-        className={`ops-metric-summary-value ops-signal-heat-${heat}`}
-      />
-      <MetricLabels labels={series.labels} />
-      <div className="ops-metric-summary-bar-wrap" aria-hidden="true">
-        <div
-          className={`ops-metric-summary-bar ops-signal-bar-${heat} ${reduced ? "" : "ops-metric-bar-enter"}`}
-          style={{ "--bar-share": String(share) } as React.CSSProperties}
-        />
-      </div>
-    </div>
-  );
-}
-
 type MetricSeriesRowProps = {
   series: OpsMetricSeries;
   groupMax: number;
@@ -1135,6 +1172,7 @@ function MetricSeriesRow({ series, groupMax, changed, reduced }: MetricSeriesRow
   return (
     <li className={`ops-metric-series-row ${changed ? "ops-metric-series-row-changed" : ""}`}>
       <div className="ops-metric-series-row-label">
+        <span className="ops-metric-series-name">{series.name}</span>
         <MetricLabels labels={series.labels} />
       </div>
       <div className="ops-metric-series-row-value">
@@ -1154,125 +1192,50 @@ function MetricSeriesRow({ series, groupMax, changed, reduced }: MetricSeriesRow
   );
 }
 
-type MetricCardProps = {
-  name: string;
-  items: readonly OpsMetricSeries[];
-  groupMax: number;
-  changedMap: ReadonlyMap<string, boolean>;
-  source: import("@/lib/ops-api").OpsSource;
-  window: import("@/lib/ops-api").OpsWindow;
-  reduced: boolean;
-  groupIndex: number;
-};
-
-function MetricCard({
-  name,
-  items,
-  groupMax,
-  changedMap,
-  source,
-  window,
-  reduced,
-  groupIndex,
-}: MetricCardProps) {
-  const [expanded, setExpanded] = useState(false);
-  const anyChanged = items.some((s) => changedMap.get(seriesKey(s)) ?? false);
-  const statusText = useMemo(() => {
-    const total = items.length;
-    const rank = rankLabel(0, total);
-    const suffix = anyChanged ? " • changed" : "";
-    return total === 1 ? `${rank}${suffix}` : `${rank} of ${total}${suffix}`;
-  }, [items.length, anyChanged]);
-
-  const cardDelay = reduced ? "0ms" : `${clamp(groupIndex, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
-
+function CategoryGridSkeleton() {
   return (
-    <li
-      className={`ops-metric-card ${reduced ? "" : "ops-metric-card-enter"}`}
-      data-changed={anyChanged}
-      style={{ "--card-delay": cardDelay } as React.CSSProperties}
-    >
-      <button
-        type="button"
-        className="ops-metric-card-header"
-        onClick={() => setExpanded((e) => !e)}
-        aria-expanded={expanded}
-        aria-label={expanded ? `Collapse ${name}` : `Expand ${name}`}
-      >
-        <span className="ops-metric-card-name">{name}</span>
-        <span className="ops-metric-card-status">{statusText}</span>
-        <ChevronDown
-          size={18}
-          aria-hidden="true"
-          className={`ops-metric-card-chevron ${expanded ? "ops-metric-card-chevron-open" : ""}`}
-        />
-      </button>
-
-      <div
-        className={`ops-metric-card-summary ${expanded ? "ops-metric-card-summary-hidden" : ""}`}
-        aria-hidden={expanded}
-      >
-        <div className="ops-metric-summary-row">
-          {items.slice(0, COLLAPSED_PREVIEW_COUNT).map((s) => (
-            <MetricSummaryItem
-              key={seriesKey(s)}
-              series={s}
-              groupMax={groupMax}
-              changed={changedMap.get(seriesKey(s)) ?? false}
-              reduced={reduced}
-            />
-          ))}
-        </div>
-      </div>
-
-      <div
-        className={`ops-metric-card-detail ${expanded ? "ops-metric-card-detail-open" : ""}`}
-        aria-hidden={!expanded}
-      >
-        <div className="ops-metric-card-detail-inner">
-          <ul className="ops-metric-series-list">
-            {items.map((s, i) => (
-              <MetricSeriesRow
-                key={seriesKey(s)}
-                series={s}
-                groupMax={groupMax}
-                changed={changedMap.get(seriesKey(s)) ?? false}
-                reduced={reduced}
-                index={i}
-              />
-            ))}
-          </ul>
-          <div className="ops-metric-card-meta">
-            <span>window {window}</span>
-            <span aria-hidden="true">·</span>
-            <span>
-              {source.name} {source.state}
-            </span>
-          </div>
-        </div>
-      </div>
-    </li>
+    <ul className="ops-category-grid" aria-hidden="true">
+      {Array.from({ length: 4 }).map((_, i) => (
+        <li key={`cat-skel-${i.toString()}`} className="ops-category-card ops-category-card-skeleton">
+          <div className="ops-skeleton-line" style={{ width: "55%" }} />
+          <div className="ops-skeleton-line" style={{ width: "80%" }} />
+          <div className="ops-skeleton-line" style={{ width: "40%" }} />
+        </li>
+      ))}
+    </ul>
   );
 }
 
-function MetricsTable({ metrics }: { metrics: OpsMetricsResponse }) {
-  const reduced = usePrefersReducedMotion();
-  const previous = usePreviousMetricValues(metrics.series);
-  const groups = useMemo(() => {
-    const map = new Map<string, OpsMetricSeries[]>();
-    for (const s of metrics.series) {
-      const arr = map.get(s.name) ?? [];
-      arr.push(s);
-      map.set(s.name, arr);
-    }
-    return Array.from(map.entries())
-      .map(([name, items]): [string, OpsMetricSeries[]] => {
-        items.sort((a, b) => b.value - a.value);
-        return [name, items];
-      })
-      .sort(([a], [b]) => a.localeCompare(b));
-  }, [metrics.series]);
+type MetricCategorySummary = {
+  category: MetricCategory;
+  items: OpsMetricSeries[];
+  total: number;
+};
 
+function summarizeMetrics(series: readonly OpsMetricSeries[]): MetricCategorySummary[] {
+  const map = new Map<string, MetricCategorySummary>();
+  for (const s of series) {
+    const cat = metricCategory(s.name);
+    const existing = map.get(cat.key);
+    if (existing) {
+      existing.items.push(s);
+      existing.total += s.value;
+    } else {
+      map.set(cat.key, { category: cat, items: [s], total: s.value });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.category.title.localeCompare(b.category.title));
+}
+
+type MetricsSurfaceProps = {
+  metrics: OpsMetricsResponse;
+  window: OpsWindow;
+  reduced: boolean;
+};
+
+function MetricsSurface({ metrics, window, reduced }: MetricsSurfaceProps) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const previous = usePreviousMetricValues(metrics.series);
   const changedMap = useMemo(() => {
     const map = new Map<string, boolean>();
     for (const s of metrics.series) {
@@ -1282,138 +1245,446 @@ function MetricsTable({ metrics }: { metrics: OpsMetricsResponse }) {
     return map;
   }, [metrics.series, previous]);
 
+  const categories = useMemo(() => summarizeMetrics(metrics.series), [metrics.series]);
+  const selected = useMemo(
+    () => categories.find((c) => c.category.key === selectedKey) ?? null,
+    [categories, selectedKey],
+  );
+
+  if (metrics.series.length === 0) {
+    return (
+      <section className="ops-metrics-surface" aria-label="Metrics">
+        <div className="ops-metrics-header">
+          <div className="ops-metrics-title">
+            <span className="ops-panel-title">Metric categories</span>
+            <span className="ops-metrics-meta">
+              {metrics.source.name} <StateBadge state={metrics.source.state} />
+            </span>
+          </div>
+          <span className="ops-metrics-updated">
+            Updated {fmtRel(metrics.source.last_data_at)}
+          </span>
+        </div>
+        <div className="ops-empty-state">
+          <Activity size={24} aria-hidden="true" />
+          <p>No metrics available for this window.</p>
+        </div>
+      </section>
+    );
+  }
+
   return (
-    <ul className="ops-metric-cards" aria-label="Metric groups">
-      {groups.map(([name, items], groupIndex) => {
-        const groupMax = Math.max(1, ...items.map((s) => s.value));
-        return (
-          <MetricCard
-            key={name}
-            name={name}
-            items={items}
-            groupMax={groupMax}
-            changedMap={changedMap}
-            source={metrics.source}
-            window={metrics.window}
-            reduced={reduced}
-            groupIndex={groupIndex}
-          />
-        );
-      })}
-    </ul>
+    <section className="ops-metrics-surface" aria-label="Metrics">
+      {selected ? (
+        <MetricCategoryDetail
+          summary={selected}
+          window={window}
+          source={metrics.source}
+          changedMap={changedMap}
+          reduced={reduced}
+          onBack={() => setSelectedKey(null)}
+        />
+      ) : (
+        <>
+          <div className="ops-metrics-header">
+            <div className="ops-metrics-title">
+              <span className="ops-panel-title">Metric categories</span>
+              <span className="ops-metrics-meta">
+                {metrics.source.name} <StateBadge state={metrics.source.state} />
+              </span>
+            </div>
+            <div className="ops-metrics-controls">
+              <span className="ops-metrics-updated">
+                Updated {fmtRel(metrics.source.last_data_at)}
+              </span>
+            </div>
+          </div>
+          <ul className="ops-category-grid" aria-label="Metric categories">
+            {categories.map((summary, index) => (
+              <li key={summary.category.key}>
+                <MetricCategoryCard
+                  summary={summary}
+                  index={index}
+                  reduced={reduced}
+                  onSelect={() => setSelectedKey(summary.category.key)}
+                />
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </section>
   );
 }
 
-function Traces({ traces }: { traces: readonly OpsTrace[] }) {
-  const reduced = usePrefersReducedMotion();
-  const durations = traces.map((t) => t.duration_ms);
-  const slowest = durations.length > 0 ? Math.max(...durations) : 0;
-  const median = (() => {
-    if (durations.length === 0) return 0;
-    const sorted = [...durations].sort((a, b) => a - b);
-    const mid = Math.floor(sorted.length / 2);
-    return sorted.length % 2 === 0
-      ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
-      : sorted[mid];
-  })();
-  const maxDuration = Math.max(1, slowest);
+type MetricCategoryCardProps = {
+  summary: MetricCategorySummary;
+  index: number;
+  reduced: boolean;
+  onSelect: () => void;
+};
 
+function MetricCategoryCard({ summary, index, reduced, onSelect }: MetricCategoryCardProps) {
+  const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
   return (
-    <>
-      <p className="ops-traces-explainer">
-        Each row is one request the platform handled. A longer bar means it took
-        longer.
-      </p>
-
-      <div className="ops-traces-strip">
-        <span className="ops-traces-strip-title">Traces</span>
-        <div className="ops-traces-figures">
-          <span className="ops-traces-figure">
-            requests <AnimatedNumber value={traces.length} reduced={reduced} />
-          </span>
-          <span className="ops-traces-figure">
-            slowest <AnimatedNumber value={slowest} reduced={reduced} /> ms
-          </span>
-          <span className="ops-traces-figure">
-            typical <AnimatedNumber value={median} reduced={reduced} /> ms
-          </span>
-        </div>
-        <span className="ops-traces-scale-marker">
-          slowest {slowest.toLocaleString()} ms
+    <button
+      type="button"
+      className={`ops-category-card ${reduced ? "" : "ops-category-card-enter"}`}
+      style={{ "--card-delay": delay } as React.CSSProperties}
+      onClick={onSelect}
+      aria-label={`${summary.category.title}: ${summary.items.length} series, ${summary.total.toLocaleString()} total`}
+    >
+      <div className="ops-category-card-top">
+        <span className="ops-category-card-count">
+          <AnimatedNumber value={summary.items.length} reduced={reduced} /> series
         </span>
       </div>
+      <div className="ops-category-card-body">
+        <strong>{summary.category.title}</strong>
+        <p>{summary.category.description}</p>
+      </div>
+      <div className="ops-category-card-foot">
+        <span className="ops-category-card-figure">
+          <AnimatedNumber value={summary.total} reduced={reduced} /> total
+        </span>
+        <span className="ops-category-card-hint">view details</span>
+      </div>
+    </button>
+  );
+}
 
-      {traces.length === 0 ? (
-        <div className="ops-traces-empty">
-          <Timer size={24} aria-hidden="true" className="ops-traces-empty-icon" />
-          <span>No recent traces.</span>
+type MetricCategoryDetailProps = {
+  summary: MetricCategorySummary;
+  window: OpsWindow;
+  source: import("@/lib/ops-api").OpsSource;
+  changedMap: ReadonlyMap<string, boolean>;
+  reduced: boolean;
+  onBack: () => void;
+};
+
+function MetricCategoryDetail({
+  summary,
+  window,
+  source,
+  changedMap,
+  reduced,
+  onBack,
+}: MetricCategoryDetailProps) {
+  const groupMax = Math.max(1, ...summary.items.map((s) => s.value));
+  return (
+    <div className="ops-category-detail">
+      <div className="ops-category-detail-header">
+        <button type="button" className="ops-category-detail-back" onClick={onBack} aria-label="Back to metric categories">
+          <ChevronLeft size={16} aria-hidden="true" />
+          <span>Back to categories</span>
+        </button>
+        <div className="ops-category-detail-title">
+          <span className="ops-panel-title">{summary.category.title}</span>
+          <span className="ops-category-detail-meta">{summary.category.description}</span>
         </div>
+      </div>
+
+      <ul className="ops-metric-series-list" aria-label={`${summary.category.title} series`}>
+        {summary.items.map((s, i) => (
+          <MetricSeriesRow
+            key={seriesKey(s)}
+            series={s}
+            groupMax={groupMax}
+            changed={changedMap.get(seriesKey(s)) ?? false}
+            reduced={reduced}
+            index={i}
+          />
+        ))}
+      </ul>
+
+      <div className="ops-metric-card-meta">
+        <span>window {window}</span>
+        <span aria-hidden="true">·</span>
+        <span>
+          {source.name} {source.state}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function medianDuration(traces: readonly OpsTrace[]): number {
+  const durations = traces.map((t) => t.duration_ms);
+  if (durations.length === 0) return 0;
+  const sorted = [...durations].sort((a, b) => a - b);
+  const mid = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+    : sorted[mid];
+}
+
+function slowestDuration(traces: readonly OpsTrace[]): number {
+  return traces.length > 0 ? Math.max(...traces.map((t) => t.duration_ms)) : 0;
+}
+
+type TraceCategorySummary = {
+  category: TraceCategory;
+  traces: OpsTrace[];
+};
+
+function summarizeTraces(traces: readonly OpsTrace[]): TraceCategorySummary[] {
+  const map = new Map<string, TraceCategorySummary>();
+  for (const t of traces) {
+    const cat = traceCategory(t.root_name);
+    const existing = map.get(cat.key);
+    if (existing) {
+      existing.traces.push(t);
+    } else {
+      map.set(cat.key, { category: cat, traces: [t] });
+    }
+  }
+  return Array.from(map.values()).sort((a, b) => a.category.title.localeCompare(b.category.title));
+}
+
+function allTraceCategories(): TraceCategory[] {
+  return [
+    { key: "claim_submission", title: "Claim submission", description: "Requests that create or submit new claims." },
+    { key: "claims", title: "Claim queries", description: "Requests that read or list claim data." },
+    { key: "review", title: "Review decisions", description: "Requests that fetch or record review decisions." },
+    { key: "intake", title: "Intake", description: "Document and intake ingestion requests." },
+    { key: "auth", title: "Authentication", description: "Sign-in, session, and authentication checks." },
+    { key: "ops", title: "Operations & health", description: "Health checks and operations telemetry endpoints." },
+    { key: "other", title: "Other requests", description: "Requests that do not belong to a known business category." },
+  ];
+}
+
+type TracesSurfaceProps = {
+  traces: OpsTracesResponse;
+  reduced: boolean;
+};
+
+function TracesSurface({ traces, reduced }: TracesSurfaceProps) {
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const byCategory = useMemo(() => summarizeTraces(traces.traces), [traces.traces]);
+  const selected = useMemo(
+    () => byCategory.find((c) => c.category.key === selectedKey) ?? null,
+    [byCategory, selectedKey],
+  );
+
+  return (
+    <section className="ops-traces-surface" aria-label="Traces">
+      {selected ? (
+        <TraceCategoryDetail
+          summary={selected}
+          source={traces.source}
+          reduced={reduced}
+          onBack={() => setSelectedKey(null)}
+        />
       ) : (
-        <div className="ops-traces-body">
-          <ul className="ops-trace-rows" aria-label="Recent traces">
-            {traces.map((t, i) => {
-              const title = traceTitle(t.root_name);
-              const latency = traceLatencyClass(t.duration_ms);
-              const isSlowest = t.duration_ms === slowest && slowest > 0;
-              const scale = t.duration_ms / maxDuration;
-              const staggerIndex = clamp(i, 0, MAX_STAGGER_NODES - 1);
-              const delay = reduced ? "0ms" : `${staggerIndex * 25}ms`;
+        <>
+          <div className="ops-traces-header">
+            <div className="ops-traces-title">
+              <span className="ops-panel-title">Trace categories</span>
+              <span className="ops-traces-meta">
+                {traces.source.name} <StateBadge state={traces.source.state} />
+              </span>
+            </div>
+            <span className="ops-traces-updated">
+              Updated {fmtRel(traces.source.last_data_at)}
+            </span>
+          </div>
+          <ul className="ops-category-grid" aria-label="Trace categories">
+            {allTraceCategories().map((category, index) => {
+              const summary = byCategory.find((c) => c.category.key === category.key);
               return (
-                <li key={t.trace_id}>
-                  <button
-                    type="button"
-                    className={`ops-trace-row ${isSlowest ? "ops-trace-row-slowest" : ""} ${reduced ? "" : "ops-trace-row-enter"}`}
-                    style={{ "--row-delay": delay } as React.CSSProperties}
-                    aria-label={`Trace ${t.trace_id}: ${t.root_name} in ${t.service}, ${t.duration_ms} ms${isSlowest ? " (slowest)" : ""}`}
-                  >
-                    <div className="ops-trace-gutter">
-                      <span className="ops-trace-gutter-title" title={title}>
-                        {title}
-                      </span>
-                      <span className="ops-trace-gutter-meta">
-                        <span className="ops-trace-gutter-route" title={t.root_name}>
-                          {t.root_name}
-                        </span>
-                        <span className="ops-trace-gutter-service" title={t.service}>
-                          {t.service}
-                        </span>
-                      </span>
-                    </div>
-                    <div className="ops-trace-track" aria-hidden="true">
-                      <div
-                        className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
-                        style={{
-                          "--bar-scale": String(scale),
-                          "--bar-delay": delay,
-                        } as React.CSSProperties}
-                      />
-                    </div>
-                    <span className="ops-trace-duration">
-                      {t.duration_ms.toLocaleString()} ms
-                    </span>
-                    <div className="ops-trace-detail">
-                      <span className="ops-trace-detail-id" title={t.trace_id}>
-                        {t.trace_id}
-                      </span>
-                      <span className="ops-trace-detail-start">
-                        {fmtTime(t.start_time)}
-                      </span>
-                      <span className="ops-trace-detail-service">{t.service}</span>
-                      <span className="ops-trace-detail-duration">
-                        {t.duration_ms.toLocaleString()} ms
-                      </span>
-                      {isSlowest && (
-                        <span className="ops-trace-slowest-badge">slowest</span>
-                      )}
-                    </div>
-                  </button>
+                <li key={category.key}>
+                  <TraceCategoryCard
+                    category={category}
+                    summary={summary}
+                    index={index}
+                    reduced={reduced}
+                    onSelect={() => setSelectedKey(category.key)}
+                  />
                 </li>
               );
             })}
           </ul>
+        </>
+      )}
+    </section>
+  );
+}
+
+type TraceCategoryCardProps = {
+  category: TraceCategory;
+  summary: TraceCategorySummary | undefined;
+  index: number;
+  reduced: boolean;
+  onSelect: () => void;
+};
+
+function TraceCategoryCard({ category, summary, index, reduced, onSelect }: TraceCategoryCardProps) {
+  const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+  const count = summary?.traces.length ?? 0;
+  const median = summary ? medianDuration(summary.traces) : 0;
+  const slowest = summary ? slowestDuration(summary.traces) : 0;
+  const slow = slowest >= 500;
+
+  return (
+    <button
+      type="button"
+      className={`ops-category-card ${reduced ? "" : "ops-category-card-enter"} ${count === 0 ? "ops-category-card-empty" : ""}`}
+      style={{ "--card-delay": delay } as React.CSSProperties}
+      onClick={onSelect}
+      aria-label={`${category.title}: ${count} traces`}
+    >
+      <div className="ops-category-card-top">
+        <span className="ops-category-card-count">
+          {count === 0 ? (
+            "no traffic"
+          ) : (
+            <>
+              <AnimatedNumber value={count} reduced={reduced} /> traces
+            </>
+          )}
+        </span>
+        {slow && <span className="ops-category-card-alert">slow</span>}
+      </div>
+      <div className="ops-category-card-body">
+        <strong>{category.title}</strong>
+        <p>{category.description}</p>
+      </div>
+      {count > 0 && (
+        <div className="ops-category-card-foot">
+          <span className="ops-category-card-figure">
+            typical <AnimatedNumber value={median} reduced={reduced} /> ms
+          </span>
+          <span className="ops-category-card-figure">
+            slowest <AnimatedNumber value={slowest} reduced={reduced} /> ms
+          </span>
         </div>
       )}
-    </>
+    </button>
+  );
+}
+
+type TraceCategoryDetailProps = {
+  summary: TraceCategorySummary;
+  source: import("@/lib/ops-api").OpsSource;
+  reduced: boolean;
+  onBack: () => void;
+};
+
+function TraceCategoryDetail({ summary, source, reduced, onBack }: TraceCategoryDetailProps) {
+  const durations = summary.traces.map((t) => t.duration_ms);
+  const slowest = durations.length > 0 ? Math.max(...durations) : 0;
+  const maxDuration = Math.max(1, slowest);
+
+  return (
+    <div className="ops-category-detail">
+      <div className="ops-category-detail-header">
+        <button type="button" className="ops-category-detail-back" onClick={onBack} aria-label="Back to trace categories">
+          <ChevronLeft size={16} aria-hidden="true" />
+          <span>Back to categories</span>
+        </button>
+        <div className="ops-category-detail-title">
+          <span className="ops-panel-title">{summary.category.title}</span>
+          <span className="ops-category-detail-meta">{summary.category.description}</span>
+        </div>
+      </div>
+
+      {summary.traces.length === 0 ? (
+        <div className="ops-empty-state">
+          <Timer size={24} aria-hidden="true" />
+          <p>No traffic in this category.</p>
+        </div>
+      ) : (
+        <div className="ops-traces-body">
+          <ul className="ops-trace-rows" aria-label={`${summary.category.title} traces`}>
+            {summary.traces.map((t, i) => (
+              <TraceRow
+                key={t.trace_id}
+                trace={t}
+                index={i}
+                maxDuration={maxDuration}
+                slowest={slowest}
+                reduced={reduced}
+              />
+            ))}
+          </ul>
+        </div>
+      )}
+
+      <div className="ops-metric-card-meta">
+        <span>
+          {source.name} {source.state}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+type TraceRowProps = {
+  trace: OpsTrace;
+  index: number;
+  maxDuration: number;
+  slowest: number;
+  reduced: boolean;
+};
+
+function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps) {
+  const title = traceTitle(trace.root_name);
+  const latency = traceLatencyClass(trace.duration_ms);
+  const isSlowest = trace.duration_ms === slowest && slowest > 0;
+  const scale = trace.duration_ms / maxDuration;
+  const staggerIndex = clamp(index, 0, MAX_STAGGER_NODES - 1);
+  const delay = reduced ? "0ms" : `${staggerIndex * 25}ms`;
+
+  return (
+    <li>
+      <button
+        type="button"
+        className={`ops-trace-row ${isSlowest ? "ops-trace-row-slowest" : ""} ${reduced ? "" : "ops-trace-row-enter"}`}
+        style={{ "--row-delay": delay } as React.CSSProperties}
+        aria-label={`Trace ${trace.trace_id}: ${trace.root_name} in ${trace.service}, ${trace.duration_ms} ms${isSlowest ? " (slowest)" : ""}`}
+      >
+        <div className="ops-trace-gutter">
+          <span className="ops-trace-gutter-title" title={title}>
+            {title}
+          </span>
+          <span className="ops-trace-gutter-meta">
+            <span className="ops-trace-gutter-route" title={trace.root_name}>
+              {trace.root_name}
+            </span>
+            <span className="ops-trace-gutter-service" title={trace.service}>
+              {trace.service}
+            </span>
+          </span>
+        </div>
+        <div className="ops-trace-track" aria-hidden="true">
+          <div
+            className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
+            style={{
+              "--bar-scale": String(scale),
+              "--bar-delay": delay,
+            } as React.CSSProperties}
+          />
+        </div>
+        <span className="ops-trace-duration">
+          {trace.duration_ms.toLocaleString()} ms
+        </span>
+        <div className="ops-trace-detail">
+          <span className="ops-trace-detail-id" title={trace.trace_id}>
+            {trace.trace_id}
+          </span>
+          <span className="ops-trace-detail-start">
+            {fmtTime(trace.start_time)}
+          </span>
+          <span className="ops-trace-detail-service">{trace.service}</span>
+          <span className="ops-trace-detail-duration">
+            {trace.duration_ms.toLocaleString()} ms
+          </span>
+          {isSlowest && (
+            <span className="ops-trace-slowest-badge">slowest</span>
+          )}
+        </div>
+      </button>
+    </li>
   );
 }
 
