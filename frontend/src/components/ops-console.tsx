@@ -236,6 +236,22 @@ function traceLatencyClass(ms: number): "fast" | "medium" | "slow" {
   return "slow";
 }
 
+const TRACE_TITLE_MAP: Record<string, string> = {
+  "GET /v1/health": "Health check",
+  "GET /v1/claims": "Claim list",
+  "POST /v1/claims": "Claim submitted",
+  "GET /v1/queue": "Review queue",
+  "GET /v1/auth/me": "Session check",
+};
+
+function traceTitle(rootName: string): string {
+  const exact = TRACE_TITLE_MAP[rootName];
+  if (exact) return exact;
+  const path = rootName.replace(/^[A-Z]+\s+/, "");
+  if (path.startsWith("/v1/operations/")) return "Operations API";
+  return rootName;
+}
+
 type OpsConsoleProps = {
   variant?: "page" | "embedded";
   section?: "overview" | "metrics" | "traces" | "audit";
@@ -832,10 +848,13 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
                   <span className="ops-traces-strip-title">Traces</span>
                   <div className="ops-traces-figures">
                     <span className="ops-traces-figure">
-                      total <strong>—</strong>
+                      requests <strong>—</strong>
                     </span>
                     <span className="ops-traces-figure">
                       slowest <strong>—</strong>
+                    </span>
+                    <span className="ops-traces-figure">
+                      typical <strong>—</strong>
                     </span>
                   </div>
                 </div>
@@ -1197,35 +1216,41 @@ function MetricsTable({ metrics }: { metrics: OpsMetricsResponse }) {
 
 function Traces({ traces }: { traces: readonly OpsTrace[] }) {
   const reduced = usePrefersReducedMotion();
-  const timeAxisReady = traces.length > 0 && traces.every((t) => !Number.isNaN(new Date(t.start_time).getTime()));
-  const starts = traces.map((t) => new Date(t.start_time).getTime());
-  const ends = traces.map((t, i) => starts[i] + t.duration_ms);
-  const min = timeAxisReady ? Math.min(...starts) : 0;
-  const max = timeAxisReady ? Math.max(...ends) : 1;
-  const range = Math.max(1, max - min);
   const durations = traces.map((t) => t.duration_ms);
-  const maxDuration = Math.max(1, ...durations);
   const slowest = durations.length > 0 ? Math.max(...durations) : 0;
-
-  const ticks = (() => {
-    if (!timeAxisReady) return [] as number[];
-    if (range <= 0) return [min];
-    const count = 5;
-    return Array.from({ length: count }, (_, i) => min + (range * i) / (count - 1));
+  const median = (() => {
+    if (durations.length === 0) return 0;
+    const sorted = [...durations].sort((a, b) => a - b);
+    const mid = Math.floor(sorted.length / 2);
+    return sorted.length % 2 === 0
+      ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+      : sorted[mid];
   })();
+  const maxDuration = Math.max(1, slowest);
 
   return (
     <>
+      <p className="ops-traces-explainer">
+        Each row is one request the platform handled. A longer bar means it took
+        longer.
+      </p>
+
       <div className="ops-traces-strip">
         <span className="ops-traces-strip-title">Traces</span>
         <div className="ops-traces-figures">
           <span className="ops-traces-figure">
-            total <AnimatedNumber value={traces.length} reduced={reduced} />
+            requests <AnimatedNumber value={traces.length} reduced={reduced} />
           </span>
           <span className="ops-traces-figure">
             slowest <AnimatedNumber value={slowest} reduced={reduced} /> ms
           </span>
+          <span className="ops-traces-figure">
+            typical <AnimatedNumber value={median} reduced={reduced} /> ms
+          </span>
         </div>
+        <span className="ops-traces-scale-marker">
+          slowest {slowest.toLocaleString()} ms
+        </span>
       </div>
 
       {traces.length === 0 ? (
@@ -1234,79 +1259,69 @@ function Traces({ traces }: { traces: readonly OpsTrace[] }) {
           <span>No recent traces.</span>
         </div>
       ) : (
-        <>
-          {timeAxisReady && (
-            <div className="ops-traces-ruler" aria-hidden="true">
-              <div className="ops-traces-ruler-line" />
-              {ticks.map((tick) => (
-                <span
-                  key={`tick-${tick}`}
-                  className="ops-traces-ruler-tick"
-                  style={{ left: `${range <= 0 ? 0 : ((tick - min) / range) * 100}%` }}
-                >
-                  {fmtTime(new Date(tick).toISOString())}
-                </span>
-              ))}
-            </div>
-          )}
-
-          <div className="ops-traces-body">
-            <ul className="ops-trace-rows" aria-label="Recent traces">
-              {traces.map((t, i) => {
-                const start = new Date(t.start_time).getTime();
-                const latency = traceLatencyClass(t.duration_ms);
-                const left = timeAxisReady ? ((start - min) / range) * 100 : 0;
-                const width = timeAxisReady ? (t.duration_ms / range) * 100 : 0;
-                const simpleWidth = (t.duration_ms / maxDuration) * 100;
-                const staggerIndex = clamp(i, 0, MAX_STAGGER_NODES - 1);
-                const delay = reduced ? "0ms" : `${staggerIndex * 25}ms`;
-                return (
-                  <li key={t.trace_id}>
-                    <button
-                      type="button"
-                      className={`ops-trace-row ${reduced ? "" : "ops-trace-row-enter"}`}
-                      style={{ "--row-delay": delay } as React.CSSProperties}
-                      aria-label={`Trace ${t.trace_id}: ${t.root_name} in ${t.service}, ${t.duration_ms} ms`}
-                    >
-                      <div className="ops-trace-gutter">
-                        <span className="ops-trace-gutter-name" title={t.root_name}>
+        <div className="ops-traces-body">
+          <ul className="ops-trace-rows" aria-label="Recent traces">
+            {traces.map((t, i) => {
+              const title = traceTitle(t.root_name);
+              const latency = traceLatencyClass(t.duration_ms);
+              const isSlowest = t.duration_ms === slowest && slowest > 0;
+              const scale = t.duration_ms / maxDuration;
+              const staggerIndex = clamp(i, 0, MAX_STAGGER_NODES - 1);
+              const delay = reduced ? "0ms" : `${staggerIndex * 25}ms`;
+              return (
+                <li key={t.trace_id}>
+                  <button
+                    type="button"
+                    className={`ops-trace-row ${isSlowest ? "ops-trace-row-slowest" : ""} ${reduced ? "" : "ops-trace-row-enter"}`}
+                    style={{ "--row-delay": delay } as React.CSSProperties}
+                    aria-label={`Trace ${t.trace_id}: ${t.root_name} in ${t.service}, ${t.duration_ms} ms${isSlowest ? " (slowest)" : ""}`}
+                  >
+                    <div className="ops-trace-gutter">
+                      <span className="ops-trace-gutter-title" title={title}>
+                        {title}
+                      </span>
+                      <span className="ops-trace-gutter-meta">
+                        <span className="ops-trace-gutter-route" title={t.root_name}>
                           {t.root_name}
                         </span>
                         <span className="ops-trace-gutter-service" title={t.service}>
                           {t.service}
                         </span>
-                      </div>
-                      <div className="ops-trace-track" aria-hidden="true">
-                        <div
-                          className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
-                          style={{
-                            left: `${left}%`,
-                            "--bar-scale": String(width / 100),
-                            "--bar-simple": `${simpleWidth}%`,
-                            "--bar-delay": delay,
-                          } as React.CSSProperties}
-                        />
-                      </div>
-                      <span className="ops-trace-duration">
+                      </span>
+                    </div>
+                    <div className="ops-trace-track" aria-hidden="true">
+                      <div
+                        className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
+                        style={{
+                          "--bar-scale": String(scale),
+                          "--bar-delay": delay,
+                        } as React.CSSProperties}
+                      />
+                    </div>
+                    <span className="ops-trace-duration">
+                      {t.duration_ms.toLocaleString()} ms
+                    </span>
+                    <div className="ops-trace-detail">
+                      <span className="ops-trace-detail-id" title={t.trace_id}>
+                        {t.trace_id}
+                      </span>
+                      <span className="ops-trace-detail-start">
+                        {fmtTime(t.start_time)}
+                      </span>
+                      <span className="ops-trace-detail-service">{t.service}</span>
+                      <span className="ops-trace-detail-duration">
                         {t.duration_ms.toLocaleString()} ms
                       </span>
-                      <div className="ops-trace-detail">
-                        <span className="ops-trace-detail-id" title={t.trace_id}>
-                          {t.trace_id}
-                        </span>
-                        <span className="ops-trace-detail-start">{fmtTime(t.start_time)}</span>
-                        <span className="ops-trace-detail-service">{t.service}</span>
-                        <span className="ops-trace-detail-duration">
-                          {t.duration_ms.toLocaleString()} ms
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </>
+                      {isSlowest && (
+                        <span className="ops-trace-slowest-badge">slowest</span>
+                      )}
+                    </div>
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
       )}
     </>
   );
