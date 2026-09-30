@@ -12,6 +12,7 @@ import {
   Activity,
   AlertTriangle,
   ChevronLeft,
+  ChevronRight,
   Clock,
   LayoutDashboard,
   RefreshCw,
@@ -271,6 +272,15 @@ function traceLatencyClass(ms: number): "fast" | "medium" | "slow" {
   return "slow";
 }
 
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms.toLocaleString()} ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
+  const minutes = Math.floor(ms / 60_000);
+  const seconds = Math.floor((ms % 60_000) / 1000);
+  if (seconds === 0) return `${minutes}m`;
+  return `${minutes}m ${seconds}s`;
+}
+
 const TRACE_TITLE_MAP: Record<string, string> = {
   "GET /v1/health": "Health check",
   "GET /v1/claims": "Claim list",
@@ -509,16 +519,51 @@ function SignalRail({ alive }: { alive: boolean }) {
   );
 }
 
+const GAUGE_CIRCUMFERENCE = 94.25;
+
 function VerdictGauge({ status }: { status: string }) {
   const reduced = usePrefersReducedMotion();
   const ok = status === "ok";
   const degraded = status === "degraded";
   const toneClass = ok ? "ops-gauge-ok" : degraded ? "ops-gauge-degraded" : "ops-gauge-unknown";
   const label = `Platform ${status}`;
+  const zoneLen = GAUGE_CIRCUMFERENCE / 3;
   return (
     <div className={`ops-verdict-gauge ${toneClass}`} aria-live="polite" aria-atomic="true">
       <svg viewBox="0 0 40 40" aria-hidden="true" className="ops-gauge-face">
         <circle className="ops-gauge-track" cx="20" cy="20" r="15" />
+        <g className="ops-gauge-zones">
+          <circle
+            className="ops-gauge-zone ops-gauge-zone-success"
+            cx="20"
+            cy="20"
+            r="15"
+            strokeDasharray={`${zoneLen} ${GAUGE_CIRCUMFERENCE - zoneLen}`}
+            strokeDashoffset="0"
+          />
+          <circle
+            className="ops-gauge-zone ops-gauge-zone-warning"
+            cx="20"
+            cy="20"
+            r="15"
+            strokeDasharray={`${zoneLen} ${GAUGE_CIRCUMFERENCE - zoneLen}`}
+            strokeDashoffset={GAUGE_CIRCUMFERENCE - zoneLen}
+          />
+          <circle
+            className="ops-gauge-zone ops-gauge-zone-danger"
+            cx="20"
+            cy="20"
+            r="15"
+            strokeDasharray={`${zoneLen} ${GAUGE_CIRCUMFERENCE - zoneLen}`}
+            strokeDashoffset={GAUGE_CIRCUMFERENCE - zoneLen * 2}
+          />
+        </g>
+        <g className="ops-gauge-ticks">
+          <line className="ops-gauge-tick" x1="20" y1="2" x2="20" y2="5" />
+          <line className="ops-gauge-tick" x1="38" y1="20" x2="35" y2="20" />
+          <line className="ops-gauge-tick" x1="20" y1="38" x2="20" y2="35" />
+          <line className="ops-gauge-tick" x1="2" y1="20" x2="5" y2="20" />
+        </g>
         <circle className={`ops-gauge-arc ${reduced ? "" : "ops-gauge-arc-sweep"}`} cx="20" cy="20" r="15" />
       </svg>
       <span className="ops-verdict-label">{label}</span>
@@ -1311,6 +1356,14 @@ function MetricsSurface({ metrics, window, reduced }: MetricsSurfaceProps) {
               </li>
             ))}
           </ul>
+          {categories.length > 0 && categories.length <= 2 && (
+            <div className="ops-metrics-sparse">
+              <span>
+                Showing {categories.length === 1 ? "the only" : `all ${categories.length}`} metric
+                categor{categories.length === 1 ? "y" : "ies"} for this window.
+              </span>
+            </div>
+          )}
         </>
       )}
     </section>
@@ -1347,7 +1400,10 @@ function MetricCategoryCard({ summary, index, reduced, onSelect }: MetricCategor
         <span className="ops-category-card-figure">
           <AnimatedNumber value={summary.total} reduced={reduced} /> total
         </span>
-        <span className="ops-category-card-hint">view details</span>
+        <span className="ops-category-card-hint">
+          view details
+          <ChevronRight size={14} aria-hidden="true" />
+        </span>
       </div>
     </button>
   );
@@ -1550,16 +1606,20 @@ function TraceCategoryCard({ category, summary, index, reduced, onSelect }: Trac
         <strong>{category.title}</strong>
         <p>{category.description}</p>
       </div>
-      {count > 0 && (
-        <div className="ops-category-card-foot">
-          <span className="ops-category-card-figure">
-            typical <AnimatedNumber value={median} reduced={reduced} /> ms
-          </span>
-          <span className="ops-category-card-figure">
-            slowest <AnimatedNumber value={slowest} reduced={reduced} /> ms
-          </span>
-        </div>
-      )}
+      <div className="ops-category-card-foot">
+        {count > 0 ? (
+          <>
+            <span className="ops-category-card-figure">
+              typical <span>{formatDuration(median)}</span>
+            </span>
+            <span className="ops-category-card-figure">
+              slowest <span>{formatDuration(slowest)}</span>
+            </span>
+          </>
+        ) : (
+          <span className="ops-category-card-placeholder">No samples in window</span>
+        )}
+      </div>
     </button>
   );
 }
@@ -1642,7 +1702,7 @@ function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps
         type="button"
         className={`ops-trace-row ${isSlowest ? "ops-trace-row-slowest" : ""} ${reduced ? "" : "ops-trace-row-enter"}`}
         style={{ "--row-delay": delay } as React.CSSProperties}
-        aria-label={`Trace ${trace.trace_id}: ${trace.root_name} in ${trace.service}, ${trace.duration_ms} ms${isSlowest ? " (slowest)" : ""}`}
+        aria-label={`Trace ${trace.trace_id}: ${trace.root_name} in ${trace.service}, ${formatDuration(trace.duration_ms)}${isSlowest ? " (slowest)" : ""}`}
       >
         <div className="ops-trace-gutter">
           <span className="ops-trace-gutter-title" title={title}>
@@ -1667,7 +1727,7 @@ function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps
           />
         </div>
         <span className="ops-trace-duration">
-          {trace.duration_ms.toLocaleString()} ms
+          {formatDuration(trace.duration_ms)}
         </span>
         <div className="ops-trace-detail">
           <span className="ops-trace-detail-id" title={trace.trace_id}>
@@ -1678,7 +1738,7 @@ function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps
           </span>
           <span className="ops-trace-detail-service">{trace.service}</span>
           <span className="ops-trace-detail-duration">
-            {trace.duration_ms.toLocaleString()} ms
+            {formatDuration(trace.duration_ms)}
           </span>
           {isSlowest && (
             <span className="ops-trace-slowest-badge">slowest</span>
@@ -1948,18 +2008,21 @@ type RoleCardProps = {
 
 function RoleCard({ role, index, reduced, onSelect }: RoleCardProps) {
   const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+  const inactive = !role.last_active_at || role.last_active_at === "0001-01-01T00:00:00Z";
 
   return (
     <button
       type="button"
-      className={`ops-role-card ${reduced ? "" : "ops-role-card-enter"}`}
+      className={`ops-role-card ${reduced ? "" : "ops-role-card-enter"} ${inactive ? "ops-role-card-inactive" : ""}`}
       style={{ "--card-delay": delay } as React.CSSProperties}
       onClick={onSelect}
       aria-label={`${roleDisplayName(role.role)} role, ${role.active_members} active members`}
     >
       <div className="ops-role-card-top">
         <Users size={16} aria-hidden="true" />
-        <span className="ops-role-card-last">{fmtRel(role.last_active_at)}</span>
+        <span className={`ops-role-card-last ${inactive ? "ops-role-card-last-inactive" : ""}`}>
+          {inactive ? "inactive" : fmtRel(role.last_active_at)}
+        </span>
       </div>
       <div className="ops-role-card-body">
         <strong>{roleDisplayName(role.role)}</strong>
@@ -1970,9 +2033,11 @@ function RoleCard({ role, index, reduced, onSelect }: RoleCardProps) {
         </div>
       </div>
       <div className="ops-role-card-areas">
-        {role.areas.map((area) => (
-          <AreaBadge key={area} area={area} />
-        ))}
+        {role.areas.length > 0 ? (
+          role.areas.map((area) => <AreaBadge key={area} area={area} />)
+        ) : (
+          <span className="ops-role-card-areas-empty">no areas</span>
+        )}
       </div>
     </button>
   );

@@ -36,8 +36,8 @@ Nine pages in the technical-manager workspace, all on the dark surface:
 | Page | What the reviewer gets | Where the data comes from |
 |---|---|---|
 | **Operations** | platform verdict, component health, telemetry-source freshness, version markers | `/v1/health` probes + Prometheus/Tempo reachability |
-| **Metrics** | HTTP throughput, error mix, latency — expandable cards | Prometheus (Mimir) via the backend |
-| **Traces** | recent requests with durations, against a "typical" baseline | Tempo via the backend |
+| **Metrics** | metrics grouped into categories, each explained in words before its values | Prometheus (Mimir) via the backend |
+| **Traces** | requests grouped into categories, each explained, then drilled into | Tempo via the backend |
 | **Audit Integrity** | hash-chain verification status + event count | PostgreSQL audit ledger |
 | **Intake Jobs** | intake job counts by status | PostgreSQL |
 | **Versions** | active rule / model / provider versions | PostgreSQL |
@@ -247,8 +247,8 @@ flowchart TD
 
 ```mermaid
 flowchart LR
-    OV["Operations<br/>verdict + map"] --> ME["Metrics<br/>cards"]
-    ME --> TR["Traces<br/>timeline"]
+    OV["Operations<br/>verdict + map"] --> ME["Metrics<br/>category cards"]
+    ME --> TR["Traces<br/>category cards"]
     TR --> AU["Audit Integrity<br/>chain"]
     AU --> IJ["Intake Jobs"]
     IJ --> VE["Versions"]
@@ -272,19 +272,31 @@ feed keeps the act as the unit of display, with the actor, role, area, outcome a
 time all visible — and it is filterable **by role and by area**, so the same feed
 answers both "what did the lead do?" and "what happened to intake?".
 
-**Reading a trace row.** Traces are the least self-explanatory signal, so the page
-does the explaining rather than assuming the reader knows how to read a timeline:
+**Reading a trace — by category, not by row.** Traces are the least self-explanatory
+signal, and an undifferentiated list of them makes it worse: too many rows, and nothing
+saying what a request *was*. So the page now **groups before it lists**:
 
-- one muted line states what a row *is*;
-- a summary strip gives the request count, the **slowest** duration and the
-  **typical (median)** duration, so "slow" has a reference instead of being
-  context-free — the median is computed from the returned durations;
-- each row carries a plain-language title derived from a **display mapping of a
-  known route** (`GET /v1/health` → "Health check", `POST /v1/claims` → "Claim
-  submitted"); the **raw route and service are still shown beneath it**, so the
-  mapping adds legibility without hiding anything;
-- the bar is scaled against the slowest trace in the current view, with a scale
-  marker and the slowest row flagged, so bar length is interpretable.
+- the default view is **one card per category** — claim submission, claim queries,
+  review decisions, intake, authentication, operations & health, and an explicit
+  "other". Categories are derived from the **real route paths**, never invented; a
+  request that fits nowhere lands in "other" rather than being forced into a bin;
+- every card states **what that category is** in plain language, and carries the big
+  picture: volume, **typical (median)** duration and slowest duration, so "slow" has a
+  reference instead of being context-free — the median is computed from the returned
+  durations;
+- opening a category shows only its traces, each carrying a plain-language title
+  derived from a **display mapping of a known route** (`GET /v1/health` → "Health
+  check", `POST /v1/claims` → "Claim submitted"); the **raw route and service are
+  still shown beneath it**, so the mapping adds legibility without hiding anything;
+- a category with no traffic is shown as **empty rather than hidden** — an absent
+  category and a silent category are different facts;
+- within a category the bar is scaled against the slowest trace in that view, with a
+  scale marker and the slowest row flagged, so bar length stays interpretable.
+
+**Metrics work the same way, for the same reason.** The complaint was numbers without
+meaning, so metrics are grouped into categories derived from the **real metric names**
+— HTTP behaviour, runtime health, queue and workers, database, other — and each card
+says what the category measures and what to take from it *before* showing any value.
 
 Design principles carried through every page:
 
@@ -366,8 +378,35 @@ Two more were caught by a class-coverage check the tests could not see:
 - **Series label chips rendered unstyled** — the JSX named
   `ops-signal-series-label*` while the CSS only defined `ops-metric-series-*`.
 
-**Lesson recorded:** a passing test suite says nothing about whether a page is
-readable. The screenshot review caught what 60+ tests could not.
+**The worst defect was not a visual one — it was a type that lied.** Platform Activity
+rendered a blank framework error page ("This page couldn't load") on a white background,
+inside a dark console. The chain:
+
+- the activity endpoint returns `source` as an **object** — `{state, last_data_at, detail}`;
+- the client declared `OpsActivityResponse.source` as a **`string`** and rendered it
+  directly as a React child, so React threw
+  `error #31 — objects are not valid as a React child` and the page died behind the
+  error boundary;
+- the test fixture mocked `source: "operations"` — **agreeing with the wrong type** — so
+  every test passed while the page was dead, and `tsc` had nothing to object to.
+
+It was found by capturing the running page's real exception over the browser's debugging
+protocol, not by reading the code: reading the code is what missed it the first time. The
+fix was to make the type tell the truth (`OpsSourceStatus`), render a `StateBadge` from
+`source.state` as the sibling pages already did, and change the fixture to the real wire
+shape — because a fixture that encodes the bug is worse than no fixture.
+
+**A second defect sat underneath the first.** The operator page's id collided with the
+clinic's own `activity` page, so both components mounted and the clinic page — which this
+role is not permitted to read (`403`) — took the page down before the type error could
+even be reached. Renaming the operator destination to `platform-activity` fixed that
+layer, and the type fix was still required afterwards. Two independent faults, one
+symptom: fixing only the first left the page just as dead.
+
+**Lesson recorded:** a passing test suite says nothing about whether a page is readable,
+and a **lying type guarantees the tests will agree with the bug**. When a page dies,
+capture what the browser actually reports before reading the source — and check whether
+there is a second fault behind the first.
 
 ---
 
@@ -376,7 +415,7 @@ readable. The screenshot review caught what 60+ tests could not.
 | Gate | Result |
 |---|---|
 | Backend suite | **875 passed**, 46 skipped |
-| Frontend suite | **64 passed** |
+| Frontend suite | **69 passed** |
 | ruff · ruff format · pyright | clean · clean · 0 errors (1 pre-existing warning) |
 | Live WS: unauthenticated | closed **4401** |
 | Live WS: reviewer | closed **4403** |
