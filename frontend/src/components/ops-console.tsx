@@ -11,6 +11,7 @@ import {
 import {
   Activity,
   AlertTriangle,
+  ChevronDown,
   Clock,
   LayoutDashboard,
   RefreshCw,
@@ -634,6 +635,10 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
     (streamSection: OpsStreamSection, payload: unknown) => {
       setSnap((prev) => {
         if (prev.state !== "ok") {
+          // `overview` is mandatory in OpsSnapshot (it drives the verdict), and
+          // every fetch includes it. A first snapshot for another section is
+          // therefore held until the initial fetch lands - which is why that
+          // fetch must never be aborted (see the load effect below).
           if (streamSection !== "overview") return prev;
           return {
             state: "ok",
@@ -696,37 +701,47 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
     [window, section, streamStatus],
   );
 
-  useEffect(() => {
-    // When the stream is live the snapshot is the primary source; polling is
-    // only the fallback for when the socket is down or reconnecting.
-    if (streamStatus === "live") return;
-
-    const c = new AbortController();
-    const tick = async () => {
+  const loadOnce = useCallback(
+    async (signal?: AbortSignal) => {
       try {
-        const data = await fetchSnapshot(window, section, c.signal);
-        if (c.signal.aborted) return;
+        const data = await fetchSnapshot(window, section, signal);
+        if (signal?.aborted) return;
         setSnap((prev) =>
           prev.state === "ok"
             ? { state: "ok", data: mergeWithFallback(prev.data, data, section) }
             : { state: "ok", data },
         );
       } catch (err) {
-        if (c.signal.aborted) return;
+        if (signal?.aborted) return;
         setSnap((prev) =>
           prev.state === "ok" ? prev : { state: "error", message: fetchErrorMessage(err) },
         );
       }
-    };
-    void tick();
-    const id = setInterval(() => {
-      void tick();
-    }, REFRESH_INTERVAL_MS);
+    },
+    [window, section],
+  );
+
+  useEffect(() => {
+    // First paint must not depend on the socket, and must NOT be aborted when
+    // the stream flips to `live`. Aborting it there is half of why a freshly
+    // opened page stayed blank until Refresh: the socket went live and killed
+    // the in-flight first fetch before it could render.
+    const controller = new AbortController();
+    void loadOnce(controller.signal);
+    return () => controller.abort();
+  }, [loadOnce]);
+
+  useEffect(() => {
+    // The socket is the primary source while it is live; this interval is only
+    // the fallback for when it is down or reconnecting.
+    if (streamStatus === "live") return;
+    const controller = new AbortController();
+    const id = setInterval(() => void loadOnce(controller.signal), REFRESH_INTERVAL_MS);
     return () => {
-      c.abort();
+      controller.abort();
       clearInterval(id);
     };
-  }, [window, section, streamStatus]);
+  }, [loadOnce, streamStatus]);
 
   const status = snap.state === "ok" ? snap.data.overview.status : "unknown";
   const checkedAt = snap.state === "ok" ? snap.data.overview.checked_at : null;
@@ -888,7 +903,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
                     <p>No metrics available for this window.</p>
                   </div>
                 ) : (
-                  <MetricsTable series={snap.data.metrics.series} />
+                  <MetricsTable metrics={snap.data.metrics} />
                 )}
               </section>
             )}
@@ -915,39 +930,228 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
 
 const SKEL_BANDS = ["a", "b", "c"];
 const SKEL_SERIES = ["1", "2", "3", "4"];
+const COLLAPSED_PREVIEW_COUNT = 3;
+
+function usePreviousMetricValues(series: readonly OpsMetricSeries[]): ReadonlyMap<string, number> {
+  const previousRef = useRef<ReadonlyMap<string, number>>(new Map());
+  const current = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const s of series) {
+      map.set(seriesKey(s), s.value);
+    }
+    return map;
+  }, [series]);
+  // This ref is a render-to-render scratchpad for value-change detection only.
+  // eslint-disable-next-line react-hooks/refs
+  const previous = previousRef.current;
+  useEffect(() => {
+    previousRef.current = current;
+  }, [current]);
+  return previous;
+}
+
+function rankLabel(index: number, total: number): string {
+  if (total === 1) return "1 series";
+  if (index === 0) return "largest";
+  if (index === 1) return "2nd";
+  if (index === 2) return "3rd";
+  return `${index + 1}th`;
+}
 
 function MetricsSkeleton() {
   return (
-    <ul className="ops-signal-bands" aria-hidden="true">
+    <ul className="ops-metric-cards" aria-hidden="true">
       {SKEL_BANDS.map((bandId) => (
-        <li key={`skel-band-${bandId}`} className="ops-signal-band">
-          <div className="ops-signal-band-header">
-            <div className="ops-skeleton-line" style={{ width: "140px" }} />
+        <li key={`skel-card-${bandId}`} className="ops-metric-card">
+          <div className="ops-metric-card-header">
+            <div className="ops-skeleton-line" style={{ width: "160px" }} />
+            <div className="ops-skeleton-line" style={{ width: "80px" }} />
           </div>
-          <ul className="ops-signal-series-grid">
-            {SKEL_SERIES.map((seriesId) => (
-              <li key={`skel-series-${bandId}-${seriesId}`} className="ops-signal-series">
-                <div className="ops-signal-series-figure">
-                  <div className="ops-skeleton-value" />
-                  <div className="ops-skeleton-line" style={{ width: "70%" }} />
-                </div>
-                <div className="ops-signal-bar-wrap">
+          <div className="ops-metric-summary-row">
+            {SKEL_SERIES.slice(0, COLLAPSED_PREVIEW_COUNT).map((seriesId) => (
+              <div key={`skel-summary-${bandId}-${seriesId}`} className="ops-metric-summary-item">
+                <div className="ops-skeleton-value" />
+                <div className="ops-skeleton-line" style={{ width: "70%" }} />
+                <div className="ops-metric-summary-bar-wrap">
                   <div className="ops-skeleton-bar" />
                 </div>
-              </li>
+              </div>
             ))}
-          </ul>
+          </div>
         </li>
       ))}
     </ul>
   );
 }
 
-function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
+type MetricSummaryItemProps = {
+  series: OpsMetricSeries;
+  groupMax: number;
+  changed: boolean;
+  reduced: boolean;
+};
+
+function MetricSummaryItem({ series, groupMax, changed, reduced }: MetricSummaryItemProps) {
+  const share = groupMax > 0 ? series.value / groupMax : 0;
+  const heat = metricHeatLevel(series.value, groupMax);
+  return (
+    <div className={`ops-metric-summary-item ${changed ? "ops-metric-summary-item-changed" : ""}`}>
+      <AnimatedNumber
+        value={series.value}
+        reduced={reduced}
+        className={`ops-metric-summary-value ops-signal-heat-${heat}`}
+      />
+      <MetricLabels labels={series.labels} />
+      <div className="ops-metric-summary-bar-wrap" aria-hidden="true">
+        <div
+          className={`ops-metric-summary-bar ops-signal-bar-${heat} ${reduced ? "" : "ops-metric-bar-enter"}`}
+          style={{ "--bar-share": String(share) } as React.CSSProperties}
+        />
+      </div>
+    </div>
+  );
+}
+
+type MetricSeriesRowProps = {
+  series: OpsMetricSeries;
+  groupMax: number;
+  changed: boolean;
+  reduced: boolean;
+  index: number;
+};
+
+function MetricSeriesRow({ series, groupMax, changed, reduced }: MetricSeriesRowProps) {
+  const share = groupMax > 0 ? series.value / groupMax : 0;
+  const heat = metricHeatLevel(series.value, groupMax);
+  return (
+    <li className={`ops-metric-series-row ${changed ? "ops-metric-series-row-changed" : ""}`}>
+      <div className="ops-metric-series-row-label">
+        <MetricLabels labels={series.labels} />
+      </div>
+      <div className="ops-metric-series-row-value">
+        <AnimatedNumber
+          value={series.value}
+          reduced={reduced}
+          className={`ops-metric-series-value ops-signal-heat-${heat}`}
+        />
+      </div>
+      <div className="ops-metric-series-row-bar" aria-hidden="true">
+        <div
+          className={`ops-metric-series-bar ops-signal-bar-${heat}`}
+          style={{ "--bar-share": String(share) } as React.CSSProperties}
+        />
+      </div>
+    </li>
+  );
+}
+
+type MetricCardProps = {
+  name: string;
+  items: readonly OpsMetricSeries[];
+  groupMax: number;
+  changedMap: ReadonlyMap<string, boolean>;
+  source: import("@/lib/ops-api").OpsSource;
+  window: import("@/lib/ops-api").OpsWindow;
+  reduced: boolean;
+  groupIndex: number;
+};
+
+function MetricCard({
+  name,
+  items,
+  groupMax,
+  changedMap,
+  source,
+  window,
+  reduced,
+  groupIndex,
+}: MetricCardProps) {
+  const [expanded, setExpanded] = useState(false);
+  const anyChanged = items.some((s) => changedMap.get(seriesKey(s)) ?? false);
+  const statusText = useMemo(() => {
+    const total = items.length;
+    const rank = rankLabel(0, total);
+    const suffix = anyChanged ? " • changed" : "";
+    return total === 1 ? `${rank}${suffix}` : `${rank} of ${total}${suffix}`;
+  }, [items.length, anyChanged]);
+
+  const cardDelay = reduced ? "0ms" : `${clamp(groupIndex, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+
+  return (
+    <li
+      className={`ops-metric-card ${reduced ? "" : "ops-metric-card-enter"}`}
+      data-changed={anyChanged}
+      style={{ "--card-delay": cardDelay } as React.CSSProperties}
+    >
+      <button
+        type="button"
+        className="ops-metric-card-header"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+        aria-label={expanded ? `Collapse ${name}` : `Expand ${name}`}
+      >
+        <span className="ops-metric-card-name">{name}</span>
+        <span className="ops-metric-card-status">{statusText}</span>
+        <ChevronDown
+          size={18}
+          aria-hidden="true"
+          className={`ops-metric-card-chevron ${expanded ? "ops-metric-card-chevron-open" : ""}`}
+        />
+      </button>
+
+      <div
+        className={`ops-metric-card-summary ${expanded ? "ops-metric-card-summary-hidden" : ""}`}
+        aria-hidden={expanded}
+      >
+        <div className="ops-metric-summary-row">
+          {items.slice(0, COLLAPSED_PREVIEW_COUNT).map((s) => (
+            <MetricSummaryItem
+              key={seriesKey(s)}
+              series={s}
+              groupMax={groupMax}
+              changed={changedMap.get(seriesKey(s)) ?? false}
+              reduced={reduced}
+            />
+          ))}
+        </div>
+      </div>
+
+      <div
+        className={`ops-metric-card-detail ${expanded ? "ops-metric-card-detail-open" : ""}`}
+        aria-hidden={!expanded}
+      >
+        <div className="ops-metric-card-detail-inner">
+          <ul className="ops-metric-series-list">
+            {items.map((s, i) => (
+              <MetricSeriesRow
+                key={seriesKey(s)}
+                series={s}
+                groupMax={groupMax}
+                changed={changedMap.get(seriesKey(s)) ?? false}
+                reduced={reduced}
+                index={i}
+              />
+            ))}
+          </ul>
+          <div className="ops-metric-card-meta">
+            <span>window {window}</span>
+            <span aria-hidden="true">·</span>
+            <span>
+              {source.name} {source.state}
+            </span>
+          </div>
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function MetricsTable({ metrics }: { metrics: OpsMetricsResponse }) {
   const reduced = usePrefersReducedMotion();
+  const previous = usePreviousMetricValues(metrics.series);
   const groups = useMemo(() => {
     const map = new Map<string, OpsMetricSeries[]>();
-    for (const s of series) {
+    for (const s of metrics.series) {
       const arr = map.get(s.name) ?? [];
       arr.push(s);
       map.set(s.name, arr);
@@ -958,49 +1162,33 @@ function MetricsTable({ series }: { series: readonly OpsMetricSeries[] }) {
         return [name, items];
       })
       .sort(([a], [b]) => a.localeCompare(b));
-  }, [series]);
+  }, [metrics.series]);
+
+  const changedMap = useMemo(() => {
+    const map = new Map<string, boolean>();
+    for (const s of metrics.series) {
+      const key = seriesKey(s);
+      map.set(key, previous.get(key) !== undefined && previous.get(key) !== s.value);
+    }
+    return map;
+  }, [metrics.series, previous]);
 
   return (
-    <ul className="ops-signal-bands" aria-label="Metric groups">
+    <ul className="ops-metric-cards" aria-label="Metric groups">
       {groups.map(([name, items], groupIndex) => {
         const groupMax = Math.max(1, ...items.map((s) => s.value));
         return (
-          <li key={name} className="ops-signal-band">
-            <div className="ops-signal-band-header">
-              <span className="ops-signal-band-name">{name}</span>
-              <span className="ops-signal-band-scale">max {groupMax.toLocaleString()}</span>
-            </div>
-            <ul className="ops-signal-series-grid">
-              {items.map((s, i) => {
-                const share = groupMax > 0 ? s.value / groupMax : 0;
-                const heat = metricHeatLevel(s.value, groupMax);
-                const staggerIndex = clamp(groupIndex * 2 + i, 0, MAX_STAGGER_NODES - 1);
-                const delay = reduced ? "0ms" : `${staggerIndex * STAGGER_MS}ms`;
-                return (
-                  <li
-                    key={seriesKey(s)}
-                    className={`ops-signal-series ${reduced ? "" : "ops-signal-series-enter"}`}
-                    style={{ "--series-delay": delay } as React.CSSProperties}
-                  >
-                    <div className="ops-signal-series-figure">
-                      <AnimatedNumber
-                        value={s.value}
-                        reduced={reduced}
-                        className={`ops-signal-value ops-signal-heat-${heat}`}
-                      />
-                      <MetricLabels labels={s.labels} />
-                    </div>
-                    <div className="ops-signal-bar-wrap" aria-hidden="true">
-                      <div
-                        className={`ops-signal-bar ops-signal-bar-${heat} ${reduced ? "" : "ops-signal-bar-enter"}`}
-                        style={{ "--bar-share": String(share) } as React.CSSProperties}
-                      />
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
-          </li>
+          <MetricCard
+            key={name}
+            name={name}
+            items={items}
+            groupMax={groupMax}
+            changedMap={changedMap}
+            source={metrics.source}
+            window={metrics.window}
+            reduced={reduced}
+            groupIndex={groupIndex}
+          />
         );
       })}
     </ul>

@@ -189,6 +189,20 @@ describe("OpsConsole", () => {
     expect(screen.queryByText("Audit chain intact")).not.toBeInTheDocument();
   });
 
+  it("still paints when the socket goes live before the first fetch resolves", async () => {
+    // Opening Metrics/Traces/Audit used to show nothing until a manual Refresh:
+    // the socket reported `live` almost immediately, which aborted the in-flight
+    // first fetch, and the stream's first snapshot for a non-overview section was
+    // discarded because `overview` (the verdict) was not in state yet.
+    mockSnapshot();
+    render(<OpsConsole section="traces" variant="embedded" />);
+
+    MockWebSocket.lastInstance?.simulateOpen();
+
+    expect(await screen.findByText("GET /v1/claims")).toBeInTheDocument();
+    expect(screen.queryByText("No recent traces.")).not.toBeInTheDocument();
+  });
+
   it("updates rendered data when a stream snapshot arrives", async () => {
     mockSnapshot();
     render(<OpsConsole />);
