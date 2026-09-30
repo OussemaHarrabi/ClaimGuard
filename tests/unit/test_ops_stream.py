@@ -113,6 +113,16 @@ class _ExplodingPrometheus:
         raise RuntimeError("prometheus exploded mid-query")
 
 
+class _UnavailableEngine:
+    """An engine whose every transaction fails, standing in for a dead database."""
+
+    def begin(self) -> Any:
+        raise RuntimeError("database unavailable")
+
+    def connect(self) -> Any:
+        raise RuntimeError("database unavailable")
+
+
 def _app(
     *,
     role: Role,
@@ -255,3 +265,25 @@ def test_a_raising_source_degrades_the_snapshot_instead_of_erroring() -> None:
     assert message["type"] == "snapshot"
     assert message["payload"]["source"]["state"] == "unavailable"
     assert message["payload"]["series"] == []
+
+
+# ---------------------------------------------------------------------------
+# The extended stream: activity and roles stream live on the same machinery
+# ---------------------------------------------------------------------------
+
+
+def test_activity_and_roles_sections_stream_their_payloads() -> None:
+    app, token = _app(role=Role.TECHNICAL_MANAGER)
+    app.state.activity_engine = _UnavailableEngine()
+    with TestClient(app, cookies={_COOKIE: token}) as client:
+        with client.websocket_connect("/v1/operations/stream?section=activity") as websocket:
+            activity = websocket.receive_json()
+        with client.websocket_connect("/v1/operations/stream?section=roles") as websocket:
+            roles = websocket.receive_json()
+    assert activity["type"] == "snapshot"
+    assert activity["section"] == "activity"
+    assert activity["payload"]["source"]["state"] == "unavailable"
+    assert activity["payload"]["entries"] == []
+    assert roles["type"] == "snapshot"
+    assert roles["section"] == "roles"
+    assert roles["payload"]["roles"] == []

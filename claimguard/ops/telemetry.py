@@ -29,9 +29,11 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sys
 import threading
-from contextlib import AbstractContextManager, nullcontext
-from dataclasses import dataclass
+from collections.abc import Generator, Mapping
+from contextlib import AbstractContextManager, contextmanager, nullcontext
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, cast
 from urllib.parse import urlparse
 
@@ -60,8 +62,39 @@ _METRIC_EXPORT_INTERVAL_MS: Final = 60000
 _METRIC_EXPORT_TIMEOUT_MS: Final = 5000
 
 _METER_SCOPE: Final = "claimguard"
+_TRACER_SCOPE: Final = "claimguard"
 _COUNTER_NAME: Final = "claimguard_http_requests_total"
 _HISTOGRAM_NAME: Final = "claimguard_http_request_duration_milliseconds"
+
+#: The bounded domain counters. Each name maps to its single label dimension and
+#: the exact allow-list of label values, so a counter can never grow a
+#: high-cardinality label even if a caller passes something unexpected. These are
+#: deliberately NOT added to the P0 metric-label policy: they are a closed,
+#: code-owned set of business outcomes, validated here before they reach the meter.
+_CLAIMS_SUBMITTED_COUNTER: Final = "claimguard_claims_submitted_total"
+_DECISIONS_COUNTER: Final = "claimguard_decisions_total"
+_INTAKE_JOBS_COUNTER: Final = "claimguard_intake_jobs_total"
+
+_DOMAIN_COUNTERS: Final[dict[str, tuple[str, frozenset[str]]]] = {
+    _CLAIMS_SUBMITTED_COUNTER: ("outcome", frozenset({"submitted", "duplicate"})),
+    _DECISIONS_COUNTER: (
+        "action",
+        frozenset(
+            {
+                "confirm_issue",
+                "dismiss_with_reason",
+                "request_information",
+                "mark_corrected_for_recheck",
+            }
+        ),
+    ),
+    _INTAKE_JOBS_COUNTER: ("outcome", frozenset({"needs_review", "rejected", "submitted"})),
+}
+
+
+def _empty_domain_counters() -> dict[str, Counter]:
+    """A fresh, empty map of domain counter name to instrument."""
+    return {}
 
 
 @dataclass
@@ -79,6 +112,7 @@ class _TelemetryState:
     meter: Meter | None = None
     counter: Counter | None = None
     histogram: Histogram | None = None
+    domain_counters: dict[str, Counter] = field(default_factory=_empty_domain_counters)
 
 
 _state = _TelemetryState()
@@ -198,6 +232,7 @@ def shutdown_telemetry() -> None:
         _state.meter = None
         _state.counter = None
         _state.histogram = None
+        _state.domain_counters = {}
     try:
         if tracer_provider is not None:
             tracer_provider.force_flush(_FLUSH_TIMEOUT_MS)
@@ -263,6 +298,24 @@ def install_telemetry(app: FastAPI, settings: Settings | None = None) -> bool:
         logger.warning("telemetry: FastAPI instrumentation unavailable")
     except Exception:  # noqa: BLE001 - instrumentation must never raise
         logger.warning("telemetry: FastAPI instrumentation failed")
+    try:
+        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+
+        # Instrument the engine the app already built (its store's), so database
+        # time appears as child spans under the request/pipeline spans. Without an
+        # engine to hand, patch future engines instead of failing.
+        store = getattr(app.state, "store", None)
+        engine = getattr(store, "engine", None)
+        instrumentor = SQLAlchemyInstrumentor()
+        if engine is not None:
+            instrumentor.instrument(engine=engine)
+        else:
+            instrumentor.instrument()
+        installed = True
+    except ImportError:
+        logger.warning("telemetry: SQLAlchemy instrumentation unavailable")
+    except Exception:  # noqa: BLE001 - instrumentation must never raise
+        logger.warning("telemetry: SQLAlchemy instrumentation failed")
     return installed
 
 
@@ -305,6 +358,55 @@ def record_http_metric(
         _state.histogram.record(duration_ms, labels)
     except Exception:  # noqa: BLE001 - emission must never raise into a request
         logger.warning("telemetry: failed to record HTTP metric; ignoring")
+
+
+def record_domain_metric(name: str, value: str) -> None:
+    """Increment one bounded domain counter; low-cardinality by construction.
+
+    ``name`` is one of :data:`_DOMAIN_COUNTERS`; ``value`` must be in that
+    counter's fixed value set or it is dropped. This closes the label space in
+    code (the API can only ever emit outcomes/actions the schema itself defines),
+    so no identifier or free text can become a label. Never raises.
+    """
+    if not _state.initialized:
+        return
+    spec = _DOMAIN_COUNTERS.get(name)
+    counter = _state.domain_counters.get(name)
+    if spec is None or counter is None or value not in spec[1]:
+        return
+    try:
+        counter.add(1, {spec[0]: value})
+    except Exception:  # noqa: BLE001 - emission must never raise into a request
+        logger.warning("telemetry: failed to record domain metric; ignoring")
+
+
+@contextmanager
+def span(name: str, attributes: Mapping[str, str] | None = None) -> Generator[None, None, None]:
+    """Open one span around a pipeline stage, swallowing any tracing failure.
+
+    Tracing is observability, never a dependency of the claim flow: if the tracer
+    cannot be fetched, cannot start a span, or cannot close one, the enclosed
+    work still runs and the real exception (if any) still propagates. Attribute
+    values are the caller's responsibility and must be policy-safe (route
+    template, method, version) — never a claim/member id or free text.
+    """
+    manager: AbstractContextManager[object] | None = None
+    try:
+        tracer = get_tracer(_TRACER_SCOPE)
+        started = tracer.start_as_current_span(name, attributes=dict(attributes or {}))
+        manager = cast("AbstractContextManager[object]", started)
+        manager.__enter__()
+    except Exception:  # noqa: BLE001 - a tracer fault must not break the stage
+        manager = None
+    try:
+        yield
+    finally:
+        if manager is not None:
+            exc_type, exc, traceback = sys.exc_info()
+            try:
+                manager.__exit__(exc_type, exc, traceback)
+            except Exception:  # noqa: BLE001 - a tracer fault must not break the stage
+                logger.warning("telemetry: failed to close span; ignoring")
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +482,10 @@ def _build_providers(endpoint: str, service_name: str) -> None:
         description="HTTP request duration in milliseconds.",
         unit="ms",
     )
+    _state.domain_counters = {
+        name: meter.create_counter(name, description=f"ClaimGuard domain counter {name}.", unit="1")
+        for name in _DOMAIN_COUNTERS
+    }
 
 
 def _noop_tracer(name: str) -> Tracer:

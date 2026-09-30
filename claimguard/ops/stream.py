@@ -60,6 +60,12 @@ from starlette.websockets import WebSocketDisconnect
 from claimguard.clinic.access import Action, Principal, Role, authorize
 from claimguard.clinic.session import AuthenticationError, SessionSigner
 from claimguard.config import get_settings
+from claimguard.ops.activity import (
+    ActivityResponse,
+    RolesResponse,
+    build_activity,
+    build_roles,
+)
 from claimguard.ops.operations import (
     AuditResponse,
     MetricsResponse,
@@ -81,8 +87,11 @@ STREAM_HEARTBEAT_SECONDS: Final = 15.0
 #: The trace page size the stream requests, matching the REST endpoint default.
 TRACE_PAGE_LIMIT: Final = 20
 
+#: The activity page size the stream requests, matching the REST endpoint default.
+ACTIVITY_PAGE_LIMIT: Final = 50
+
 #: The sections the stream can watch, and the default.
-Section = Literal["overview", "metrics", "traces", "audit"]
+Section = Literal["overview", "metrics", "traces", "audit", "activity", "roles"]
 DEFAULT_SECTION: Final[Section] = "overview"
 DEFAULT_WINDOW: Final[Window] = "15m"
 
@@ -94,10 +103,19 @@ WS_FORBIDDEN: Final = 4403
 _STREAM_INTERVAL_ATTR: Final = "ops_stream_interval_seconds"
 _STREAM_HEARTBEAT_ATTR: Final = "ops_stream_heartbeat_seconds"
 
-_SECTIONS: Final[frozenset[str]] = frozenset({"overview", "metrics", "traces", "audit"})
+_SECTIONS: Final[frozenset[str]] = frozenset(
+    {"overview", "metrics", "traces", "audit", "activity", "roles"}
+)
 _WINDOWS: Final[frozenset[str]] = frozenset({"5m", "15m", "1h"})
 
-_Payload = OverviewResponse | MetricsResponse | TracesResponse | AuditResponse
+_Payload = (
+    OverviewResponse
+    | MetricsResponse
+    | TracesResponse
+    | AuditResponse
+    | ActivityResponse
+    | RolesResponse
+)
 
 
 class ClinicMembershipSource(Protocol):
@@ -153,6 +171,7 @@ class _Subscription:
 
     section: Section
     window: Window
+    tenant_id: str
     fingerprint: str | None = None
     last_sent: float = 0.0
 
@@ -161,10 +180,11 @@ class _Subscription:
 async def operations_stream(websocket: WebSocket) -> None:
     """Push operations payloads, authorized exactly like the REST surface."""
     app = cast(FastAPI, websocket.app)
-    if not await _authorize(websocket, app):
+    principal = await _authorize(websocket, app)
+    if principal is None:
         return
     await websocket.accept()
-    subscription = _Subscription(*_initial_subscription(websocket))
+    subscription = _Subscription(*_initial_subscription(websocket), tenant_id=principal.tenant_id)
     lock = asyncio.Lock()
     await _maybe_send_snapshot(websocket, app, subscription, lock, force=True)
     sender = asyncio.create_task(_poll_for_changes(websocket, app, subscription, lock))
@@ -178,11 +198,13 @@ async def operations_stream(websocket: WebSocket) -> None:
             await sender
 
 
-async def _authorize(websocket: WebSocket, app: FastAPI) -> bool:
+async def _authorize(websocket: WebSocket, app: FastAPI) -> Principal | None:
     """Resolve and authorize the session; close with 4401/4403 on rejection.
 
     The connection is accepted before the close so the application code survives
     the handshake: a close sent first is an HTTP rejection that drops the code.
+    Returns the principal so the stream can scope its payloads to the session's
+    tenant, never a query parameter.
     """
     try:
         principal = resolve_session_principal(
@@ -193,14 +215,14 @@ async def _authorize(websocket: WebSocket, app: FastAPI) -> bool:
     except (SessionUnavailable, AuthenticationError):
         await websocket.accept()
         await websocket.close(code=WS_UNAUTHENTICATED)
-        return False
+        return None
     try:
         authorize(principal, Action.READ_OPERATIONS, tenant_id=principal.tenant_id)
     except PermissionError:
         await websocket.accept()
         await websocket.close(code=WS_FORBIDDEN)
-        return False
-    return True
+        return None
+    return principal
 
 
 async def _receive_switches(
@@ -282,10 +304,12 @@ async def _send_snapshot(
 
 async def _build_payload(app: FastAPI, subscription: _Subscription) -> _Payload:
     """Build the payload off the event loop: the source probes are synchronous."""
-    return await asyncio.to_thread(_payload_for, app, subscription.section, subscription.window)
+    return await asyncio.to_thread(
+        _payload_for, app, subscription.section, subscription.window, subscription.tenant_id
+    )
 
 
-def _payload_for(app: FastAPI, section: Section, window: Window) -> _Payload:
+def _payload_for(app: FastAPI, section: Section, window: Window, tenant_id: str) -> _Payload:
     """Build a FRESH payload; the stream must not read its own change signal from a cache.
 
     The REST cache holds entries for ~5s while this loop re-checks every ~3s, so
@@ -299,6 +323,12 @@ def _payload_for(app: FastAPI, section: Section, window: Window) -> _Payload:
         return build_metrics(app, window)
     if section == "traces":
         return build_traces(app, TRACE_PAGE_LIMIT)
+    if section == "activity":
+        return build_activity(
+            app, tenant_id=tenant_id, role=None, area=None, limit=ACTIVITY_PAGE_LIMIT
+        )
+    if section == "roles":
+        return build_roles(app, tenant_id=tenant_id)
     return build_audit(app)
 
 

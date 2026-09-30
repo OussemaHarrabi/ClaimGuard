@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # Change-detection cadence for WS /v1/operations/stream, in seconds. ~3s
     # balances console freshness against load on Prometheus/Tempo.
     ops_stream_interval_seconds: float = 3.0
+    # Activity tracing (P2). The recency window, in days, shared by the activity
+    # source's freshness verdict and the per-role recent_actions count; and the
+    # short per-statement timeout for the activity projections, in milliseconds.
+    # Defaults mirror claimguard.ops.activity's module constants.
+    ops_activity_window_days: float = 7.0
+    ops_activity_statement_timeout_ms: int = 1500
 
     # --- runtime -----------------------------------------------------------
     log_level: str = "INFO"

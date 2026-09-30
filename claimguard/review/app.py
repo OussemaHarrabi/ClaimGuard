@@ -66,6 +66,7 @@ from __future__ import annotations
 import os
 import threading
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import Annotated, Any, Final, cast
 
@@ -91,6 +92,7 @@ from claimguard.edu.envelope import (
     validate_transport,
 )
 from claimguard.edu.policy import RuleContext, RuleDirError
+from claimguard.ops.activity import router as operations_activity_router
 from claimguard.ops.operations import router as operations_router
 from claimguard.ops.stream import (
     SessionMissing,
@@ -98,7 +100,7 @@ from claimguard.ops.stream import (
     resolve_session_principal,
 )
 from claimguard.ops.stream import router as operations_stream_router
-from claimguard.ops.telemetry import install_telemetry
+from claimguard.ops.telemetry import install_telemetry, record_domain_metric, span
 from claimguard.review import ui as review_ui
 from claimguard.review.explanations import (
     ExplainedRun,
@@ -150,6 +152,18 @@ _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 #: shape on this surface — a structured JSON body naming the fix, never a bare
 #: 500.
 RULES_UNAVAILABLE_STATUS: Final = status.HTTP_503_SERVICE_UNAVAILABLE
+
+#: Span names for the claim pipeline stages. They are the operations trace's
+#: vocabulary; see :func:`claimguard.ops.telemetry.span`.
+_SUBMIT_SPAN: Final = "claim.submit"
+_EVALUATE_SPAN: Final = "claim.evaluate"
+_EXPLAIN_SPAN: Final = "claim.explain"
+_PERSIST_SPAN: Final = "claim.persist"
+_AUDIT_SPAN: Final = "claim.audit"
+
+#: Policy-safe route templates (placeholders, never a concrete id) for span tags.
+_SUBMIT_ROUTE: Final = "/v1/claims"
+_RECHECK_ROUTE: Final = "/v1/claims/{claim_id}/recheck"
 
 
 def resolve_rules_dir() -> Path:
@@ -391,6 +405,7 @@ def create_app(
     )
     app.include_router(review_ui.router)
     app.include_router(operations_router)
+    app.include_router(operations_activity_router)
     app.include_router(operations_stream_router)
     install_telemetry(app)
     return app
@@ -510,20 +525,29 @@ def logout(response: Response) -> dict[str, bool]:
 
 
 def submit_claim(request: Request, payload: SubmitClaimRequest) -> RunResponse:
-    """Validate one envelope, run the 15 checks and persist the run."""
-    review_store = _migrated_store(request, Action.CREATE_CLAIM)
-    records = _evaluate(request.app, payload.claim)
-    explained = _explain(request.app, records, payload.claim)
-    recorded = review_store.record_run(
-        dict(payload.claim),
-        explained.records,
-        rule_version=RULE_VERSION,
-        model_version=explained.model_version,
-        prompt_version=explained.prompt_version,
-        initiated_by=cast(Principal, request.state.principal).user_id,
-        explanations=explained.provenance,
-    )
-    return _run_response(recorded)
+    """Validate one envelope, run the 15 checks and persist the run.
+
+    The pipeline stages are wrapped in fail-open spans so the operations trace
+    shows real depth (evaluate / explain / persist / audit) instead of a single
+    HTTP span. Tracing can never break the claim: a tracer fault is swallowed by
+    :func:`claimguard.ops.telemetry.span`.
+    """
+    with span(_SUBMIT_SPAN, _route_attributes(_SUBMIT_ROUTE)):
+        review_store = _migrated_store(request, Action.CREATE_CLAIM)
+        records = _evaluate_stage(request, payload.claim)
+        explained = _explain_stage(request, records, payload.claim)
+        recorded = _persist_stage(
+            review_store,
+            payload.claim,
+            explained,
+            initiated_by=cast(Principal, request.state.principal).user_id,
+        )
+        recorded = _audit_stage(review_store, recorded)
+        record_domain_metric(
+            "claimguard_claims_submitted_total",
+            "duplicate" if recorded.duplicate else "submitted",
+        )
+        return _run_response(recorded)
 
 
 def get_run(request: Request, run_id: str) -> RunResponse:
@@ -849,11 +873,15 @@ def list_intake_jobs(request: Request) -> list[dict[str, Any]]:
 def create_intake_job(request: Request, payload: IntakePayload) -> dict[str, Any]:
     principal, work = _workspaces(request, Action.CREATE_CLAIM)
     try:
-        return work.create_intake_job(
+        created = work.create_intake_job(
             principal.tenant_id, principal.user_id, payload.filename, payload.content
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    outcome = created.get("status")
+    if isinstance(outcome, str):
+        record_domain_metric("claimguard_intake_jobs_total", outcome)
+    return created
 
 
 def get_intake_job(request: Request, job_id: str) -> dict[str, Any]:
@@ -887,7 +915,7 @@ def submit_intake_job(request: Request, job_id: str) -> RunResponse:
         return recorded.run.run_id, _run_response(recorded)
 
     try:
-        return work.submit_intake_job(
+        result = work.submit_intake_job(
             principal.tenant_id,
             job_id,
             principal.user_id if principal.role is Role.RCM_REVIEWER else None,
@@ -897,6 +925,8 @@ def submit_intake_job(request: Request, job_id: str) -> RunResponse:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    record_domain_metric("claimguard_intake_jobs_total", "submitted")
+    return result
 
 
 def activity(request: Request) -> list[dict[str, Any]]:
@@ -971,6 +1001,7 @@ def record_decision(request: Request, run_id: str, payload: DecisionRequest) -> 
     recorded = _claim_store(request, run_id, Action.RECORD_DECISION).record_decision(
         run_id, payload
     )
+    record_domain_metric("claimguard_decisions_total", payload.action.value)
     return DecisionResponse(
         decision=recorded.decision, review=recorded.review, audit=recorded.audit
     )
@@ -989,31 +1020,33 @@ def recheck(request: Request, claim_id: str, payload: RecheckRequest) -> RunResp
     principal = cast(Principal, request.state.principal)
     if payload.actor != principal.user_id:
         raise HTTPException(status_code=403, detail="recheck actor must match signed-in user")
-    review_store = _migrated_store(request, Action.RECHECK_CLAIM)
-    if review_store.latest_run(claim_id) is None:
-        raise RunNotFoundError(f"claim {claim_id!r} has no run to recheck")
-    if principal.role is Role.RCM_REVIEWER and not AssignmentStore(review_store.engine).can_review(
-        principal.tenant_id, claim_id, principal.user_id
-    ):
-        raise HTTPException(status_code=403, detail="claim is not assigned to this reviewer")
-    envelope = payload.claim
-    if envelope.get("claim_id") != claim_id:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=f"the corrected envelope is for {envelope.get('claim_id')!r}, not {claim_id!r}",
+    with span(_SUBMIT_SPAN, _route_attributes(_RECHECK_ROUTE)):
+        review_store = _migrated_store(request, Action.RECHECK_CLAIM)
+        if review_store.latest_run(claim_id) is None:
+            raise RunNotFoundError(f"claim {claim_id!r} has no run to recheck")
+        if principal.role is Role.RCM_REVIEWER and not AssignmentStore(
+            review_store.engine
+        ).can_review(principal.tenant_id, claim_id, principal.user_id):
+            raise HTTPException(status_code=403, detail="claim is not assigned to this reviewer")
+        envelope = payload.claim
+        if envelope.get("claim_id") != claim_id:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=(
+                    f"the corrected envelope is for {envelope.get('claim_id')!r}, not {claim_id!r}"
+                ),
+            )
+        records = _evaluate_stage(request, envelope)
+        explained = _explain_stage(request, records, envelope)
+        recorded = _persist_recheck_stage(
+            review_store, envelope, explained, initiated_by=payload.actor
         )
-    records = _evaluate(request.app, envelope)
-    explained = _explain(request.app, records, envelope)
-    recorded = review_store.record_recheck(
-        dict(envelope),
-        explained.records,
-        rule_version=RULE_VERSION,
-        model_version=explained.model_version,
-        prompt_version=explained.prompt_version,
-        initiated_by=payload.actor,
-        explanations=explained.provenance,
-    )
-    return _run_response(recorded)
+        recorded = _audit_stage(review_store, recorded)
+        record_domain_metric(
+            "claimguard_claims_submitted_total",
+            "duplicate" if recorded.duplicate else "submitted",
+        )
+        return _run_response(recorded)
 
 
 # ---------------------------------------------------------------------------
@@ -1140,6 +1173,82 @@ def _evaluate(app: FastAPI, payload: Mapping[str, Any]) -> list[ResultRecord]:
 
 def _run_response(recorded: RecordedRun) -> RunResponse:
     return _status_response(recorded.run, recorded.results, recorded.audit, recorded.duplicate)
+
+
+def _route_attributes(route_template: str) -> dict[str, str]:
+    """The policy-safe span tags for one claim route (template, never a concrete id)."""
+    return {"route_template": route_template, "method": "POST"}
+
+
+def _evaluate_stage(request: Request, envelope: Mapping[str, Any]) -> list[ResultRecord]:
+    """The ``claim.evaluate`` stage: transport validation plus the 15 checks."""
+    with span(_EVALUATE_SPAN, {"version": RULE_VERSION}):
+        return _evaluate(request.app, envelope)
+
+
+def _explain_stage(
+    request: Request, records: Sequence[ResultRecord], envelope: Mapping[str, Any]
+) -> ExplainedRun:
+    """The ``claim.explain`` stage: bounded, provenance-tracked explanations."""
+    with span(_EXPLAIN_SPAN, {"version": RULE_VERSION}):
+        return _explain(request.app, records, envelope)
+
+
+def _persist_stage(
+    store: ReviewStore,
+    envelope: Mapping[str, Any],
+    explained: ExplainedRun,
+    *,
+    initiated_by: str,
+) -> RecordedRun:
+    """The ``claim.persist`` stage: one atomic run + results + provenance write."""
+    with span(_PERSIST_SPAN, {"version": RULE_VERSION}):
+        return store.record_run(
+            dict(envelope),
+            explained.records,
+            rule_version=RULE_VERSION,
+            model_version=explained.model_version,
+            prompt_version=explained.prompt_version,
+            initiated_by=initiated_by,
+            explanations=explained.provenance,
+        )
+
+
+def _persist_recheck_stage(
+    store: ReviewStore,
+    envelope: Mapping[str, Any],
+    explained: ExplainedRun,
+    *,
+    initiated_by: str,
+) -> RecordedRun:
+    """The ``claim.persist`` stage for a correction, as a new superseding version."""
+    with span(_PERSIST_SPAN, {"version": RULE_VERSION}):
+        return store.record_recheck(
+            dict(envelope),
+            explained.records,
+            rule_version=RULE_VERSION,
+            model_version=explained.model_version,
+            prompt_version=explained.prompt_version,
+            initiated_by=initiated_by,
+            explanations=explained.provenance,
+        )
+
+
+def _audit_stage(store: ReviewStore, recorded: RecordedRun) -> RecordedRun:
+    """The ``claim.audit`` stage: read the run's ledger stamp back.
+
+    The store appends the audit event atomically with the run, so the app layer
+    cannot isolate the append; reading the stamp back through the tenant-scoped
+    store is the only audit step available here and it is what puts real database
+    time under this span. A readback failure must never fail a persisted claim,
+    so it falls back to the stamp the write already returned.
+    """
+    with span(_AUDIT_SPAN, {"version": RULE_VERSION}):
+        try:
+            stamp = store.run_audit_stamp(recorded.run.run_id)
+        except Exception:  # noqa: BLE001 - a readback must not fail a persisted claim
+            return recorded
+        return replace(recorded, audit=stamp)
 
 
 def _status_response(
