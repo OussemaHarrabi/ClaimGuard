@@ -338,8 +338,8 @@ describe("OpsConsole", () => {
     mockSnapshot({
       metrics: makeMetrics({
         series: [
-          { name: "http_requests_total", labels: { route: "/v1/claims" }, value: 42 },
-          { name: "http_request_duration_seconds", labels: { route: "/v1/claims" }, value: 120 },
+          { name: "http_requests_total", labels: { route_template: "/v1/claims", method: "GET", status_class: "2xx" }, value: 42 },
+          { name: "http_request_duration_milliseconds_count", labels: { route_template: "/v1/claims", method: "GET" }, value: 120 },
         ],
       }),
     });
@@ -348,10 +348,51 @@ describe("OpsConsole", () => {
     expect(screen.getByText("Metric categories")).toBeInTheDocument();
     const httpCard = await screen.findByRole("button", { name: /HTTP requests:/i });
     expect(httpCard).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Latency:/i })).toBeInTheDocument();
 
     fireEvent.click(httpCard);
     expect(await screen.findByText("Back to categories")).toBeInTheDocument();
-    expect(screen.getByText("http_requests_total")).toBeInTheDocument();
+    expect(screen.getByText("Listing claims")).toBeInTheDocument();
+    expect(screen.getByText("Successful — handled without error")).toBeInTheDocument();
+  });
+
+  it("translates metric labels into plain language and shows each line's share", async () => {
+    mockSnapshot({
+      metrics: makeMetrics({
+        series: [
+          { name: "claimguard_claims_submitted_total", labels: { outcome: "duplicate" }, value: 7 },
+          { name: "claimguard_claims_submitted_total", labels: { outcome: "submitted" }, value: 3 },
+          { name: "claimguard_assistant_turns_total", labels: { outcome: "fallback" }, value: 5 },
+        ],
+      }),
+    });
+    render(<OpsConsole section="metrics" variant="embedded" />);
+
+    const claimsCard = await screen.findByRole("button", { name: /Claim submissions:/i });
+    fireEvent.click(claimsCard);
+
+    expect(await screen.findByText("Back to categories")).toBeInTheDocument();
+    expect(screen.getByText("Already seen — not counted twice")).toBeInTheDocument();
+    expect(screen.getByText("New claim recorded")).toBeInTheDocument();
+    expect(screen.getByText("70% of category")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Back to metric categories" }));
+    const assistantCard = await screen.findByRole("button", { name: /AI assistant turns:/i });
+    fireEvent.click(assistantCard);
+    expect(screen.getByText("Answered by the deterministic layer, not the model")).toBeInTheDocument();
+  });
+
+  it("shows empty metric categories honestly instead of hiding them", async () => {
+    mockSnapshot({
+      metrics: makeMetrics({
+        series: [{ name: "http_requests_total", labels: { route_template: "/v1/claims", method: "GET", status_class: "2xx" }, value: 1 }],
+      }),
+    });
+    render(<OpsConsole section="metrics" variant="embedded" />);
+
+    expect(await screen.findByRole("button", { name: /HTTP requests:/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Claim submissions: no data/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /AI assistant turns: no data/i })).toBeInTheDocument();
   });
 
   it("renders trace category cards and drills into a category's traces", async () => {

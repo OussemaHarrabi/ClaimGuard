@@ -84,12 +84,17 @@ Current page set (one section per page, all dark):
 ## 5. Data presentation
 
 **Metrics:** category cards that group Prometheus series by signal family (HTTP
-requests, latency, business events, runtime, queue, database, other). Each card
-shows a title, description, series count and aggregated total. Clicking a card
-opens a detail view listing the individual series with their labels, current
-value and a proportional heat bar. A window switcher (5m/15m/1h) lives in the
-header. Counter magnitude may be heat-encoded, but never let the ramp imply an
-alarm about a metric that is merely large.
+requests, latency, claim submissions, review decisions, intake jobs, AI
+assistant turns, runtime, queue, database, other). Empty categories remain
+visible and read "no data" so the manager sees the whole surface honestly.
+Clicking a card opens a detail view where each line translates raw labels into
+plain language — e.g. `status_class=2xx` becomes "Successful — handled without
+error", `route_template=/v1/claims` + `method=POST` becomes "Submitting a claim",
+and `outcome=fallback` becomes "Answered by the deterministic layer, not the
+model". Each line shows the count, its unit, its share of the category, and an
+animated proportion bar. A window switcher (5m/15m/1h) lives in the header.
+Counter magnitude may be heat-encoded, but never let the ramp imply an alarm
+about a metric that is merely large.
 
 **Logs:** virtualized (TanStack Virtual); level as a small dot or 2-letter tag,
 never a coloured row; a visible **Pause**, with auto-pause on scroll-up; search

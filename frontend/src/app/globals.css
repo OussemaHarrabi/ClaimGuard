@@ -1337,82 +1337,90 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 }
 
 .ops-metric-series-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  grid-template-rows: auto auto;
-  gap: 8px 16px;
-  align-items: center;
-  padding: 12px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 0;
   border-bottom: 1px solid var(--ops-border);
+  opacity: 0;
+  transform: translateY(8px);
 }
 
 .ops-metric-series-row:last-child {
   border-bottom: 0;
 }
 
-.ops-metric-series-row-label {
-  min-width: 0;
-  grid-column: 1;
-  grid-row: 1;
+.ops-metric-series-row-enter {
+  animation: ops-metric-series-row-enter 260ms cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  animation-delay: var(--row-delay, 0ms);
 }
 
-.ops-metric-series-name {
-  display: block;
-  font-weight: 500;
-  font-size: 13px;
-  color: var(--ops-text);
-  margin-bottom: 6px;
+@keyframes ops-metric-series-row-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 
-/* Label chips rendered by MetricLabels. These names had no styles at all, so
-   every series label rendered as unstyled text. */
-.ops-signal-series-labels {
+.ops-metric-series-row-main {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px 16px;
+  align-items: start;
+}
+
+.ops-metric-series-row-text {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
-.ops-signal-series-label {
-  display: inline-flex;
-  max-width: 240px;
-  overflow: hidden;
-  padding: 2px 7px;
-  border: 1px solid var(--ops-border);
-  border-radius: 6px;
-  background: var(--ops-raised);
+.ops-metric-series-verb {
+  display: block;
+  color: var(--ops-text);
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.35;
+}
+
+.ops-metric-series-detail {
+  display: block;
   color: var(--ops-muted);
-  font-family: var(--ops-font-mono);
-  font-size: 10px;
-  line-height: 1.6;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ops-signal-series-label-none {
-  padding: 0;
-  border-color: transparent;
-  background: transparent;
-  color: var(--ops-quiet);
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .ops-metric-series-row-value {
-  grid-column: 2;
-  grid-row: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 2px;
   text-align: right;
+  min-width: 0;
 }
 
 .ops-metric-series-value {
   font-family: var(--ops-font-mono);
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   line-height: 1.1;
   transition: color 200ms ease;
 }
 
+.ops-metric-series-unit {
+  color: var(--ops-muted);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: lowercase;
+}
+
+.ops-metric-series-share {
+  color: var(--ops-quiet);
+  font-size: 11px;
+  font-family: var(--ops-font-mono);
+}
+
 .ops-metric-series-row-bar {
-  grid-column: 1 / -1;
-  grid-row: 2;
   height: 6px;
   border-radius: 999px;
   background: var(--ops-canvas);
@@ -1423,13 +1431,9 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   height: 100%;
   min-width: 2px;
   border-radius: 999px;
-  transform: scaleX(0);
+  transform: scaleX(var(--bar-share, 0));
   transform-origin: left;
   transition: transform 300ms cubic-bezier(0.16, 1, 0.3, 1), background-color 200ms ease;
-}
-
-.ops-metric-card-detail-open .ops-metric-series-bar {
-  transform: scaleX(var(--bar-share, 0));
 }
 
 .ops-metric-series-row-changed .ops-metric-series-value {
@@ -2990,8 +2994,13 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   .ops-metric-card-detail-inner {
     padding: 0 14px 14px;
   }
-  .ops-metric-series-row {
-    gap: 6px 12px;
+  .ops-metric-series-row-main {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .ops-metric-series-row-value {
+    align-items: flex-start;
+    text-align: left;
   }
 }
 
@@ -3988,12 +3997,14 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
   .ops-dark .ops-role-card-enter,
   .ops-dark .ops-role-detail,
   .ops-dark .ops-category-card-enter,
-  .ops-dark .ops-category-detail {
+  .ops-dark .ops-category-detail,
+  .ops-dark .ops-metric-series-row-enter {
     animation: none;
   }
   .ops-dark .ops-activity-row,
   .ops-dark .ops-role-card,
-  .ops-dark .ops-category-card {
+  .ops-dark .ops-category-card,
+  .ops-dark .ops-metric-series-row {
     opacity: 1;
     transform: none;
   }

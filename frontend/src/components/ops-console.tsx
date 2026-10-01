@@ -205,25 +205,6 @@ const HIDDEN_METRIC_LABELS = new Set([
   "service_name",
 ]);
 
-function MetricLabels({ labels }: { labels: Readonly<Record<string, string>> }) {
-  const entries = Object.entries(labels).filter(([k]) => !HIDDEN_METRIC_LABELS.has(k));
-  if (entries.length === 0) {
-    return <span className="ops-signal-series-label ops-signal-series-label-none">none</span>;
-  }
-  return (
-    <div className="ops-signal-series-labels">
-      {entries.map(([k, v]) => {
-        const text = `${k}=${v}`;
-        return (
-          <span key={k} className="ops-signal-series-label" title={text}>
-            {text}
-          </span>
-        );
-      })}
-    </div>
-  );
-}
-
 function seriesKey(s: OpsMetricSeries): string {
   const visible = Object.entries(s.labels)
     .filter(([k]) => !HIDDEN_METRIC_LABELS.has(k))
@@ -301,42 +282,91 @@ type MetricCategory = {
   key: string;
   title: string;
   description: string;
+  unit: string;
 };
+
+const METRIC_CATEGORIES: MetricCategory[] = [
+  {
+    key: "http",
+    title: "HTTP requests",
+    description: "How many requests the API handled, broken down by route, method, and result.",
+    unit: "requests",
+  },
+  {
+    key: "latency",
+    title: "Latency",
+    description: "How long requests take to complete across the API surface.",
+    unit: "observations",
+  },
+  {
+    key: "claims",
+    title: "Claim submissions",
+    description: "Claims submitted to the platform and whether they were new or duplicates.",
+    unit: "claims",
+  },
+  {
+    key: "decisions",
+    title: "Review decisions",
+    description: "Decisions recorded by reviewers on submitted claims.",
+    unit: "decisions",
+  },
+  {
+    key: "intake",
+    title: "Intake jobs",
+    description: "Document intake jobs and their processing outcome.",
+    unit: "jobs",
+  },
+  {
+    key: "assistant",
+    title: "AI assistant turns",
+    description: "Assistant responses and how each turn was resolved.",
+    unit: "turns",
+  },
+  {
+    key: "runtime",
+    title: "Runtime health",
+    description: "Process, host, and scraper health signals.",
+    unit: "samples",
+  },
+  {
+    key: "queue",
+    title: "Queue & workers",
+    description: "Background job and worker queue depth and throughput.",
+    unit: "jobs",
+  },
+  {
+    key: "database",
+    title: "Database",
+    description: "Database connection and query metrics.",
+    unit: "samples",
+  },
+  {
+    key: "other",
+    title: "Other telemetry",
+    description: "Additional metrics not grouped into a known category.",
+    unit: "samples",
+  },
+];
 
 function metricCategory(name: string): MetricCategory {
   const lower = name.toLowerCase();
+  if (lower.includes("_duration_") || lower.includes("_latency_")) {
+    return METRIC_CATEGORIES.find((c) => c.key === "latency")!;
+  }
+  if (lower.includes("claims_submitted")) {
+    return METRIC_CATEGORIES.find((c) => c.key === "claims")!;
+  }
+  if (lower.includes("decisions")) {
+    return METRIC_CATEGORIES.find((c) => c.key === "decisions")!;
+  }
+  if (lower.includes("intake_jobs")) {
+    return METRIC_CATEGORIES.find((c) => c.key === "intake")!;
+  }
+  if (lower.includes("assistant_turns")) {
+    return METRIC_CATEGORIES.find((c) => c.key === "assistant")!;
+  }
   if (lower.startsWith("http_") || lower.includes("_http_")) {
-    return {
-      key: "http",
-      title: "HTTP requests",
-      description: "Request throughput, status codes, and sizes for the REST API surface.",
-    };
-  }
-  if (
-    lower.includes("_duration_") ||
-    lower.includes("_latency_") ||
-    lower.endsWith("_duration_seconds") ||
-    lower.endsWith("_latency_seconds")
-  ) {
-    return {
-      key: "latency",
-      title: "Latency",
-      description: "How long operations take to complete across services.",
-    };
-  }
-  if (
-    lower.startsWith("claimguard_") ||
-    lower.includes("claim") ||
-    lower.includes("finding") ||
-    lower.includes("review") ||
-    lower.includes("decision") ||
-    lower.includes("intake")
-  ) {
-    return {
-      key: "business",
-      title: "Business operations",
-      description: "Counters for claims, findings, reviews, and intake workflows.",
-    };
+    return METRIC_CATEGORIES.find((c) => c.key === "http")!;
   }
   if (
     lower === "up" ||
@@ -347,31 +377,131 @@ function metricCategory(name: string): MetricCategory {
     lower.includes("memory") ||
     lower.includes("cpu")
   ) {
-    return {
-      key: "runtime",
-      title: "Runtime health",
-      description: "Process, host, and scraper health signals.",
-    };
+    return METRIC_CATEGORIES.find((c) => c.key === "runtime")!;
   }
   if (lower.includes("queue") || lower.includes("worker") || lower.includes("job")) {
-    return {
-      key: "queue",
-      title: "Queue & workers",
-      description: "Background job and worker queue depth and throughput.",
-    };
+    return METRIC_CATEGORIES.find((c) => c.key === "queue")!;
   }
   if (lower.startsWith("db_") || lower.startsWith("database_") || lower.includes("_sql_")) {
-    return {
-      key: "database",
-      title: "Database",
-      description: "Database connection and query metrics.",
-    };
+    return METRIC_CATEGORIES.find((c) => c.key === "database")!;
   }
-  return {
-    key: "other",
-    title: "Other telemetry",
-    description: "Additional metrics not grouped into a known category.",
-  };
+  return METRIC_CATEGORIES.find((c) => c.key === "other")!;
+}
+
+const ROUTE_ACTIONS: Record<string, Record<string, string>> = {
+  "/v1/claims": {
+    GET: "Listing claims",
+    POST: "Submitting a claim",
+    PATCH: "Updating a claim",
+    DELETE: "Deleting a claim",
+  },
+  "/v1/claims/{id}": {
+    GET: "Reading a claim",
+    PATCH: "Updating a claim",
+    DELETE: "Deleting a claim",
+  },
+  "/v1/queue": { GET: "Loading the review queue" },
+  "/v1/decisions": {
+    GET: "Fetching decisions",
+    POST: "Recording a decision",
+  },
+  "/v1/intake/jobs": {
+    GET: "Listing intake jobs",
+    POST: "Creating an intake job",
+  },
+  "/v1/intake/documents": { POST: "Uploading a document" },
+  "/v1/assistant/turns": { POST: "Assistant conversation turn" },
+  "/v1/operations/metrics": { GET: "Fetching metrics" },
+  "/v1/operations/traces": { GET: "Fetching traces" },
+  "/v1/health": { GET: "Health check" },
+  "/v1/auth/me": { GET: "Session check" },
+};
+
+const STATUS_MEANING: Record<string, string> = {
+  "2xx": "Successful — handled without error",
+  "3xx": "Redirected — the caller was sent elsewhere",
+  "4xx": "Rejected — the request was refused (e.g. not permitted)",
+  "5xx": "Server error — failed inside the service",
+};
+
+const OUTCOME_MEANING: Record<string, Record<string, string>> = {
+  claims: {
+    submitted: "New claim recorded",
+    duplicate: "Already seen — not counted twice",
+  },
+  decisions: {
+    approved: "Approved",
+    rejected: "Rejected",
+    overridden: "Overridden by a lead",
+  },
+  intake: {
+    needs_review: "Needs human review",
+    rejected: "Rejected",
+    submitted: "Submitted successfully",
+  },
+  assistant: {
+    accepted: "Used as-is",
+    repaired: "Corrected before use",
+    fallback: "Answered by the deterministic layer, not the model",
+    refused: "Refused — no answer given",
+  },
+};
+
+function routeAction(route: string, method: string): string {
+  const normalizedRoute = route ?? "";
+  const normalizedMethod = (method ?? "").toUpperCase();
+  const exact = ROUTE_ACTIONS[normalizedRoute]?.[normalizedMethod];
+  if (exact) return exact;
+  if (normalizedRoute.startsWith("/v1/")) {
+    return `${normalizedMethod} ${normalizedRoute}`;
+  }
+  return normalizedRoute ? `${normalizedMethod} ${normalizedRoute}` : normalizedMethod;
+}
+
+function metricCategoryUnit(categoryKey: string): string {
+  return METRIC_CATEGORIES.find((c) => c.key === categoryKey)?.unit ?? "samples";
+}
+
+type MetricLineDescription = {
+  primary: string;
+  secondary: string | null;
+  raw: string;
+};
+
+function metricLineDescription(series: OpsMetricSeries): MetricLineDescription {
+  const name = series.name.toLowerCase();
+  const labels = series.labels;
+  const raw = Object.entries(labels)
+    .filter(([k]) => !HIDDEN_METRIC_LABELS.has(k))
+    .map(([k, v]) => `${k}=${v}`)
+    .join(", ");
+
+  if (name.includes("http_requests_total")) {
+    const action = routeAction(labels.route_template ?? labels.route ?? "", labels.method ?? "");
+    const status = labels.status_class ? STATUS_MEANING[labels.status_class] ?? `status ${labels.status_class}` : null;
+    return { primary: action, secondary: status, raw };
+  }
+
+  if (name.includes("http_request_duration")) {
+    const action = routeAction(labels.route_template ?? labels.route ?? "", labels.method ?? "");
+    return { primary: action, secondary: "Latency observation", raw };
+  }
+
+  if (labels.outcome) {
+    let familyKey = "";
+    if (name.includes("claims_submitted")) familyKey = "claims";
+    else if (name.includes("decisions")) familyKey = "decisions";
+    else if (name.includes("intake_jobs")) familyKey = "intake";
+    else if (name.includes("assistant_turns")) familyKey = "assistant";
+
+    if (familyKey) {
+      const familyTitle = METRIC_CATEGORIES.find((c) => c.key === familyKey)?.title ?? familyKey;
+      const meaning = OUTCOME_MEANING[familyKey]?.[labels.outcome] ?? `outcome ${labels.outcome}`;
+      return { primary: familyTitle, secondary: meaning, raw };
+    }
+  }
+
+  return { primary: series.name, secondary: raw || null, raw };
 }
 
 type TraceCategory = {
@@ -1205,27 +1335,43 @@ function usePreviousMetricValues(series: readonly OpsMetricSeries[]): ReadonlyMa
 
 type MetricSeriesRowProps = {
   series: OpsMetricSeries;
-  groupMax: number;
+  categoryTotal: number;
   changed: boolean;
   reduced: boolean;
   index: number;
 };
 
-function MetricSeriesRow({ series, groupMax, changed, reduced }: MetricSeriesRowProps) {
-  const share = groupMax > 0 ? series.value / groupMax : 0;
-  const heat = metricHeatLevel(series.value, groupMax);
+function MetricSeriesRow({ series, categoryTotal, changed, reduced, index }: MetricSeriesRowProps) {
+  const share = categoryTotal > 0 ? series.value / categoryTotal : 0;
+  const heat = metricHeatLevel(series.value, categoryTotal || 1);
+  const description = metricLineDescription(series);
+  const unit = metricCategoryUnit(metricCategory(series.name).key);
+  const percent = Math.round(share * 100);
+  const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
   return (
-    <li className={`ops-metric-series-row ${changed ? "ops-metric-series-row-changed" : ""}`}>
-      <div className="ops-metric-series-row-label">
-        <span className="ops-metric-series-name">{series.name}</span>
-        <MetricLabels labels={series.labels} />
-      </div>
-      <div className="ops-metric-series-row-value">
-        <AnimatedNumber
-          value={series.value}
-          reduced={reduced}
-          className={`ops-metric-series-value ops-signal-heat-${heat}`}
-        />
+    <li
+      className={`ops-metric-series-row ${changed ? "ops-metric-series-row-changed" : ""} ${reduced ? "" : "ops-metric-series-row-enter"}`}
+      style={{ "--row-delay": delay } as React.CSSProperties}
+      title={description.raw}
+    >
+      <div className="ops-metric-series-row-main">
+        <div className="ops-metric-series-row-text">
+          <span className="ops-metric-series-verb">{description.primary}</span>
+          {description.secondary && (
+            <span className="ops-metric-series-detail">{description.secondary}</span>
+          )}
+        </div>
+        <div className="ops-metric-series-row-value">
+          <AnimatedNumber
+            value={series.value}
+            reduced={reduced}
+            className={`ops-metric-series-value ops-signal-heat-${heat}`}
+          />
+          <span className="ops-metric-series-unit">{unit}</span>
+          <span className="ops-metric-series-share" aria-hidden="true">
+            {percent}% of category
+          </span>
+        </div>
       </div>
       <div className="ops-metric-series-row-bar" aria-hidden="true">
         <div
@@ -1259,17 +1405,18 @@ type MetricCategorySummary = {
 
 function summarizeMetrics(series: readonly OpsMetricSeries[]): MetricCategorySummary[] {
   const map = new Map<string, MetricCategorySummary>();
+  for (const cat of METRIC_CATEGORIES) {
+    map.set(cat.key, { category: cat, items: [], total: 0 });
+  }
   for (const s of series) {
     const cat = metricCategory(s.name);
     const existing = map.get(cat.key);
     if (existing) {
       existing.items.push(s);
       existing.total += s.value;
-    } else {
-      map.set(cat.key, { category: cat, items: [s], total: s.value });
     }
   }
-  return Array.from(map.values()).sort((a, b) => a.category.title.localeCompare(b.category.title));
+  return Array.from(map.values());
 }
 
 type MetricsSurfaceProps = {
@@ -1356,14 +1503,18 @@ function MetricsSurface({ metrics, window, reduced }: MetricsSurfaceProps) {
               </li>
             ))}
           </ul>
-          {categories.length > 0 && categories.length <= 2 && (
-            <div className="ops-metrics-sparse">
-              <span>
-                Showing {categories.length === 1 ? "the only" : `all ${categories.length}`} metric
-                categor{categories.length === 1 ? "y" : "ies"} for this window.
-              </span>
-            </div>
-          )}
+          {(() => {
+            const nonEmpty = categories.filter((c) => c.items.length > 0).length;
+            if (nonEmpty === 0 || nonEmpty > 2) return null;
+            return (
+              <div className="ops-metrics-sparse">
+                <span>
+                  Showing {nonEmpty === 1 ? "the only" : `all ${nonEmpty}`} metric
+                  categor{nonEmpty === 1 ? "y" : "ies"} with data for this window.
+                </span>
+              </div>
+            );
+          })()}
         </>
       )}
     </section>
@@ -1379,17 +1530,22 @@ type MetricCategoryCardProps = {
 
 function MetricCategoryCard({ summary, index, reduced, onSelect }: MetricCategoryCardProps) {
   const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+  const empty = summary.items.length === 0;
   return (
     <button
       type="button"
-      className={`ops-category-card ${reduced ? "" : "ops-category-card-enter"}`}
+      className={`ops-category-card ${reduced ? "" : "ops-category-card-enter"} ${empty ? "ops-category-card-empty" : ""}`}
       style={{ "--card-delay": delay } as React.CSSProperties}
       onClick={onSelect}
-      aria-label={`${summary.category.title}: ${summary.items.length} series, ${summary.total.toLocaleString()} total`}
+      aria-label={`${summary.category.title}: ${empty ? "no data" : `${summary.items.length} series, ${summary.total.toLocaleString()} total`}`}
     >
       <div className="ops-category-card-top">
         <span className="ops-category-card-count">
-          <AnimatedNumber value={summary.items.length} reduced={reduced} /> series
+          {empty ? "no data" : (
+            <>
+              <AnimatedNumber value={summary.items.length} reduced={reduced} /> series
+            </>
+          )}
         </span>
       </div>
       <div className="ops-category-card-body">
@@ -1397,13 +1553,20 @@ function MetricCategoryCard({ summary, index, reduced, onSelect }: MetricCategor
         <p>{summary.category.description}</p>
       </div>
       <div className="ops-category-card-foot">
-        <span className="ops-category-card-figure">
-          <AnimatedNumber value={summary.total} reduced={reduced} /> total
-        </span>
-        <span className="ops-category-card-hint">
-          view details
-          <ChevronRight size={14} aria-hidden="true" />
-        </span>
+        {empty ? (
+          <span className="ops-category-card-placeholder">No samples in window</span>
+        ) : (
+          <>
+            <span className="ops-category-card-figure">
+              <AnimatedNumber value={summary.total} reduced={reduced} />{" "}
+              {metricCategoryUnit(summary.category.key)}
+            </span>
+            <span className="ops-category-card-hint">
+              view details
+              <ChevronRight size={14} aria-hidden="true" />
+            </span>
+          </>
+        )}
       </div>
     </button>
   );
@@ -1426,7 +1589,6 @@ function MetricCategoryDetail({
   reduced,
   onBack,
 }: MetricCategoryDetailProps) {
-  const groupMax = Math.max(1, ...summary.items.map((s) => s.value));
   return (
     <div className="ops-category-detail">
       <div className="ops-category-detail-header">
@@ -1440,18 +1602,25 @@ function MetricCategoryDetail({
         </div>
       </div>
 
-      <ul className="ops-metric-series-list" aria-label={`${summary.category.title} series`}>
-        {summary.items.map((s, i) => (
-          <MetricSeriesRow
-            key={seriesKey(s)}
-            series={s}
-            groupMax={groupMax}
-            changed={changedMap.get(seriesKey(s)) ?? false}
-            reduced={reduced}
-            index={i}
-          />
-        ))}
-      </ul>
+      {summary.items.length === 0 ? (
+        <div className="ops-empty-state">
+          <Activity size={24} aria-hidden="true" />
+          <p>No metrics in this category for this window.</p>
+        </div>
+      ) : (
+        <ul className="ops-metric-series-list" aria-label={`${summary.category.title} series`}>
+          {summary.items.map((s, i) => (
+            <MetricSeriesRow
+              key={seriesKey(s)}
+              series={s}
+              categoryTotal={summary.total}
+              changed={changedMap.get(seriesKey(s)) ?? false}
+              reduced={reduced}
+              index={i}
+            />
+          ))}
+        </ul>
+      )}
 
       <div className="ops-metric-card-meta">
         <span>window {window}</span>
