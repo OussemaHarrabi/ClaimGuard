@@ -21,10 +21,12 @@ silently rendering an empty page that looks like "healthy, no data".
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any, Final, cast
+from http import HTTPStatus
+from typing import Any, Final, Literal, cast
 
 import httpx
 from pydantic import BaseModel, ConfigDict
@@ -95,20 +97,64 @@ class TraceSummary(BaseModel):
     duration_ms: float
 
 
+class TraceSpan(BaseModel):
+    """One span of a fetched trace, with its real start time and outcome.
+
+    ``start_time`` is kept absolute here so the HTTP layer can order spans and
+    derive each one's offset from the trace start; ``depth`` and the relative
+    offset are presentation, computed in :mod:`claimguard.ops.operations`.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    span_id: str
+    parent_span_id: str | None
+    name: str
+    service: str
+    start_time: datetime
+    duration_ms: float
+    status: Literal["ok", "error"]
+
+
+class TraceDetail(BaseModel):
+    """Every span of one trace, in start-time order (the source's raw view)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    trace_id: str
+    spans: list[TraceSpan]
+
+
 class SourceUnavailable(RuntimeError):  # noqa: N818 - the name is part of the P2 contract
     """A source could not answer: timeout, non-2xx status or unparsable body."""
+
+
+class SourceNotFound(SourceUnavailable):
+    """The source answered, but holds no object for the requested id.
+
+    A subclass of :class:`SourceUnavailable` so every existing caller that
+    degrades on a missing source keeps doing so; the HTTP layer distinguishes it
+    to answer ``404`` for an unknown/expired trace instead of ``200``.
+    """
 
 
 # ---------------------------------------------------------------------------
 # Allow-listed queries
 # ---------------------------------------------------------------------------
 
-#: The only metric names the backend will ever query. Both are low-cardinality
-#: HTTP instruments emitted by this service; the label policy
-#: (:mod:`claimguard.ops.telemetry_policy`) already bounds their dimensions.
+#: The only metric names the backend will ever query. All are low-cardinality
+#: instruments emitted by this service: the two HTTP instruments, plus the four
+#: bounded domain counters whose sole label dimension is a closed set of
+#: outcomes/actions (see :mod:`claimguard.ops.telemetry`). None carries an
+#: identifier, and the HTTP label policy (:mod:`claimguard.ops.telemetry_policy`)
+#: already bounds their dimensions.
 DEFAULT_METRIC_NAMES: Final[tuple[str, ...]] = (
     "claimguard_http_requests_total",
     "claimguard_http_request_duration_milliseconds_count",
+    "claimguard_claims_submitted_total",
+    "claimguard_decisions_total",
+    "claimguard_intake_jobs_total",
+    "claimguard_assistant_turns_total",
 )
 
 #: Hard allow-list. A metric name not in this set is refused at construction, so
@@ -120,6 +166,14 @@ MAX_WINDOW_SECONDS: Final = 3600
 
 #: Largest trace page the API will request.
 MAX_TRACE_LIMIT: Final = 100
+
+#: Largest number of spans one fetched trace may return, so a pathological
+#: trace cannot turn the detail payload into an unbounded response.
+MAX_TRACE_SPANS: Final = 200
+
+#: A trace id is an opaque hex token; pinning the alphabet keeps a caller from
+#: steering the request path (no ``/``, ``.`` or ``%`` can appear).
+_TRACE_ID_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-fA-F]{1,64}$")
 
 
 def _positive_int(value: object, *, name: str, maximum: int) -> int:
@@ -153,18 +207,29 @@ class _JsonSource:
             transport=transport,
         )
 
-    def _get_json(self, path: str, params: dict[str, str | int], *, source: str) -> Any:
+    def _get_json(
+        self,
+        path: str,
+        params: dict[str, str | int],
+        *,
+        source: str,
+        headers: dict[str, str] | None = None,
+    ) -> Any:
         """GET ``path`` and decode JSON, mapping every failure to :class:`SourceUnavailable`.
 
-        No request or response body is ever logged; the raised message names the
-        failure category and, for an HTTP error, the status code only.
+        A ``404`` is raised as :class:`SourceNotFound` so the HTTP layer can tell
+        "this object does not exist" from "this source is down". No request or
+        response body is ever logged; the raised message names the failure
+        category and, for an HTTP error, the status code only.
         """
         try:
-            response = self._client.get(path, params=params)
+            response = self._client.get(path, params=params, headers=headers)
             response.raise_for_status()
         except httpx.TimeoutException as exc:
             raise SourceUnavailable(f"{source} timed out") from exc
         except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == HTTPStatus.NOT_FOUND:
+                raise SourceNotFound(f"{source} has no object for this id") from exc
             raise SourceUnavailable(f"{source} returned HTTP {exc.response.status_code}") from exc
         except httpx.HTTPError as exc:
             raise SourceUnavailable(f"{source} is unreachable ({type(exc).__name__})") from exc
@@ -247,6 +312,32 @@ class TempoSource(_JsonSource):
             raise
         except (KeyError, TypeError, ValueError) as exc:
             raise SourceUnavailable("tempo returned an unparsable trace page") from exc
+
+    def get_trace(self, trace_id: str) -> TraceDetail:
+        """Return every span of one trace, ordered by start time and capped.
+
+        Tempo's v1 trace endpoint answers protobuf by default, so the request
+        asks for JSON explicitly. An unknown or expired id is a ``404``, which
+        surfaces as :class:`SourceNotFound` (a :class:`SourceUnavailable`) so the
+        API can answer ``404`` rather than a misleading empty success. A malformed
+        id never reaches the network.
+        """
+        if _TRACE_ID_RE.fullmatch(trace_id) is None:
+            raise SourceNotFound("tempo trace id is not a valid hex id")
+        payload = self._get_json(
+            f"/api/traces/{trace_id}",
+            {},
+            source="tempo",
+            headers={"Accept": "application/json"},
+        )
+        try:
+            detail = _parse_tempo_trace(payload, trace_id)
+        except SourceUnavailable:
+            raise
+        except (KeyError, TypeError, ValueError) as exc:
+            raise SourceUnavailable("tempo returned an unparsable trace") from exc
+        ordered = sorted(detail.spans, key=lambda span: span.start_time)
+        return TraceDetail(trace_id=trace_id, spans=ordered[:MAX_TRACE_SPANS])
 
 
 # ---------------------------------------------------------------------------
@@ -344,3 +435,120 @@ def _tempo_start_time(item: dict[str, Any]) -> datetime:
     if isinstance(raw, str) and raw:
         return datetime.fromisoformat(raw.replace("Z", "+00:00")).astimezone(UTC)
     raise SourceUnavailable("tempo trace has no start time")
+
+
+def _parse_tempo_trace(payload: Any, trace_id: str) -> TraceDetail:
+    """Parse a Tempo ``/api/traces/{id}`` OTLP JSON body into a trace.
+
+    Tempo renders the OTLP ``TraceData`` message; depending on version it nests
+    the resource groups under ``batches`` or ``resourceSpans``. Both are read, and
+    within a group both the current ``scopeSpans`` and the older
+    ``instrumentationLibrarySpans`` key are accepted. A span missing a usable
+    start time is skipped rather than aborting the whole trace.
+    """
+    root = _as_object(payload)
+    if root is None:
+        raise SourceUnavailable("tempo returned a non-object payload")
+    groups = root.get("batches")
+    if not isinstance(groups, list):
+        groups = root.get("resourceSpans")
+    if not isinstance(groups, list):
+        raise SourceUnavailable("tempo trace has no resource groups")
+    spans: list[TraceSpan] = []
+    for group in cast("list[Any]", groups):
+        entry = _as_object(group)
+        if entry is None:
+            continue
+        service = _tempo_service_name(entry)
+        for raw_span in _tempo_group_spans(entry):
+            parsed = _parse_tempo_span(raw_span, service)
+            if parsed is not None:
+                spans.append(parsed)
+    return TraceDetail(trace_id=trace_id, spans=spans)
+
+
+def _tempo_group_spans(entry: dict[str, Any]) -> list[Any]:
+    """The raw span entries of one resource group, across Tempo/OTLP shapes."""
+    scopes = entry.get("scopeSpans")
+    if not isinstance(scopes, list):
+        scopes = entry.get("instrumentationLibrarySpans")
+    if not isinstance(scopes, list):
+        return []
+    collected: list[Any] = []
+    for scope in cast("list[Any]", scopes):
+        scope_entry = _as_object(scope)
+        if scope_entry is None:
+            continue
+        scoped = scope_entry.get("spans")
+        if isinstance(scoped, list):
+            collected.extend(cast("list[Any]", scoped))
+    return collected
+
+
+def _tempo_service_name(entry: dict[str, Any]) -> str:
+    """The ``service.name`` resource attribute of a group, or ``"unknown"``."""
+    resource = _as_object(entry.get("resource"))
+    if resource is None:
+        return "unknown"
+    attributes = resource.get("attributes")
+    if not isinstance(attributes, list):
+        return "unknown"
+    for attribute in cast("list[Any]", attributes):
+        attr = _as_object(attribute)
+        if attr is None or attr.get("key") != "service.name":
+            continue
+        value = _as_object(attr.get("value"))
+        if value is None:
+            continue
+        name = value.get("stringValue")
+        if isinstance(name, str) and name:
+            return name
+    return "unknown"
+
+
+def _parse_tempo_span(raw: Any, service: str) -> TraceSpan | None:
+    """Parse one OTLP span; ``None`` when it carries no usable start time."""
+    entry = _as_object(raw)
+    if entry is None:
+        return None
+    start = _tempo_nano_time(entry.get("startTimeUnixNano"))
+    if start is None:
+        return None
+    end = _tempo_nano_time(entry.get("endTimeUnixNano"))
+    duration_ms = 0.0 if end is None else max(0.0, (end - start).total_seconds() * 1000.0)
+    parent = entry.get("parentSpanId")
+    parent_span_id = str(parent) if parent else None
+    return TraceSpan(
+        span_id=str(entry.get("spanId") or ""),
+        parent_span_id=parent_span_id,
+        name=str(entry.get("name") or ""),
+        service=service,
+        start_time=start,
+        duration_ms=duration_ms,
+        status=_tempo_span_status(entry),
+    )
+
+
+def _tempo_nano_time(raw: Any) -> datetime | None:
+    """An OTLP nanosecond timestamp (string or number) as UTC, or ``None``."""
+    if isinstance(raw, bool) or raw is None:
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw) / 1_000_000_000, tz=UTC)
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _tempo_span_status(entry: dict[str, Any]) -> Literal["ok", "error"]:
+    """Map an OTLP span status to ``"error"`` only for an explicit error code.
+
+    OTLP encodes the status enum as ``2``/``STATUS_CODE_ERROR`` (and its shorthand
+    ``ERROR``); unset and OK both render as ``"ok"`` here.
+    """
+    status = _as_object(entry.get("status"))
+    if status is None:
+        return "ok"
+    code = status.get("code")
+    if code in (2, "2", "STATUS_CODE_ERROR", "ERROR", "error"):
+        return "error"
+    return "ok"

@@ -15,9 +15,11 @@ from datetime import UTC, datetime
 import httpx
 import pytest
 from claimguard.ops.sources import (
+    MAX_TRACE_SPANS,
     MetricSeries,
     PrometheusSamples,
     PrometheusSource,
+    SourceNotFound,
     SourceUnavailable,
     TempoSource,
     TraceSummary,
@@ -265,3 +267,108 @@ def test_the_response_body_is_never_logged(caplog: pytest.LogCaptureFixture) -> 
     with caplog.at_level(logging.DEBUG), pytest.raises(SourceUnavailable):
         source.query_samples(300)
     assert marker not in caplog.text
+
+
+# ---------------------------------------------------------------------------
+# Tempo: fetching one trace's spans
+# ---------------------------------------------------------------------------
+
+
+def _otlp_trace_payload() -> dict[str, object]:
+    """A two-span OTLP JSON trace, one nested and one marked error."""
+    return {
+        "batches": [
+            {
+                "resource": {
+                    "attributes": [
+                        {"key": "service.name", "value": {"stringValue": "claimguard"}},
+                    ]
+                },
+                "scopeSpans": [
+                    {
+                        "spans": [
+                            {
+                                "spanId": "aaaa",
+                                "name": "POST /v1/claims",
+                                "startTimeUnixNano": "1727000000000000000",
+                                "endTimeUnixNano": "1727000000100000000",
+                            },
+                            {
+                                "spanId": "bbbb",
+                                "parentSpanId": "aaaa",
+                                "name": "claim.evaluate",
+                                "startTimeUnixNano": "1727000000020000000",
+                                "endTimeUnixNano": "1727000000070000000",
+                                "status": {"code": 2},
+                            },
+                        ]
+                    }
+                ],
+            }
+        ]
+    }
+
+
+def test_tempo_get_trace_parses_otlp_spans() -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=_otlp_trace_payload()))
+    detail = _tempo(transport).get_trace("a" * 32)
+    assert detail.trace_id == "a" * 32
+    assert [span.span_id for span in detail.spans] == ["aaaa", "bbbb"]
+    root, child = detail.spans
+    assert root.parent_span_id is None
+    assert root.service == "claimguard"
+    assert root.duration_ms == 100.0
+    assert root.status == "ok"
+    assert child.parent_span_id == "aaaa"
+    assert child.duration_ms == 50.0
+    assert child.status == "error"
+
+
+def test_tempo_get_trace_accepts_json_explicitly() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"batches": []})
+
+    _tempo(httpx.MockTransport(handler)).get_trace("b" * 32)
+    assert seen[0].headers.get("accept") == "application/json"
+
+
+def test_tempo_get_trace_404_is_source_not_found() -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(404, json={"error": "x"}))
+    with pytest.raises(SourceNotFound):
+        _tempo(transport).get_trace("c" * 32)
+
+
+def test_tempo_get_trace_rejects_a_malformed_id_without_a_request() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json={"batches": []})
+
+    with pytest.raises(SourceNotFound):
+        _tempo(httpx.MockTransport(handler)).get_trace("../not-a-trace")
+    assert seen == []
+
+
+def test_tempo_get_trace_with_no_spans_returns_an_empty_trace() -> None:
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json={"batches": []}))
+    assert _tempo(transport).get_trace("d" * 32).spans == []
+
+
+def test_tempo_get_trace_caps_the_span_count() -> None:
+    spans = [
+        {
+            "spanId": f"{index:04d}",
+            "name": f"span-{index}",
+            "startTimeUnixNano": str(1727000000000000000 + index),
+            "endTimeUnixNano": str(1727000000000000000 + index + 1),
+        }
+        for index in range(MAX_TRACE_SPANS + 50)
+    ]
+    payload = {"batches": [{"scopeSpans": [{"spans": spans}]}]}
+    transport = httpx.MockTransport(lambda request: httpx.Response(200, json=payload))
+    detail = _tempo(transport).get_trace("e" * 32)
+    assert len(detail.spans) == MAX_TRACE_SPANS

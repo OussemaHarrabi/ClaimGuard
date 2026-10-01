@@ -38,26 +38,31 @@ from __future__ import annotations
 import threading
 import time
 from collections.abc import Callable
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Final, Literal, TypeVar, cast
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, ConfigDict
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.engine import Connection, Engine
 
-from claimguard.audit.chain import AuditEvent, verify_chain
+from claimguard.audit.chain import GENESIS, AuditEvent, verify_chain
 from claimguard.clinic.access import Action, Principal, authorize
 from claimguard.config import get_settings
 from claimguard.edu.envelope import RULE_VERSION
 from claimguard.edu.policy import RuleDirError
 from claimguard.ops.sources import (
+    MAX_TRACE_SPANS,
     MetricSeries,
     PrometheusSource,
+    SourceNotFound,
     SourceState,
     SourceStatus,
     SourceUnavailable,
     TempoSource,
+    TraceDetail,
+    TraceSpan,
     TraceSummary,
 )
 
@@ -69,6 +74,12 @@ _OVERVIEW_WINDOW_SECONDS: Final = 300
 
 #: The trace page used for the overview's reachability probe.
 _OVERVIEW_TRACE_LIMIT: Final = 1
+
+#: Largest audit-chain page the API accepts.
+MAX_AUDIT_CHAIN_LIMIT: Final = 200
+
+#: Default audit-chain page size.
+DEFAULT_AUDIT_CHAIN_LIMIT: Final = 50
 
 #: Honest detail for a source that answered but had no data in the window. A
 #: reachable source with nothing to show is not a failure, but it must not
@@ -86,6 +97,7 @@ _TEMPO_ATTR: Final = "tempo_source"
 _CACHE_ATTR: Final = "operations_cache"
 _AUDIT_CHECK_ATTR: Final = "audit_check"
 _AUDIT_ENGINE_ATTR: Final = "audit_engine"
+_AUDIT_CHAIN_ATTR: Final = "audit_chain_reader"
 
 T = TypeVar("T")
 
@@ -186,6 +198,102 @@ class AuditStatus(BaseModel):
     event_count: int
 
 
+class TraceSpanNode(BaseModel):
+    """One span as the console's flow view needs it, offsets and depth included.
+
+    ``depth`` and ``start_offset_ms`` are derived server-side so the browser
+    never walks the parent chain; ``start_offset_ms`` is relative to the trace
+    start and is always ``>= 0``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    span_id: str
+    parent_span_id: str | None
+    name: str
+    service: str
+    start_offset_ms: float
+    duration_ms: float
+    depth: int
+    status: Literal["ok", "error"]
+
+
+class TraceDetailResponse(BaseModel):
+    """One trace's span tree, or an honest degradation of it.
+
+    An unavailable source yields the fail-open shape: the source is marked and
+    ``spans`` is empty, never a ``500``. An unknown or expired id is a ``404``
+    instead — a missing trace is not the same as a dead source.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source: SourceStatus
+    trace_id: str
+    root_name: str
+    duration_ms: float
+    spans: list[TraceSpanNode]
+
+
+class AuditChainLink(BaseModel):
+    """One audit-ledger link, from the allowed columns only.
+
+    ``sequence`` is the 1-based position in the whole chain (newest equals
+    ``total_events``), so the console can render ``n-1 / n / n+1``. ``linked`` is
+    whether this event's ``prev_hash`` equals the next-older event's
+    ``chain_hash``; the true oldest event links to ``"genesis"``.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    sequence: int
+    event_id: str
+    at: datetime
+    kind: str
+    prev_hash: str
+    chain_hash: str
+    claim_ref: str | None
+    trace_id: str
+    linked: bool
+
+
+class AuditChainResponse(BaseModel):
+    """The newest slice of the append-only audit hash chain.
+
+    Only opaque refs and hashes leave here; the ledger's decision content is
+    never selected. On a database fault this is the fail-open shape: ``intact``
+    false, zero events, no links — the reader never 500s.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    intact: bool
+    checked_at: datetime
+    total_events: int
+    links: list[AuditChainLink]
+
+
+@dataclass(frozen=True)
+class AuditChainRow:
+    """One ledger row reduced to the fields the chain page may expose."""
+
+    event_id: str
+    at: datetime
+    kind: str
+    prev_hash: str
+    chain_hash: str
+    claim_ref: str | None
+    trace_id: str
+
+
+@dataclass(frozen=True)
+class AuditChainPage:
+    """Up to ``limit + 1`` newest rows (the extra verifies the oldest shown)."""
+
+    rows: list[AuditChainRow]
+    total_events: int
+
+
 # ---------------------------------------------------------------------------
 # Cache
 # ---------------------------------------------------------------------------
@@ -284,10 +392,29 @@ def traces(
     )
 
 
+@router.get("/traces/{trace_id}", response_model=TraceDetailResponse)
+def trace_detail(request: Request, trace_id: str) -> TraceDetailResponse:
+    """One trace's span tree, with server-computed depth and offsets."""
+    return cache_for(request.app).get_or_set(
+        ("trace", trace_id), lambda: build_trace_detail(request.app, trace_id)
+    )
+
+
 @router.get("/audit", response_model=AuditResponse)
 def audit(request: Request) -> AuditResponse:
     """Whether the append-only audit chain verifies; never claims unverified success."""
     return cache_for(request.app).get_or_set("audit", lambda: build_audit(request.app))
+
+
+@router.get("/audit/chain", response_model=AuditChainResponse)
+def audit_chain(
+    request: Request,
+    limit: Annotated[int, Query(ge=1, le=MAX_AUDIT_CHAIN_LIMIT)] = DEFAULT_AUDIT_CHAIN_LIMIT,
+) -> AuditChainResponse:
+    """The newest links of the hash chain: opaque refs and hashes only."""
+    return cache_for(request.app).get_or_set(
+        ("audit-chain", limit), lambda: build_audit_chain(request.app, limit)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +516,59 @@ def build_audit(app: FastAPI) -> AuditResponse:
         checked_at=checked_at,
         event_count=status.event_count,
         detail=None,
+    )
+
+
+def build_trace_detail(app: FastAPI, trace_id: str) -> TraceDetailResponse:
+    """Fetch one trace's spans, or degrade; an unknown id is a ``404``.
+
+    A dead Tempo is fail-open: a normal response with the source marked and an
+    empty span list. A trace Tempo says it does not hold (``404``) is *not* a
+    degraded source — it is a missing object, so it becomes a ``404`` with a
+    clear detail rather than an empty success that would read as "empty trace".
+    """
+    try:
+        detail = _tempo_source(app).get_trace(trace_id)
+    except SourceNotFound as exc:
+        raise HTTPException(status_code=404, detail=_short(str(exc))) from exc
+    except SourceUnavailable as exc:
+        return _unavailable_trace(trace_id, _short(str(exc)))
+    except Exception as exc:  # noqa: BLE001 - fail-open: never 500 an ops endpoint
+        return _unavailable_trace(trace_id, f"tempo check failed ({type(exc).__name__})")
+    if not detail.spans:
+        raise HTTPException(status_code=404, detail="trace not found or expired")
+    root_name, duration_ms, nodes = _trace_nodes(detail)
+    return TraceDetailResponse(
+        source=SourceStatus(state=SourceState.HEALTHY, last_data_at=None, detail=None),
+        trace_id=detail.trace_id,
+        root_name=root_name,
+        duration_ms=duration_ms,
+        spans=nodes,
+    )
+
+
+def build_audit_chain(app: FastAPI, limit: int) -> AuditChainResponse:
+    """Read the newest chain links; a database fault degrades, never 500s.
+
+    ``intact`` comes from the same :func:`_audit_status` the audit page uses, so
+    the two surfaces never disagree about the verdict. Reading the link rows is a
+    separate, bounded query; if it faults the response is the fail-open shape
+    (``intact`` as verified, zero events, no links) rather than an error.
+    """
+    checked_at = datetime.now(UTC)
+    try:
+        intact = _audit_status(app).intact
+    except Exception:  # noqa: BLE001 - a safety check that cannot complete is not a success
+        intact = False
+    try:
+        page = _audit_chain_page(app, limit)
+    except Exception:  # noqa: BLE001 - fail-open: the reader must not break the app
+        return AuditChainResponse(intact=intact, checked_at=checked_at, total_events=0, links=[])
+    return AuditChainResponse(
+        intact=intact,
+        checked_at=checked_at,
+        total_events=page.total_events,
+        links=_chain_links(page, limit),
     )
 
 
@@ -554,6 +734,62 @@ def _verify_ledger(connection: Connection) -> AuditStatus:
     return AuditStatus(intact=intact, event_count=len(events))
 
 
+def _audit_chain_page(app: FastAPI, limit: int) -> AuditChainPage:
+    """Read the newest chain links through the injectable seam or the audit engine."""
+    reader = getattr(app.state, _AUDIT_CHAIN_ATTR, None)
+    if callable(reader):
+        return cast(Callable[[int], AuditChainPage], reader)(limit)
+    engine = _audit_engine(app)
+    with engine.connect() as connection:
+        return _read_chain_page(connection, limit)
+
+
+def _read_chain_page(connection: Connection, limit: int) -> AuditChainPage:
+    """Read ``limit + 1`` newest rows, selecting only the exposable columns.
+
+    The extra row is the next-older event: it is used solely to judge whether the
+    oldest row shown is linked and is never returned. No forbidden column
+    (``decision``, ``reason_code``, ``finding_ids``, ``rule_version``,
+    ``model_version``) is selected.
+    """
+    # Imported lazily for the same circular-import reason as ``_audit_engine``.
+    from claimguard.review.audit_events import AUDIT_EVENTS
+
+    total = int(connection.execute(select(func.count()).select_from(AUDIT_EVENTS)).scalar_one())
+    rows = (
+        connection.execute(
+            select(
+                AUDIT_EVENTS.c.event_id,
+                AUDIT_EVENTS.c.at,
+                AUDIT_EVENTS.c.kind,
+                AUDIT_EVENTS.c.claim_ref,
+                AUDIT_EVENTS.c.trace_id,
+                AUDIT_EVENTS.c.prev_hash,
+                AUDIT_EVENTS.c.chain_hash,
+            )
+            .order_by(AUDIT_EVENTS.c.at.desc(), AUDIT_EVENTS.c.event_id.desc())
+            .limit(limit + 1)
+        )
+        .mappings()
+        .all()
+    )
+    return AuditChainPage(
+        rows=[
+            AuditChainRow(
+                event_id=str(row["event_id"]),
+                at=row["at"],
+                kind=str(row["kind"]),
+                prev_hash=str(row["prev_hash"]),
+                chain_hash=str(row["chain_hash"]),
+                claim_ref=row["claim_ref"],
+                trace_id=str(row["trace_id"]),
+            )
+            for row in rows
+        ],
+        total_events=total,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Small helpers
 # ---------------------------------------------------------------------------
@@ -602,3 +838,93 @@ def _short(detail: str, limit: int = 200) -> str:
     """Collapse a failure reason to one short, log-free line for the console."""
     collapsed = " ".join(detail.split())
     return collapsed if len(collapsed) <= limit else collapsed[: limit - 3] + "..."
+
+
+def _unavailable_trace(trace_id: str, detail: str) -> TraceDetailResponse:
+    """The fail-open trace shape: source marked unavailable, no spans."""
+    return TraceDetailResponse(
+        source=SourceStatus(state=SourceState.UNAVAILABLE, detail=detail),
+        trace_id=trace_id,
+        root_name="",
+        duration_ms=0.0,
+        spans=[],
+    )
+
+
+def _trace_nodes(detail: TraceDetail) -> tuple[str, float, list[TraceSpanNode]]:
+    """Give every span its depth and its offset from the trace start.
+
+    Spans are ordered by absolute start time and capped at
+    :data:`~claimguard.ops.sources.MAX_TRACE_SPANS`; ``trace_start`` is the
+    earliest. Depth is walked from the parent map with a visited set, so a
+    corrupt parent cycle cannot loop, and a span whose parent is not present is
+    treated as a root. Offsets are clamped at ``>= 0``.
+    """
+    ordered = sorted(detail.spans, key=lambda span: span.start_time)[:MAX_TRACE_SPANS]
+    trace_start = ordered[0].start_time
+    by_id = {span.span_id: span for span in ordered}
+
+    def depth_of(span: TraceSpan) -> int:
+        depth = 0
+        seen = {span.span_id}
+        current = span
+        while current.parent_span_id and current.parent_span_id in by_id:
+            parent = by_id[current.parent_span_id]
+            if parent.span_id in seen:
+                break
+            seen.add(parent.span_id)
+            depth += 1
+            current = parent
+        return depth
+
+    roots = [span for span in ordered if depth_of(span) == 0]
+    root = roots[0] if roots else ordered[0]
+    trace_end = max(span.start_time + timedelta(milliseconds=span.duration_ms) for span in ordered)
+    nodes = [
+        TraceSpanNode(
+            span_id=span.span_id,
+            parent_span_id=span.parent_span_id,
+            name=span.name,
+            service=span.service,
+            start_offset_ms=max(
+                0.0, round((span.start_time - trace_start).total_seconds() * 1000.0, 3)
+            ),
+            duration_ms=round(span.duration_ms, 3),
+            depth=depth_of(span),
+            status=span.status,
+        )
+        for span in ordered
+    ]
+    return root.name, round((trace_end - trace_start).total_seconds() * 1000.0, 3), nodes
+
+
+def _chain_links(page: AuditChainPage, limit: int) -> list[AuditChainLink]:
+    """Build the newest-first link list, numbering ``sequence`` down from the total.
+
+    ``linked`` compares a row's ``prev_hash`` with the next-older row's
+    ``chain_hash``; the true oldest event (no older row loaded) is linked exactly
+    when its ``prev_hash`` is ``"genesis"``. That is honest: a mid-chain row whose
+    predecessor was not loaded is verified against the extra row that was.
+    """
+    links: list[AuditChainLink] = []
+    for index, row in enumerate(page.rows[:limit]):
+        successor = page.rows[index + 1] if index + 1 < len(page.rows) else None
+        linked = (
+            row.prev_hash == successor.chain_hash
+            if successor is not None
+            else row.prev_hash == GENESIS
+        )
+        links.append(
+            AuditChainLink(
+                sequence=page.total_events - index,
+                event_id=row.event_id,
+                at=row.at,
+                kind=row.kind,
+                prev_hash=row.prev_hash,
+                chain_hash=row.chain_hash,
+                claim_ref=row.claim_ref,
+                trace_id=row.trace_id,
+                linked=linked,
+            )
+        )
+    return links
