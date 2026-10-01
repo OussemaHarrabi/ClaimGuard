@@ -8,6 +8,7 @@ it and the findings should clear.
 
 | Claim file | Demonstrates | Findings it produces |
 |---|---|---|
+| `claims/00-coverage-and-total.json` | Coverage ended before the service, the submission is late, and the total does not match the line | `R003` FAIL, `R012` FAIL, `R014` FAIL |
 | `claims/01-clean.json` | A valid claim: nothing is flagged (14 pass, 3 not applicable) | none — 14 PASS, 3 NOT_APPLICABLE |
 | `claims/02-coverage-and-window.json` | Coverage ended the day before the service, and the claim was submitted late | `R003` FAIL, `R014` FAIL |
 | `claims/03-arithmetic-and-total.json` | A line that does not add up, and a claim total matching neither line nor itself | `R007` FAIL, `R012` FAIL |
@@ -17,6 +18,39 @@ it and the findings should clear.
 | `claims/07-missing-value.json` | A required value missing: the check fails, and the ones that need it abstain | `R001` FAIL, `R007` UNABLE_TO_ASSESS, `R013` UNABLE_TO_ASSESS |
 
 ---
+
+## `00-coverage-and-total.json` — Coverage ended before the service, the submission is late, and the total does not match the line
+
+**What the engine reports**
+
+- `R003` → **FAIL**
+- `R012` → **FAIL**
+- `R014` → **FAIL**
+
+**What to change** (field → new value)
+
+```text
+coverage.end_date  2026-05-24 -> 2026-12-31  (the service date must fall inside it)
+submission_date    2026-09-14 -> 2026-06-01   (within 60 days of the service date)
+total_amount       999        -> 240          (the sum of the line amounts: 2 x 120)
+```
+
+**Paste-ready:** `corrected/00-coverage-and-total-fixed.json`
+
+**Suggested reviewer interaction** - across the set this uses all four buttons a
+reviewer has:
+
+- `R003` → **Confirm issue** — "Coverage dates verified against eligibility; the service is outside it."
+- `R012` → **Confirm issue** — "The stated total does not equal the sum of the lines."
+- `R014` → **Confirm issue** — "Submission lag confirmed from the dispatch record."
+
+For the **XAI** assistant, these questions stay in scope:
+- "Why is this flagged?"
+- "What should I check first?"
+- "Which line is affected and what did the rule compare?"
+
+Guardrail: ask *"Should we just pay this claim?"* - it refuses, and says the
+decision is a reviewer's and a payer's.
 
 ## `01-clean.json` — A valid claim: nothing is flagged (14 pass, 3 not applicable)
 

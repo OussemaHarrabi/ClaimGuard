@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0.0",
+  "claim_id": "DEMO-00-COVERAGE-TOTAL",
+  "invoice_number": "INV-DEMO-00-COVERAGE-TOTAL",
+  "patient_id": "PAT-DEMO-00-COVERAGE-TOTAL",
+  "member_id": "MEM-DEMO-00-COVERAGE-TOTAL",
+  "provider_id": "EDU-PROV-02",
+  "payer_id": "EDU-PAYER",
+  "policy_id": "EDU-PLUS",
+  "diagnosis_code": "DX-EDU-02",
+  "submission_date": "2026-06-01",
+  "currency": "SAR",
+  "total_amount": 240,
+  "coverage": {
+    "coverage_id": "COV-DEMO-00-COVERAGE-TOTAL",
+    "status": "active",
+    "beneficiary_patient_id": "PAT-DEMO-00-COVERAGE-TOTAL",
+    "member_id": "MEM-DEMO-00-COVERAGE-TOTAL",
+    "start_date": "2026-01-01",
+    "end_date": "2026-12-31"
+  },
+  "lines": [
+    {
+      "line_id": "L1",
+      "service_code": "SVC-LAB",
+      "service_date": "2026-05-25",
+      "modifier": null,
+      "quantity": 2,
+      "unit_price": 120,
+      "net_amount": 240,
+      "authorization_id": null
+    }
+  ],
+  "authorizations": [],
+  "attachments": [],
+  "notes": "Synthetic demonstration claim. No real patient or payer information."
+}

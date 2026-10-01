@@ -156,7 +156,7 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | — | [`docs/verification/ADVERSARIAL-CASES.md`](docs/verification/ADVERSARIAL-CASES.md) | 87 boundary cases against the rulebook's exact wording, and what they found | Reviewer |
 | — | [`docs/verification/DETECTION-METRICS.md`](docs/verification/DETECTION-METRICS.md) | **Macro F1 across rule categories, false-positive rate and latency** — the figures the challenge names, on all three splits (`scripts/detection_metrics.py` regenerates it) | Reviewer |
 | — | [`docs/verification/PHASE1-DEMO-RUNBOOK.md`](docs/verification/PHASE1-DEMO-RUNBOOK.md) | **The 15-minute demo**: segment by segment, what to say, the pitfalls and the points not to forget | **Whoever records the video** |
-| — | [`examples/demo/`](examples/demo/README.md) | Seven verified demonstration claims (one clean, six with 1-3 defects) with their corrected twins and the presenter's sheet | **Whoever records the video** |
+| — | [`examples/demo/`](examples/demo/README.md) | Eight verified demonstration claims (one clean, seven with 1-3 defects) with their corrected twins and the presenter's sheet. `00-coverage-and-total` carries all three defects in one file, so a single upload is enough to walk the whole flow | **Whoever records the video** |
 | — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | How we work: methodology, ground rules, milestones | **Whole team — start here** |
 | — | [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) | Current AI labs: reviewer questions, secured SLM comparison and document understanding | **B1, B2, B3** |
 | — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Earlier Sprint 1 lab plan, retained as background | Team |

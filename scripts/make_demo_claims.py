@@ -144,6 +144,43 @@ def _clean() -> Case:
     )
 
 
+def _coverage_and_total() -> Case:
+    """Three defects in one claim, so a single file carries a whole demonstration."""
+    claim = base_envelope("DEMO-00-COVERAGE-TOTAL")
+    claim["coverage"]["end_date"] = "2026-05-24"  # service is 2026-05-25
+    claim["submission_date"] = "2026-09-14"  # 112 days after the service date
+    claim["total_amount"] = 999  # the line is 2 x 120 = 240
+    fixed = copy.deepcopy(claim)
+    fixed["coverage"]["end_date"] = "2026-12-31"
+    fixed["submission_date"] = "2026-06-01"
+    fixed["total_amount"] = 240
+    return Case(
+        name="00-coverage-and-total",
+        claim_id=claim["claim_id"],
+        headline=(
+            "Coverage ended before the service, the submission is late, "
+            "and the total does not match the line"
+        ),
+        claim=claim,
+        expect={"R003": "FAIL", "R012": "FAIL", "R014": "FAIL"},
+        fixed=fixed,
+        fix_notes=[
+            "coverage.end_date  2026-05-24 -> 2026-12-31  (the service date must fall inside it)",
+            "submission_date    2026-09-14 -> 2026-06-01   (within 60 days of the service date)",
+            "total_amount       999        -> 240          (the sum of the line amounts: 2 x 120)",
+        ],
+        decisions=(
+            (
+                "R003",
+                "confirm_issue",
+                "Coverage dates verified against eligibility; the service is outside it.",
+            ),
+            ("R012", "confirm_issue", "The stated total does not equal the sum of the lines."),
+            ("R014", "confirm_issue", "Submission lag confirmed from the dispatch record."),
+        ),
+    )
+
+
 def _coverage_and_window() -> Case:
     claim = base_envelope("DEMO-02-COVERAGE")
     claim["coverage"]["end_date"] = "2026-04-29"  # service is 2026-04-30
@@ -413,6 +450,7 @@ def _missing_value() -> Case:
 def cases() -> list[Case]:
     """The demonstration set, in the order a presenter should upload them."""
     return [
+        _coverage_and_total(),
         _clean(),
         _coverage_and_window(),
         _arithmetic_and_total(),
@@ -519,8 +557,10 @@ def render_readme(verified: list[Case]) -> str:
     lines = [
         "# Demonstration kit",
         "",
-        "Seven synthetic claims: one clean, six with one to three deliberate defects each, no two",
-        "claims relying on the same rule. Every claim here was generated and then **checked by the",
+        "Eight synthetic claims: one clean, seven with one to three deliberate defects each.",
+        "`00-coverage-and-total` carries three at once - the coverage lapse and the late",
+        "submission of `02`, plus a total that does not match the line - so one upload can be",
+        "the whole demonstration. Every claim here was generated and then **checked by the",
         "engine** (`scripts/make_demo_claims.py`); if a claim stopped producing the findings it",
         "declares, that script fails rather than shipping a demo that narrates something else.",
         "",

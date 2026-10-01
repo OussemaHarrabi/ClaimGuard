@@ -143,6 +143,7 @@ The four numbers, then the honest limits:
 
 | Claim | Demonstrates |
 |---|---|
+| `00-coverage-and-total` | **The one-file walkthrough**: the coverage lapse, the late submission **and** a total that does not match the line — three findings, three edits, one claim |
 | `01-clean` | A valid claim is not flagged (14 PASS, 3 NOT_APPLICABLE) |
 | `02-coverage-and-window` | Coverage ended the day before the service, and a late submission |
 | `03-arithmetic-and-total` | A line that does not multiply out, and a total that matches nothing |
