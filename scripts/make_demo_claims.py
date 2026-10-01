@@ -138,7 +138,7 @@ def _clean() -> Case:
     return Case(
         name="01-clean",
         claim_id=claim["claim_id"],
-        headline="A valid claim: nothing is flagged (14 pass, 3 not applicable)",
+        headline="A valid claim: nothing is flagged (12 pass, 3 not applicable)",
         claim=claim,
         expect={},
     )
@@ -505,7 +505,7 @@ def render_corrections(verified: list[Case]) -> str:
     for case in verified:
         found = (
             ", ".join(f"`{rule}` {status}" for rule, status in case.expect.items())
-            or "none — 14 PASS, 3 NOT_APPLICABLE"
+            or "none — 12 PASS, 3 NOT_APPLICABLE"
         )
         lines.append(f"| `claims/{case.name}.json` | {case.headline} | {found} |")
 
@@ -556,6 +556,10 @@ def render_corrections(verified: list[Case]) -> str:
 def render_readme(verified: list[Case]) -> str:
     lines = [
         "# Demonstration kit",
+        "",
+        "[Back to the project README](../../README.md) · "
+        "[Phase 1 input samples](../phase1/README.md) · "
+        "[Demo runbook](../../docs/verification/PHASE1-DEMO-RUNBOOK.md)",
         "",
         "Eight synthetic claims: one clean, seven with one to three deliberate defects each.",
         "`00-coverage-and-total` carries three at once - the coverage lapse and the late",

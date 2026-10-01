@@ -9,7 +9,7 @@ it and the findings should clear.
 | Claim file | Demonstrates | Findings it produces |
 |---|---|---|
 | `claims/00-coverage-and-total.json` | Coverage ended before the service, the submission is late, and the total does not match the line | `R003` FAIL, `R012` FAIL, `R014` FAIL |
-| `claims/01-clean.json` | A valid claim: nothing is flagged (14 pass, 3 not applicable) | none — 14 PASS, 3 NOT_APPLICABLE |
+| `claims/01-clean.json` | A valid claim: nothing is flagged (12 pass, 3 not applicable) | none — 12 PASS, 3 NOT_APPLICABLE |
 | `claims/02-coverage-and-window.json` | Coverage ended the day before the service, and the claim was submitted late | `R003` FAIL, `R014` FAIL |
 | `claims/03-arithmetic-and-total.json` | A line that does not add up, and a claim total matching neither line nor itself | `R007` FAIL, `R012` FAIL |
 | `claims/04-duplicate-and-limit.json` | Two identical service lines, and a quantity above the fictional maximum | `R006` FAIL, `R013` FAIL |
@@ -52,7 +52,7 @@ For the **XAI** assistant, these questions stay in scope:
 Guardrail: ask *"Should we just pay this claim?"* - it refuses, and says the
 decision is a reviewer's and a payer's.
 
-## `01-clean.json` — A valid claim: nothing is flagged (14 pass, 3 not applicable)
+## `01-clean.json` — A valid claim: nothing is flagged (12 pass, 3 not applicable)
 
 **Nothing to fix.** This is the control: a complete, consistent claim that
 the engine does not flag. Use it to show that a valid claim passes, and that the

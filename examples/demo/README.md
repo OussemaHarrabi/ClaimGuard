@@ -1,5 +1,7 @@
 # Demonstration kit
 
+[Back to the project README](../../README.md) · [Phase 1 input samples](../phase1/README.md) · [Demo runbook](../../docs/verification/PHASE1-DEMO-RUNBOOK.md)
+
 Eight synthetic claims: one clean, seven with one to three deliberate defects each.
 `00-coverage-and-total` carries three at once - the coverage lapse and the late
 submission of `02`, plus a total that does not match the line - so one upload can be
@@ -23,7 +25,7 @@ reviewer note and the button to press — is [`CORRECTIONS.md`](CORRECTIONS.md).
 | Claim | Demonstrates |
 |---|---|
 | `claims/00-coverage-and-total.json` | Coverage ended before the service, the submission is late, and the total does not match the line |
-| `claims/01-clean.json` | A valid claim: nothing is flagged (14 pass, 3 not applicable) |
+| `claims/01-clean.json` | A valid claim: nothing is flagged (12 pass, 3 not applicable) |
 | `claims/02-coverage-and-window.json` | Coverage ended the day before the service, and the claim was submitted late |
 | `claims/03-arithmetic-and-total.json` | A line that does not add up, and a claim total matching neither line nor itself |
 | `claims/04-duplicate-and-limit.json` | Two identical service lines, and a quantity above the fictional maximum |

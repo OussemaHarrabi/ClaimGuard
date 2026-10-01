@@ -1,215 +1,338 @@
-# ClaimGuard AI — CSTAM-VELODOC
+# ClaimGuard
 
-Trustworthy Agentic Copilot for Healthcare Claim Pre-Validation.
+<p align="center">
+  <img src="reports/phase1-architecture/assets/claimguard-logo.svg" alt="ClaimGuard logo" width="420">
+</p>
 
-Challenge by **Velodoc (Amazit FZCO, Dubai)** for **CSTAM 3.0** — IEEE Computer Society ENET'Com, Hammamet, Tunisia.
+<p align="center"><strong>Evidence-first healthcare claim pre-validation, before payer submission.</strong></p>
 
-Mentors: Dr. Wael Hilali (CTO) · Bilel Said (CEO)
+<p align="center">
+  <code>Next.js 16</code> · <code>FastAPI</code> · <code>PostgreSQL 16</code> · <code>Python 3.11–3.13</code> · <code>15 deterministic rules</code>
+</p>
 
----
+ClaimGuard helps a clinic's revenue-cycle team find administrative problems before a claim is submitted. It accepts synthetic claim packages, normalizes them, executes a versioned fictional payer-rule catalogue, connects every finding to source evidence, recommends a correction, and keeps the reviewer in control.
 
-## Dates — non-negotiable
+> **Boundary:** ClaimGuard is a pre-submission review system, not a payer and not an adjudication or clinical-decision system. A `PASS` means that the configured checks passed. It never means payer approval. This repository uses synthetic data only.
 
-| Milestone | Date |
-|---|---|
-| **Registration closes** | **5 Sept 2026** |
-| Phase 1 — MVP (50 pts) | **1 Oct 2026** |
-| Phase 2 — Integration & Testing (30 pts) | **20 Oct 2026** |
-| Phase 3 — UI/UX & Docs (10 pts) — **selection gate** | **1 Nov 2026** |
-| Finals — Pitching (10 pts) | **14–15 Nov 2026** |
+Built by **Team Claimix** for the CSTAM 3.0 Velodoc challenge: Oussema Harrabi, Wassim Hajji, Eya Ayedi, Ghassen Benkaji, and Maram Kouki.
 
-Late submission: **−5 pts**. Pitch: max 2 members, English, 12 min (5 + 2 demo + 5 Q&A).
-Hard feature freeze for the Phase-1 gate: **27 Sep 2026**.
+## Start here
 
----
+- [Run the complete product](#run-the-complete-product)
+- [Rehearse all Phase 1 requirements](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md)
+- [Read the technical report](output/pdf/ClaimGuard_Technical_Report.pdf)
+- [Explore the architecture and data flow](docs/11-Architecture-and-Dataflow.md)
+- [Understand the clinic platform](docs/21-Clinic-Platform-Foundation.md)
+- [Browse all project documentation](docs/README.md)
+- [Find a subsystem](#repository-guide)
 
-## The one-sentence idea
+## What the product does
 
-ClaimGuard sits **between claim creation and payer submission** — it catches the administrative
-problems the payer would catch, quotes the exact rule and evidence, recommends the fix, and routes
-uncertain cases to a human. **Review, don't adjudicate.**
-
----
-
-## Quickstart
-
-For the current submission decision and remaining deliverables, see the
-[Phase-1 readiness assessment](docs/verification/PHASE-1-SUBMISSION-READINESS.md).
-To reproduce all three synthetic intake formats, a failed rule, correction and
-audit replay, follow the [hands-on Phase-1 rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md).
-The frontend opens on a public product landing page at `/`; use **Open workspace**
-or `/workspace/home` to sign in and reach the appropriate clinic role's home.
-
-```bash
-uv sync --all-extras                                   # install (Python 3.11–3.13)
-docker compose up -d db && uv run alembic upgrade head # the review schema
-uv run claimguard status                               # one screen: is this checkout ready?
+```text
+JSON envelope / CSV package / FHIR R4 + sidecar
+                         │
+                         ▼
+             detect → validate → normalize
+                         │
+                         ▼
+          15 deterministic, versioned checks
+                         │
+              ┌──────────┴──────────┐
+              ▼                     ▼
+      structured findings     tamper-evident audit
+              │
+              ▼
+ evidence + correction guidance + bounded AI explanation
+              │
+              ▼
+       human decision → correction → immutable recheck
 ```
 
-Two ways to point the engine at a rule catalogue: the mentor pack on disk
-(`CLAIMGUARD_PACK_ROOT`, gitignored reference material) or the committed copy at
-`tests/edu/fixtures/pack_reference/`.
+The application is a modular monolith. A Next.js workspace calls one FastAPI contract. The API owns identity, tenant and role checks, ingestion, deterministic validation, review workflow, bounded assistance, and persistence in PostgreSQL.
 
-```bash
-uv run claimguard evaluate --split all                 # engine + the mentor's own scorer
-uv run claimguard report --split development \
-    --output docs/verification/EDU-EVALUATION-REPORT.md
-uv run python scripts/sample_run.py                    # end-to-end demo transcript, no network
-uv run pytest tests/ -q                                # full Python verification suite
-```
+<p align="center">
+  <img src="reports/phase1-architecture/report/assets/claimguard-master-architecture.png" alt="ClaimGuard evidence-first pre-validation architecture" width="100%">
+</p>
 
-### Running the product (the reviewer workspace)
+The diagram's green path is authoritative: normalized input, deterministic checks, structured results, and human review. The purple AI lane may improve wording only. It cannot modify rule results, evidence, severity, routing, or reviewer decisions. See the [architecture README](reports/phase1-architecture/README.md) for the diagram sources and report artifacts.
 
-The interface signs reviewers in, so **two more steps are required before the UI is
-usable**: a session key, and one clinic account. Both are local secrets and neither is
-stored in this repository.
+## Phase 1 requirement coverage
 
-```bash
-# 1. A session signing key. Any random value of at least 32 characters.
-#    Without it every route except /v1/health and the sign-in endpoint answers 503.
-export CLAIMGUARD_SESSION_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
-
-# 2. The first clinic administrator. Prompts for a password (12+ characters);
-#    no default account ships. Roles beyond this one are created in the UI.
-uv run python -m claimguard.clinic.provision \
-    --tenant-id clinic-demo --clinic-name "Demo Clinic" --email admin@example.test
-
-# 3. Start the API, then the interface (two terminals).
-uv run claimguard serve                                # API at /v1, docs at /docs
-cd frontend && npm ci && npm run dev                   # reviewer workspace on :3000
-#   The cockpit proxies /v1 to CLAIMGUARD_API_ORIGIN (default http://127.0.0.1:8000).
-#   Set it at runtime - `CLAIMGUARD_API_ORIGIN=http://127.0.0.1:8030 npm run dev` -
-#   if your API is on another port. No rebuild is needed, in any mode.
-```
-
-Open <http://127.0.0.1:3000>, choose **Open workspace**, and sign in with the account from
-step 2. `docker compose up -d --build` runs the same stack in containers — the web
-service is on `:3001` and reaches the API over the compose network. The step-by-step
-walkthrough, including the three intake formats a claim can arrive in and how to check
-the audit trail, is [the Phase-1 rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md).
-
-**The AI assistant is off by default.** With no model configured the assistant still
-answers every question from the deterministic explanation layer and says so on each
-answer; set `CLAIMGUARD_AI_MODE` (see `.env.example`) to enable a model. A model never
-changes a status, a severity or an evidence pointer — it drafts wording that the same
-verifier the graded explanation layer uses either accepts or refuses.
-
----
-
-## What is built
-
-| Piece | Where | State |
+| Scored requirement | Implementation | How to verify |
 |---|---|---|
-| Deterministic rule engine — all 15 pack rules `R001`–`R015` | `claimguard/edu/` | **Verified**: the mentor's own strict scorer accepts our output with **status accuracy 1.0000**, issue F1 1.0000, **0 false alarms, 0 missed issues**, 400/400 claims fully correct on development; same on validation and stress (9000/9000 public labels) |
-| Independent conformance harness (second opinion, no pack import) | `scripts/edu_conformance.py` | **CONFORMANT** on all three splits, 0 problems |
-| CSV intake + educational FHIR projection | `claimguard/edu/intake/` | CSV rebuild is **byte-equal** to the pack's JSONL; FHIR recovers 30 of 41 leaf paths and reports the other 11 as unsupported rather than inventing them |
-| Reviewer workflow (runs, results, queue, decisions, corrections) | `claimguard/review/` + migration `0002` | Verified end to end: submit → 15 results; malformed decisions 422; correction → new version, original untouched |
-| Reviewer interface | `frontend/` (Next.js) | Evidence-first three-column cockpit; queue, findings, AI provenance and audit visible together; reasoned decisions; immutable correction→recheck. Legacy `/review` remains a fallback. |
-| Bounded explanation layer (LLM may rewrite, never decide) | `claimguard/edu/explain/` | Adversarial outputs rejected; a model failure changes **zero** statuses (2250 enrichments tested) |
-| JEV advisory sidecar | `claimguard/edu/judge/` + `claimguard judge` | Typed grounding/agreement/attention second opinion; offline-safe without credentials; cannot enter the graded 15-key record. Live quality is not claimed until access and evaluation. |
-| Append-only audit ledger (SHA-256 hash chain) | `claimguard/audit/` + migration `0001` | Trigger/Python digest parity proven against live Postgres |
-| Edge-case suite for the rulebook edges the public labels cannot reach | `tests/edu_edges/` | 38 tests, 14 edges, mutation probes proving each test discriminates |
-| Operator console | `claimguard/cli/` | `status`, `serve`, `evaluate`, `report` — each a real gate with meaningful exit codes |
+| **Data ingestion and normalization** | ClaimGuard envelope JSON, split relational CSV, and FHIR R4 Bundle with a verified ClaimGuard sidecar are detected, transport-validated, and projected into one canonical 17-key scoring envelope. Invalid intake is quarantined instead of silently evaluated. | Upload the committed samples through **Document Intake**, or follow the [hands-on rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md). |
+| **Deterministic and AI rule engine** | Rules `R001`–`R015` always produce one of `PASS`, `FAIL`, `UNABLE_TO_ASSESS`, `NOT_APPLICABLE`, or `NOT_IMPLEMENTED`. The deterministic engine is authoritative. AI is a post-processing explanation layer only. | Run `uv run claimguard evaluate --split all` and `uv run pytest -m "not llm and not e2e"`. |
+| **Explainability and structured output** | Every check returns Claim ID, Rule ID and version, exact RFC 6901 evidence paths and original values, severity, explicit confidence semantics, and corrective action. Deterministic confidence is `null` with `confidence_kind: not_probabilistic`, never a fabricated probability. | Inspect `GET /v1/runs/{run_id}/results`, the reviewer evidence desk, or the generated [evaluation report](docs/verification/EDU-EVALUATION-REPORT.md). |
+| **Audit log engine** | Run, result, explanation, decision, correction, and assistant events are persisted. Audit records use SHA-256 hash chaining and protected append-only database tables. Corrections create a new run linked through `supersedes_run_id`. | Open **Audit** as a lead/admin, **Audit Integrity** as a technical manager, and run `uv run python scripts/audit_replay.py --run-id RUN_ID`. |
 
-**For scale:** the starter baseline the mentors shipped scores **0.43 F1** and 20% status accuracy,
-because it implements three of the fifteen rules.
+On the committed synthetic benchmark and public instructional labels, the engine records status accuracy `1.0000`, issue F1 `1.0000`, zero false alarms, and zero missed issues across 400 development claims and 9,000 public labels over development, validation, and stress splits. These numbers describe conformance to a fictional teaching oracle, not real-world payer performance. Reproduce them with the commands in [EDU-PACK-CONFORMANCE.md](docs/verification/EDU-PACK-CONFORMANCE.md).
 
-**Verified limits, stated up front:** the data is synthetic and the rulebook fictional; the labels
-are an instructional oracle, not clinical or reimbursement ground truth; several rule edges cannot
-be discriminated by the public labels at all (the mentor's 200 held-out claims are the real test);
-a `PASS` is never payer approval; and CI green does **not** prove mentor-scorer conformance — that is
-why `make edu-conformance` is a mandatory pre-submission step.
+## Run the complete product
 
----
+### Prerequisites
 
-## Documentation
+Install:
 
-| # | Document | What it's for | Who reads it first |
-|---|---|---|---|
-| 01 | [`docs/01-DOMAIN-Gulf-Claims-101.md`](docs/01-DOMAIN-Gulf-Claims-101.md) | Gulf/Dubai claims metier from zero | **The 3 beginners — start here** |
-| 02 | [`docs/02-PROBLEMATIC-Impact.md`](docs/02-PROBLEMATIC-Impact.md) | The problem + all sourced statistics | Everyone |
-| 02B | [`docs/02B-PITCH-Problem-Narrative.md`](docs/02B-PITCH-Problem-Narrative.md) | Pitch-ready version of 02 | Deck authors |
-| 03 | [`docs/03-Challenge-Decode-Requirements.md`](docs/03-Challenge-Decode-Requirements.md) | Challenge decode, scoring, traceability matrix | Head of project |
-| 04 | [`docs/04-Architecture.md`](docs/04-Architecture.md) | Architecture v1, ADRs, tech choices | Head + Senior dev |
-| 05 | [`docs/05-System-Design-Data-Model.md`](docs/05-System-Design-Data-Model.md) | Data model, DDL, rule syntax, benchmark design | Implementers |
-| 06 | [`docs/06-Cahier-Des-Charges.md`](docs/06-Cahier-Des-Charges.md) | FR-001–105, NFR-001–020, UC-01–10 | Head + reviewers |
-| 09 | [`docs/09-ARCHITECTURE-V2-Decisions.md`](docs/09-ARCHITECTURE-V2-Decisions.md) | Architecture v2 decisions, cut list, sprint plan | Head + Senior dev |
-| 10 | [`docs/10-ADR-Starter-Pack-Authority.md`](docs/10-ADR-Starter-Pack-Authority.md) | **Which contract is graded**, and what it supersedes | **Whole team** |
-| 11 | [`docs/11-Architecture-and-Dataflow.md`](docs/11-Architecture-and-Dataflow.md) | The pipeline as built, with trust boundaries and tool permissions | Reviewers |
-| 12 | [`docs/12-Privacy-and-Security-Note.md`](docs/12-Privacy-and-Security-Note.md) | Safety posture, the untrusted-text rule, and what is **not** built | Reviewers |
-| 13 | [`docs/13-Technical-Report.md`](docs/13-Technical-Report.md) | Implementation, decisions, tests, limitations | Jury |
-| 14 | [`docs/14-Contribution-Log.md`](docs/14-Contribution-Log.md) | Roles and an honest statement of AI-tool use | Jury |
-| 15 | [`docs/15-Demo-Script.md`](docs/15-Demo-Script.md) | The 7-minute demo, beat by beat, with a fallback | Presenters |
-| 17 | [`docs/17-JEV-Judge-Layer.md`](docs/17-JEV-Judge-Layer.md) | Typed probabilistic second opinion, strict sidecar boundary and offline-safe operation | AI/ML + jury |
-| 18 | [`docs/18-SLM-Benchmark-Methodology.md`](docs/18-SLM-Benchmark-Methodology.md) | Colab protocol, preserved Gemma 4/Phi-4 Mini/Qwen3 run and secured-contract v2 rerun plan; no checkpoint is deployable yet | AI/ML + jury |
-| 19 | [`docs/19-Assistance-Security-Envelope.md`](docs/19-Assistance-Security-Envelope.md) | AegisGraph-inspired SLM authority graph, correction contract, verifier decisions and receipts | Security + jury |
-| 20 | [`docs/20-Implementation-Completion-Report.md`](docs/20-Implementation-Completion-Report.md) | Complete release inventory, architecture, verification, limitations, remaining work and operational handoff | **Whole team + jury** |
-| 21 | [`docs/21-Clinic-Platform-Foundation.md`](docs/21-Clinic-Platform-Foundation.md) | The clinic platform: tenants, sessions, four roles, workspace surfaces | Reviewer |
-| 22 | [`docs/22-AI-Assistant-Design.md`](docs/22-AI-Assistant-Design.md) | **The interactive assistant**: the graph, the data flow, the data model, what may leave the machine, and why the autonomy is bounded | Reviewer + jury |
-| — | [`docs/verification/EDU-EVALUATION-REPORT.md`](docs/verification/EDU-EVALUATION-REPORT.md) | Generated evaluation report (single source for every metric) | Jury |
-| — | [`docs/verification/EDU-PACK-CONFORMANCE.md`](docs/verification/EDU-PACK-CONFORMANCE.md) | How conformance is verified: oracle + independent second opinion | Reviewer |
-| — | [`docs/verification/REPRODUCIBLE-SAMPLE-RUN.md`](docs/verification/REPRODUCIBLE-SAMPLE-RUN.md) | Captured end-to-end transcript | Reviewer |
-| — | [`docs/verification/PHASE-1-GAP-ANALYSIS.md`](docs/verification/PHASE-1-GAP-ANALYSIS.md) | **What Phase 1 requires vs what we shipped**, gap by gap, with the remaining gaps and the plan to close them | Head of project |
-| — | [`docs/verification/AUDIT-REPLAY.md`](docs/verification/AUDIT-REPLAY.md) | A stored run reconstructed from the ledger, with the chain verified | Auditor |
-| — | [`docs/verification/FHIR-MAPPING-EXAMPLE.md`](docs/verification/FHIR-MAPPING-EXAMPLE.md) | One real bundle projected, and what FHIR cannot carry | Reviewer |
-| — | [`docs/verification/AI-ABLATION.md`](docs/verification/AI-ABLATION.md) | What the assistance layer contributes, and what it costs when the model fails | Reviewer |
-| — | [`docs/verification/ADVERSARIAL-CASES.md`](docs/verification/ADVERSARIAL-CASES.md) | 87 boundary cases against the rulebook's exact wording, and what they found | Reviewer |
-| — | [`docs/verification/DETECTION-METRICS.md`](docs/verification/DETECTION-METRICS.md) | **Macro F1 across rule categories, false-positive rate and latency** — the figures the challenge names, on all three splits (`scripts/detection_metrics.py` regenerates it) | Reviewer |
-| — | [`docs/verification/PHASE1-DEMO-RUNBOOK.md`](docs/verification/PHASE1-DEMO-RUNBOOK.md) | **The 15-minute demo**: segment by segment, what to say, the pitfalls and the points not to forget | **Whoever records the video** |
-| — | [`examples/demo/`](examples/demo/README.md) | Eight verified demonstration claims (one clean, seven with 1-3 defects) with their corrected twins and the presenter's sheet. `00-coverage-and-total` carries all three defects in one file, so a single upload is enough to walk the whole flow | **Whoever records the video** |
-| — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | How we work: methodology, ground rules, milestones | **Whole team — start here** |
-| — | [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) | Current AI labs: reviewer questions, secured SLM comparison and document understanding | **B1, B2, B3** |
-| — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Earlier Sprint 1 lab plan, retained as background | Team |
+- Git
+- Docker Desktop with Docker Compose
+- [uv](https://docs.astral.sh/uv/) and Python 3.11, 3.12, or 3.13
+- Node.js 22 and npm when running the frontend outside Docker
+- Make only if you want the convenience targets. On Windows, run Make from Git Bash or WSL.
 
-> Documents 07 and 08 (the original per-task plan and per-person sprint backlog) were retired when
-> the mentor's labelled dataset arrived and are kept locally, not in the repository. Their successors
-> are `docs/10` (the contract decision) and the current team lab brief above.
+No model key is required. ClaimGuard fails closed to deterministic explanations when the optional model layer is disabled or unavailable.
 
----
+### Option A: full Docker stack
 
-## Core design decisions
+This is the simplest way to run the product as another contributor.
 
-1. **Deterministic core, AI at the edges.** Fifteen named, versioned rules decide every outcome. The
-   explanation layer runs *after* the rules and may only rewrite prose — it cannot change a status, a
-   severity, or a routing decision, and an output asserting a decision is rejected.
-2. **A result for every check, not only for failures.** Each claim produces exactly fifteen records —
-   `PASS`, `FAIL`, `UNABLE_TO_ASSESS`, `NOT_APPLICABLE` or `NOT_IMPLEMENTED` — because "I could not
-   tell" and "the rule does not apply" are different facts, and neither is a pass.
-3. **Evidence-first.** Every result carries `{path, value}` pointers into the *original* claim, and
-   the mentor's scorer rejects the whole run if a value does not re-resolve. Bad input becomes a
-   structured ingestion error; it is never a crash and never a silent pass.
-4. **Confidence is not invented.** Deterministic checks report `confidence: null` with
-   `confidence_kind: not_probabilistic`. Calibration is Phase 2 work and is not claimed here.
-5. **Audit from birth.** Append-only Postgres with a SHA-256 hash chain, plus run-level metadata
-   (input hash, rule/model/prompt versions). Tamper-*evident*, and we say so rather than claiming
-   immutability we have not built.
-6. **Review, don't adjudicate.** Never approves, denies, diagnoses, or advises treatment.
-   Crossing the clinical boundary is a disqualifier, not a point loss.
+```powershell
+Copy-Item .env.example .env
+```
 
----
+Generate a session signing key of at least 32 characters and put it in `.env` as `CLAIMGUARD_SESSION_KEY`. One PowerShell option is:
 
-## Team
+```powershell
+uv run python -c "import secrets; print(secrets.token_urlsafe(48))"
+```
 
-Roles and the current per-person work are in
-[`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) and
-[`TEAM-ROADMAP.md`](TEAM-ROADMAP.md). The earlier plan remains in
-[`TEAM-TASKS.md`](TEAM-TASKS.md).
+Then build the stack and provision the first clinic administrator:
 
-| Role | Focus |
+```powershell
+docker compose up -d --build
+docker compose exec api python -m claimguard.clinic.provision `
+  --tenant-id clinic-demo `
+  --clinic-name "Demo Clinic" `
+  --email admin@example.test
+```
+
+The provisioner prompts for a password of at least 12 characters. No default account or password is committed.
+
+Open:
+
+| Service | Address | Purpose |
+|---|---|---|
+| Product and role workspaces | <http://127.0.0.1:3001> | Landing page, sign-in, intake, review, administration |
+| FastAPI OpenAPI | <http://127.0.0.1:8000/docs> | Live request/response contract |
+| API readiness | <http://127.0.0.1:8000/v1/health> | Schema and rule-catalogue health |
+| Grafana LGTM container | <http://127.0.0.1:3000> | Observability infrastructure only; application exporters are not wired yet |
+
+Check or stop the stack with:
+
+```powershell
+docker compose ps
+docker compose logs api web
+docker compose down
+```
+
+`docker compose down` keeps the named PostgreSQL volume. Use volume deletion only when you deliberately want to erase local data.
+
+### Option B: fast local development loop
+
+Start PostgreSQL in Docker and run the API and frontend on the host:
+
+```powershell
+Copy-Item .env.example .env
+uv sync --all-extras
+docker compose up -d db
+uv run alembic upgrade head
+uv run claimguard status
+uv run python -m claimguard.clinic.provision `
+  --tenant-id clinic-demo `
+  --clinic-name "Demo Clinic" `
+  --email admin@example.test
+```
+
+Set `CLAIMGUARD_SESSION_KEY` in `.env`, then use two terminals:
+
+```powershell
+# Terminal 1
+uv run claimguard serve --reload
+```
+
+```powershell
+# Terminal 2
+Set-Location frontend
+npm ci
+npm run dev
+```
+
+Open <http://127.0.0.1:3000>. The Next.js server proxies `/v1/*` to `CLAIMGUARD_API_ORIGIN`, which defaults to `http://127.0.0.1:8000`.
+
+For Bash, the equivalent first step is `cp .env.example .env`; export the session key in the shell or add it to `.env`.
+
+### First useful workflow
+
+1. Sign in as the provisioned clinic admin.
+2. Create RCM lead and reviewer accounts under **Team & Access** and place them in departments if needed.
+3. Open **Document Intake** and submit one of the samples in [`examples/phase1/`](examples/phase1/README.md).
+4. Submit the accepted draft for deterministic validation.
+5. Assign the claim to a reviewer.
+6. Sign in as that reviewer and open **My Queue**.
+7. Read each finding beside its evidence and suggested correction. Record a decision or request missing information.
+8. Edit the permitted claim fields and select **Recheck claim**. The corrected envelope becomes a new immutable run; the original remains available.
+9. Inspect clinic events under **Activity** or **Audit**, and verify the chain under **Audit Integrity**.
+
+The complete click-by-click path for JSON, CSV, FHIR, correction, recheck, and audit replay is in the [Phase 1 hands-on rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md).
+
+## Inputs and normalization
+
+ClaimGuard accepts three Phase 1 source shapes:
+
+| Format | Files | Notes |
+|---|---|---|
+| ClaimGuard envelope | One `.json` file | Preferred structured format; directly validates the 17-key contract. |
+| Relational CSV | Exactly five CSV files | `claims.csv`, `coverage.csv`, `lines.csv`, `authorizations.csv`, and `attachments.csv`. |
+| FHIR R4 | Bundle JSON plus ClaimGuard sidecar | FHIR supplies clinical and encounter structure; the verified sidecar supplies scoring fields that FHIR does not represent reliably. |
+
+The current pilot API caps intake source content at 64 KiB. Source files are untrusted data, never instructions to the assistant. Accepted input is normalized before rules run; rejected or quarantined input never reaches the rule engine.
+
+<p align="center">
+  <img src="reports/phase1-architecture/report/assets/claim-data-flow.png" alt="ClaimGuard claim data flow" width="100%">
+</p>
+
+## Role workspaces and multitenancy
+
+One clinic is one tenant. Users receive a clinic membership and one role. Every protected request derives `user_id`, `tenant_id`, and role from the signed session rather than trusting client-supplied identity fields.
+
+| Role | Responsibilities | Main workspace pages |
+|---|---|---|
+| **RCM reviewer** | Work assigned findings, request information, record decisions, correct and recheck claims | My Queue, Document Intake, Requests, Activity |
+| **RCM lead** | Reviewer work plus workload assignment, escalation handling, quality visibility | Team Queue, Assignments, Escalations, Review Quality, My Queue, Document Intake, Requests, Activity |
+| **Clinic admin** | Manage the clinic, departments, users, routing, and clinic-wide reporting | Overview, All Claims, Assignments, Departments, Team & Access, Analytics, Audit |
+| **Technical manager** | Monitor operational metadata without reading claim content | Operations, Intake Jobs, Model & Rule Versions, Redacted Logs, Audit Integrity, Configuration |
+
+Authorization is enforced in the API, not only by hidden navigation. Current tenant isolation uses service-layer query scoping, tenant-qualified foreign keys, and role gates. PostgreSQL row-level security and a non-owner runtime database role are planned hardening, not implemented claims.
+
+Authentication uses a signed, `HttpOnly`, `SameSite=Strict` session cookie with an eight-hour lifetime. `/v1/health` and `/v1/auth/login` are public; all other `/v1` endpoints require a valid session. Read [`claimguard/clinic/README.md`](claimguard/clinic/README.md) for the permission matrix and provisioning model.
+
+## Backend and API contract
+
+FastAPI is the single application contract. The frontend's `/v1/[...path]` route is a same-origin proxy, not a second API. Use the live OpenAPI page at `/docs` as the exact request/response reference.
+
+| Area | Endpoints |
 |---|---|
-| **HeadOfProject** | Architecture, the graded contract, review of all contributed work |
-| **SeniorDev** | Engine, audit ledger, reviewer API and interface, CI |
-| **B1 — Chatbot** | AI/language: explanation quality measurement |
-| **B2 — Deep Learning** | Statistics: uncertainty, intervals, abstention analysis |
-| **B3 — Computer Vision** | Documents and data integrity: attachments, FHIR gap verification |
+| Health and identity | `GET /v1/health`, `POST /v1/auth/login`, `GET /v1/auth/me`, `POST /v1/auth/logout` |
+| Claims and runs | `POST /v1/claims`, `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/claim`, `GET /v1/runs/{run_id}/results`, `POST /v1/claims/{claim_id}/recheck` |
+| Review workflow | `GET /v1/queue`, `GET /v1/my-queue`, `GET|POST /v1/runs/{run_id}/decisions`, `GET|POST /v1/assignments` |
+| Clinic directory | `GET|POST /v1/team`, `POST /v1/team/{user_id}/status`, `GET|POST /v1/departments`, `POST /v1/departments/{department_id}/update` |
+| Requests and escalations | `GET|POST /v1/requests`, `POST /v1/requests/{request_id}/resolve`, `GET|POST /v1/escalations`, `POST /v1/escalations/{escalation_id}/resolve` |
+| Intake | `GET|POST /v1/intake-jobs`, `GET /v1/intake-jobs/{job_id}`, `POST /v1/intake-jobs/{job_id}/submit`, `GET /v1/intake-jobs/operations` |
+| Read models | `GET /v1/activity`, `/overview`, `/analytics`, `/review-quality`, `/audit`, `/versions`, `/redacted-logs`, `/audit-integrity`, `/operations` |
+| Configuration | `GET|POST /v1/configuration` |
+| Assistance | `GET /v1/ai/status`, `POST /v1/runs/{run_id}/findings/{rule_id}/explain`, `POST /v1/threads/{thread_id}/messages`, `GET /v1/threads/{thread_id}` |
 
----
+Contract rules:
 
-## House rules
+- A successful validation run contains exactly 15 rule-result records.
+- Evidence is `{path, value}` and the path must resolve against the immutable submitted claim.
+- Deterministic status, severity, evidence, and confidence semantics cannot be changed by an AI provider.
+- Malformed requests return explicit 4xx responses; missing infrastructure is exposed through readiness instead of hidden by mocks.
+- Rechecks create a new version and link to the prior run. They do not update the original.
+- Tenant and role scope come from the authenticated principal.
 
-- **Every statistic carries (source, year, URL) — or it does not go on a slide.**
-- Banned folklore: `$262B denied`, `65% never resubmitted`, `30% waste`, `MISBAR`. See `02 §3.7`.
-- Synthetic data only. No real member records, ever.
-- No merge to `main` without green CI and an approving review.
-- No number in a report that was not produced by a command we can re-run.
-- The demo must never be flaky, and a `PASS` is never described as approval.
+See [`claimguard/review/README.md`](claimguard/review/README.md) for workflow semantics and [`claimguard/edu/README.md`](claimguard/edu/README.md) for the rule-result contract.
+
+## Explanation, SLM, and JEV layers
+
+The explanation path is deliberately bounded:
+
+1. A scope guard verifies the caller may read the finding.
+2. The system gathers a read-only context projection from deterministic records.
+3. The optional model drafts plain-language wording.
+4. A verifier checks factual grounding and prohibited authority claims.
+5. Unsafe or unverifiable text is repaired once or replaced by the deterministic fallback.
+6. The answer and provenance are recorded.
+
+`CLAIMGUARD_AI_MODE=off` is the safe default. `groq` and `openai_compatible` providers can be configured through `.env.example`; credentials are never required for core validation. The benchmark notebook compares candidate small language models, but the repository does not claim that a checkpoint is production-ready or fine-tuned. Model output remains advisory even after a future fine-tuning cycle.
+
+JEV is a separate typed advisory sidecar for grounding, agreement, and attention signals. It cannot enter or modify the graded 15-key result record. Without service credentials it remains offline-safe. Details: [assistant architecture](docs/22-AI-Assistant-Design.md), [security envelope](docs/19-Assistance-Security-Envelope.md), [SLM methodology](docs/18-SLM-Benchmark-Methodology.md), and [JEV boundary](docs/17-JEV-Judge-Layer.md).
+
+## Persistence and audit
+
+PostgreSQL migrations under `claimguard/db/migrations/versions/` define:
+
+- claim packages, canonical claims, findings, and evidence;
+- versioned rule runs, results, decisions, and explanation provenance;
+- clinics, users, memberships, departments, assignments, requests, and escalations;
+- intake jobs and tenant configuration;
+- append-only assistant threads and turns;
+- audit events chained with `prev_hash` and `chain_hash`.
+
+Database triggers refuse updates or deletes on protected history tables. The ledger is **tamper-evident and append-only inside the application database**, not magically immutable against a database superuser or infrastructure compromise. See [`claimguard/db/README.md`](claimguard/db/README.md) and [`claimguard/audit/README.md`](claimguard/audit/README.md).
+
+## Developer commands
+
+```powershell
+# Python quality gates
+uv run ruff check .
+uv run ruff format --check .
+uv run pyright
+uv run pytest -m "not llm and not e2e"
+
+# Phase 1 engine and evidence
+uv run claimguard evaluate --split all
+uv run claimguard report --split development --output docs/verification/EDU-EVALUATION-REPORT.md
+uv run python scripts/adversarial_cases.py
+uv run python scripts/sample_run.py
+
+# Frontend gates
+Set-Location frontend
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run build
+```
+
+`make lint`, `make typecheck`, `make test`, `make conformance`, `make report`, `make up`, and `make down` provide equivalent convenience targets. `make test-all` includes opt-in `llm` and `e2e` tests and therefore needs their external dependencies.
+
+CI repeats Python lint, formatting, strict type checking, tests on Python 3.11 and 3.13 with PostgreSQL, frontend lint/typecheck/test/build on Node 22, locked dependency auditing, and secret scanning.
+
+## Repository guide
+
+| Path | Responsibility | Local guide |
+|---|---|---|
+| `frontend/` | Next.js landing page and role workspaces | [Frontend README](frontend/README.md) |
+| `claimguard/edu/` | Canonical Phase 1 engine, rule catalogue execution, evidence, explanation | [Engine README](claimguard/edu/README.md) |
+| `claimguard/review/` | FastAPI routes, workflow orchestration, persistence adapters | [Review API README](claimguard/review/README.md) |
+| `claimguard/clinic/` | Tenant directory, sessions, RBAC, assignments, intake workspaces | [Clinic README](claimguard/clinic/README.md) |
+| `claimguard/ai/` | Bounded interactive-assistant graph and receipts | [AI README](claimguard/ai/README.md) |
+| `claimguard/audit/` | Hash-chain primitives | [Audit README](claimguard/audit/README.md) |
+| `claimguard/db/` | Alembic environment and SQL migrations | [Database README](claimguard/db/README.md) |
+| `examples/phase1/` | Reproducible JSON, CSV, and FHIR inputs | [Examples README](examples/phase1/README.md) |
+| `scripts/` | Evidence-generation and verification entry points | [Scripts README](scripts/README.md) |
+| `tests/` | Unit, integration, contract, security, and UI tests | [Tests README](tests/README.md) |
+| `reports/phase1-architecture/` | LaTeX report, visual sources, exports, logo | [Report README](reports/phase1-architecture/README.md) |
+| `notebooks/` | Colab SLM comparison experiment | [Notebook README](notebooks/README.md) |
+| `artifacts/` | Reproducible generated evidence and diagram exports | [Artifacts README](artifacts/README.md) |
+| `docs/` | Domain, architecture, decisions, verification, handoff | [Documentation index](docs/README.md) |
+
+## What is next
+
+There is substantial work after the Phase 1 proof. The current priorities are:
+
+1. **Submission proof and usability:** rehearse all three intake formats, the correction/recheck path, audit replay, architecture report, and a concise video with no hidden manual fixes.
+2. **Tenant hardening:** PostgreSQL row-level security, a non-owner runtime role, session rotation/revocation, password recovery, stronger credential policy, and explicit cross-tenant security tests.
+3. **Document understanding:** safe PDF/image upload, malware and type checks, OCR/layout extraction, field-level provenance, confidence/abstention, and mandatory human confirmation before claim creation.
+4. **SLM evidence:** enlarge and freeze a task-specific evaluation set, compare multiple quantized candidates in Colab, measure factuality and abstention, then consider parameter-efficient fine-tuning only if retrieval and prompting do not meet the acceptance gate.
+5. **JEV evaluation:** benchmark value, latency, privacy, and failure behavior before enabling any advisory integration.
+6. **Operations:** wire OpenTelemetry exporters, define redaction policy, provision dashboards and alerts, test backup/restore, and document incident response. The bundled Grafana LGTM service is infrastructure, not completed observability.
+7. **Workflow durability and scale:** load tests, idempotency, background intake execution, retention policy, and only then an evidence-based decision on Temporal. The Compose Temporal profile is currently an unwired spike.
+8. **Production assurance:** threat modeling, dependency and container scanning, accessibility and browser coverage, deployment manifests, secrets management, and real domain validation with authorized specialists and non-production data.
+
+The living implementation inventory and known limitations are in [docs/20-Implementation-Completion-Report.md](docs/20-Implementation-Completion-Report.md).
+
+## Contributing safely
+
+1. Create a branch; do not push directly to `main`.
+2. Read the nearest subsystem README and the relevant architecture decision before editing.
+3. Keep synthetic data only. Never commit credentials, `.env`, raw model keys, or real patient data.
+4. Add tests for behavior changes and regenerate evidence when a reported number changes.
+5. Do not widen AI authority. The deterministic core and human reviewer remain authoritative.
+6. Run the local quality gates and open a pull request. Merge only after green CI and review.
+
+Historical planning documents remain useful context, but executable code, current migrations, live OpenAPI, and generated verification artifacts take precedence when they disagree.
+
+## License and use
+
+This repository is a competition prototype built around fictional payer rules and synthetic claims. Confirm licensing and production-governance requirements before any use beyond the challenge environment.
