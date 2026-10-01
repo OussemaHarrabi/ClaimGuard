@@ -33,6 +33,11 @@ uncertain cases to a human. **Review, don't adjudicate.**
 
 ## Quickstart
 
+For the current submission decision and remaining deliverables, see the
+[Phase-1 readiness assessment](docs/verification/PHASE-1-SUBMISSION-READINESS.md).
+The frontend opens on a public product landing page at `/`; use **Open workspace**
+or `/workspace/home` to sign in and reach the appropriate clinic role's home.
+
 ```bash
 uv sync --all-extras                                   # install (Python 3.11–3.13)
 docker compose up -d db && uv run alembic upgrade head # the review schema

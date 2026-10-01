@@ -130,6 +130,7 @@ const ALLOWED_ACTIONS_BY_STATUS: Readonly<Record<string, readonly ReviewAction[]
 };
 
 type ReviewCockpitProps = {
+  readonly queueTitle?: string;
   readonly workspace: ReviewWorkspace;
   readonly busy: boolean;
   readonly error: string | null;
@@ -184,6 +185,7 @@ function decisionDisabled(
 }
 
 export function ReviewCockpit({
+  queueTitle = "Claims queue",
   workspace,
   busy,
   error,
@@ -195,8 +197,10 @@ export function ReviewCockpit({
   const selected = workspace.selected;
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [claimQuery, setClaimQuery] = useState("");
+  const [queueFilter, setQueueFilter] = useState("all");
   const visibleClaims = workspace.claims.filter((claim) =>
-    claim.claimId.toLocaleLowerCase().includes(claimQuery.trim().toLocaleLowerCase()),
+    claim.claimId.toLocaleLowerCase().includes(claimQuery.trim().toLocaleLowerCase()) &&
+    (queueFilter === "all" || (queueFilter === "open" ? claim.unresolved > 0 : claim.unresolved === 0)),
   );
   const selectedClaim = workspace.claims.find((claim) => claim.runId === selected?.run.runId);
   const selectedUnresolved =
@@ -227,7 +231,7 @@ export function ReviewCockpit({
           <div className="panel-heading queue-heading">
             <div>
               <p className="eyebrow">Review workspace</p>
-              <h1 id="queue-title">Claims queue</h1>
+              <h1 id="queue-title">{queueTitle}</h1>
             </div>
             <Button
               className="icon-button"
@@ -254,6 +258,8 @@ export function ReviewCockpit({
               />
             </span>
           </label>
+
+          <div className="queue-filters" aria-label="Filter claims by review state">{[["all", "All"], ["open", "Needs review"], ["complete", "Reviewed"]].map(([value, label]) => <button type="button" key={value} aria-pressed={queueFilter === value} onClick={() => setQueueFilter(value)}>{label}</button>)}</div>
 
           <div className="queue-summary" aria-label="Queue summary">
             <span>
@@ -296,7 +302,7 @@ export function ReviewCockpit({
               );
             })}
             {!visibleClaims.length ? (
-              <p className="queue-empty">No claim IDs match “{claimQuery.trim()}”.</p>
+              <p className="queue-empty">{busy ? "Loading your claims…" : !workspace.claims.length ? "Your queue is clear. Assigned claims will appear here when they are ready for review." : "No claims match these filters. Try another claim ID or choose All."}</p>
             ) : null}
           </div>
         </section>
@@ -347,7 +353,7 @@ export function ReviewCockpit({
 
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">Engine output</p>
+                  <p className="eyebrow">Check the source values</p>
                   <h2 id="findings-title">Deterministic findings</h2>
                 </div>
                 <span className="finding-count">{selected.findings.length} checks</span>

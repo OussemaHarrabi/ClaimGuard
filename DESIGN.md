@@ -77,6 +77,16 @@ components:
 
 ## 1. Overview
 
+**1 October 2026 business-workspace refresh:** Admin/RCM pages use an Adminator-inspired
+light sidebar, breadcrumb topbar and spaced data panels, retaining the palette below.
+The sidebar collapses to an icon rail on desktop and opens as a drawer on mobile.
+The three review zones remain side by side on wide screens; explanations move below
+the queue/findings on narrower desktop widths, and all zones stack on phones.
+The public landing page is separate from the authenticated workspace. Dashboard
+charts use persisted data, and illustrative marketing examples must be labelled.
+Technical-manager pages remain outside this visual refresh. These notes supersede
+older horizontal-shell layout guidance wherever it conflicts.
+
 **Creative North Star: "The Evidence Desk"**
 
 ClaimGuard is a bright, evidence-first operations desk built for administrators who need to move quickly without surrendering control. The approved direction uses a persistent three-column cockpit: queue on the left, deterministic claim findings in the center, and explanation plus correction context on the right. The familiar navy, blue, and aqua atmosphere echoes the confidence and approachability of Velodoc's public product language, while ClaimGuard's density, evidence citations, and audit-first composition establish an original identity.

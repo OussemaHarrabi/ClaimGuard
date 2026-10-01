@@ -235,7 +235,7 @@ describe("ReviewCockpit", () => {
     renderCockpit(resolved);
 
     expect(screen.getByText("Review complete")).toBeInTheDocument();
-    expect(screen.queryByText("Needs review")).not.toBeInTheDocument();
+    expect(screen.queryByText("Needs review", { selector: ".status-chip" })).not.toBeInTheDocument();
   });
 
   it("routes queue selection, reasoned decisions, and recheck through explicit callbacks", () => {
