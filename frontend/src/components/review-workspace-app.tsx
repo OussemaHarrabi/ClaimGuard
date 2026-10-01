@@ -21,7 +21,7 @@ import {
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
-export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { reviewer: string; scope: "mine" | "team"; includeAll?: boolean }) {
+export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false, queueTitle }: { reviewer: string; scope: "mine" | "team"; includeAll?: boolean; queueTitle?: string }) {
   const [workspace, setWorkspace] = useState<ReviewWorkspace>(emptyWorkspace);
   const [queue, setQueue] = useState<QueueResponse | null>(null);
   const [busy, setBusy] = useState(true);
@@ -170,6 +170,7 @@ export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { re
     <>
       <div className={`environment-badge${demo ? " demo" : ""}`}>{statusLabel}</div>
       <ReviewCockpit
+        queueTitle={queueTitle}
         workspace={workspace}
         busy={busy}
         error={error}

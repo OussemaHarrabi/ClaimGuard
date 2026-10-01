@@ -1,5 +1,7 @@
 # Phase-1 gap analysis — what is required, what we shipped, what is missing
 
+> **Historical snapshot, superseded 2026-10-01.** Use [the current submission-readiness assessment](PHASE-1-SUBMISSION-READINESS.md) for decisions. In particular, the old “Met” AI verdict does not establish an approved deployed SLM, authentication/tenancy have since shipped, and a pitch deck is not a first-submission requirement in the official CSTAM Book. The historical transcripts below remain evidence of those dated runs only.
+
 > **Purpose:** decide, five days before the Phase-1 gate, whether we can claim every point we
 > intend to claim — and close anything that is missing.
 > **Method:** every "shipped" row names an artifact that exists in this repository and, where a

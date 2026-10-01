@@ -2,6 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Card } from "./ui/card";
+import { ReportTable } from "./report-table";
 
 type Row = Record<string, unknown>;
 
@@ -62,16 +63,17 @@ export function ClinicReportPage({ page }: { page: string }) {
   const { data, busy, error, load } = useRemote<unknown>(report.endpoint);
   const sections = data && !Array.isArray(data) ? Object.entries(data as Row) : [];
   const scalarReport = sections.length > 0 && sections.every(([, value]) => !Array.isArray(value) && (value === null || typeof value !== "object"));
+  const Table = ["activity", "audit", "review-quality"].includes(page) ? ReportTable : DataTable;
   return <section className="clinic-page" aria-busy={busy}>
     <header className="clinic-page-heading"><div><p className="eyebrow">{report.eyebrow}</p><h1>{report.title}</h1></div><button type="button" className="secondary-button" disabled={busy} onClick={() => void load()}>Refresh</button></header>
     <p>{report.description}</p>
     {error ? <p role="alert" className="clinic-error">{error}</p> : null}
     {busy ? <p>Loading live data…</p> : null}
-    {!busy && Array.isArray(data) ? <DataTable rows={data as Row[]} /> : null}
+    {!busy && Array.isArray(data) ? <Table rows={data as Row[]} /> : null}
     {!busy && scalarReport ? <Metrics values={data as Row} /> : null}
     {!busy && !scalarReport ? sections.map(([key, value]) => <section className="clinic-report-section" key={key}>
       <h2>{key.replaceAll("_", " ")}</h2>
-      {Array.isArray(value) ? <DataTable rows={value as Row[]} /> : value && typeof value === "object" ? <Metrics values={value as Row} /> : <Metrics values={{ [key]: value }} />}
+      {Array.isArray(value) ? <Table rows={value as Row[]} /> : value && typeof value === "object" ? <Metrics values={value as Row} /> : <Metrics values={{ [key]: value }} />}
     </section>) : null}
   </section>;
 }

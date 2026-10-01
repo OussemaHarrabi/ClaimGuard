@@ -1,5 +1,5 @@
-import { ClinicPortal } from "../components/clinic-portal";
+import { LandingPage } from "../components/landing-page";
 
 export default function Home() {
-  return <ClinicPortal page="home" />;
+  return <LandingPage />;
 }
