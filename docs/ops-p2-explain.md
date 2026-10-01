@@ -36,9 +36,9 @@ Ten pages in the technical-manager workspace, all on the dark surface:
 | Page | What the reviewer gets | Where the data comes from |
 |---|---|---|
 | **Operations** | platform verdict, component health, telemetry-source freshness, version markers | `/v1/health` probes + Prometheus/Tempo reachability |
-| **Metrics** | metrics grouped into categories, each explained in words before its values | Prometheus (Mimir) via the backend |
-| **Traces** | requests grouped into categories, each explained, then drilled into | Tempo via the backend |
-| **Audit Integrity** | hash-chain verification status + event count | PostgreSQL audit ledger |
+| **Metrics** | every metric family as its own category card, and each line explained in words with a proportion visual | Prometheus (Mimir) via the backend |
+| **Traces** | requests grouped into categories, then the **flow inside a single trace** — its spans, nested and positioned in time | Tempo via the backend |
+| **Audit Integrity** | the hash chain itself, as linked series: each event's hash and the previous hash it claims | PostgreSQL audit ledger |
 | **Intake Jobs** | intake job counts by status | PostgreSQL |
 | **Redacted Logs** | recent intake job status and error codes — no document or claim content | PostgreSQL |
 | **Versions** | active rule / model / provider versions | PostgreSQL |
@@ -659,5 +659,64 @@ rendered by the shared clinic report component, so it carries that component's h
 (eyebrow, title, description, Refresh) instead of the console chrome its nine siblings
 share (health pill, live badge, checked timestamp). The page is dark, readable and fully
 functional; it simply does not look like its neighbours yet.
+
+---
+
+## 17. Reading the platform, instead of graphing it
+
+The console's purpose is narrower and harder than a dashboard's. Grafana can show
+`status_class="2xx" → 348` to someone who already knows what that means. An operator
+should be able to read **"348 requests were handled successfully"** without knowing the
+schema. Every decision here follows from that:
+
+**Metrics explains its lines.** Each metric family is its own category card with a
+sentence saying what it is, and inside a category every line is translated:
+`status_class=2xx` reads *"Successful — handled without error"*, `outcome=fallback` reads
+*"Answered by the deterministic layer, not the model"*. Each line carries a share of its
+category and a proportion bar, so magnitude is visible rather than inferred. A value with
+no known translation is shown **raw**, because a confident wrong explanation is worse than
+none.
+
+**Traces shows the flow, not the bars.** A category tells you *how many* requests and how
+slow; opening one tells you *where the time went*. The span tree is drawn with the root
+request and its children nested by depth, each positioned by start offset and sized by
+duration — so `claim.evaluate` taking 143 ms of a 412 ms request is visible, with the
+SQLAlchemy queries beneath it. The list no longer reorders under the reader on each live
+update, and a pause control holds the view while it is being read: numbers that move while
+you are reading them cannot be explained.
+
+**The audit ledger shows its chain.** This is the page's reason to exist. Each link renders
+its own hash, the previous hash it claims, and whether that claim checks out, so the
+`n-1 → n` hand-off is *shown* rather than asserted; a false link is the tamper alarm and is
+coloured so it cannot be missed. Events sharing a claim are grouped into the series they
+actually form, and `kind` is translated (`review_decided` → "A reviewer decided"). An
+empty response with no events says the ledger **cannot be read right now** — an unreadable
+ledger and an empty one are different facts, and only one of them is fine.
+
+### 17.1 What had to change underneath
+
+None of this was presentable from the data the backend exposed, so three gaps were closed:
+
+| Gap | Why it mattered | Now |
+|---|---|---|
+| The Prometheus allow-list held **two** metric names | only one category could ever be drawn — the page was faithful and the data was starved | the four business counters join it: claims, decisions, intake, assistant turns |
+| A trace could be **listed** but not **opened** | every trace was a bar with a duration and no explanation | `GET /v1/operations/traces/{trace_id}` returns the span tree, with depth computed server-side |
+| The audit ledger exposed a **boolean** only | the chain — the actual evidence — was invisible | `GET /v1/operations/audit/chain` returns the links, and never `decision`, `reason_code`, `finding_ids` or the version columns |
+
+**A note on metric families being event-driven:** the four business counters appear in
+Prometheus only after the corresponding action has fired at least once in the running
+process. After an API restart the Metrics page therefore shows the HTTP families and
+nothing else until a claim is submitted, a decision recorded, a document ingested or the
+assistant asked. That is correct behaviour for counters — they start at zero — but it is
+worth knowing before demonstrating the page.
+
+**A note on formatting as a correctness property.** Durations were being rendered with a
+locale decimal separator, so a 7.6 ms span printed as `7,611 ms` — seven thousand six
+hundred and eleven to an English reader — while the same trace read `7 ms` in the list.
+Durations now always use `.`, sub-millisecond values render in microseconds (`707 µs`),
+and the list and the flow agree. This was not cosmetic: the complaint being answered was
+"I cannot tell what these numbers mean", and a number that can be misread twice is not
+explained.
+
 
 
