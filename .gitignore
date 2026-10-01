@@ -85,3 +85,18 @@ HANDOFF.md
 # Private senior operator guide contains synthetic local demo credentials.
 # Share it directly with the intended teammate; never force-add it to Git.
 SENIOR-TECHNICAL-ADMIN-GUIDE.md
+
+# Local demo credentials. Real values, synthetic accounts: never committed.
+examples/demo/CREDENTIALS.local.md
+
+# LaTeX build scratch and the downloaded engine: 110 MB of re-downloadable tooling.
+tmp/
+reports/**/tectonic-bin/
+reports/**/tectonic.zip
+
+# Archify renders each diagram spec into a ~700 KB viewer with the library inlined, and writes a
+# visual-check page plus eight screenshots. The report embeds its own copies from `assets/`, so
+# only the authored specs under `diagrams/*.json` are source.
+reports/**/diagrams/*.html
+reports/**/diagrams/*.png
+reports/**/diagrams/*.visual-check.json

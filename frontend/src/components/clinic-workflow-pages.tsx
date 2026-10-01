@@ -143,6 +143,42 @@ const INTAKE_ERRORS: Record<string, string> = {
   invalid_fhir_package: "The FHIR bundle or sidecar is malformed or incomplete.",
   fhir_sidecar_mismatch: "The FHIR facts disagree with the sidecar. Reconcile the source before submitting.",
 };
+const WAITING_STATUS = "needs_review";
+
+/** The list is a queue: what still has to be checked comes first, rejected packages last. */
+const INTAKE_GROUPS: { key: string; title: string; hint: string }[] = [
+  { key: "waiting", title: "Waiting to be checked", hint: "Nothing has run for these packages yet. Press Start check on the one you want to process." },
+  { key: "checked", title: "Checked", hint: "The 15 deterministic checks have run. Open the findings to work through them." },
+  { key: "rejected", title: "Rejected", hint: "These packages could not be normalized, so they cannot be checked." },
+  { key: "other", title: "Other", hint: "" },
+];
+
+function intakeGroup(job: IntakeJob): string {
+  if (job.status === WAITING_STATUS) return "waiting";
+  if (job.status === "rejected") return "rejected";
+  if (job.run_id) return "checked";
+  return "other";
+}
+
+/** Plain words for a non-engineer, with the raw status kept in the tooltip. */
+function statusLabel(job: IntakeJob): string {
+  if (job.status === WAITING_STATUS) return "Waiting to be checked";
+  if (job.status === "rejected") return "Rejected";
+  if (job.run_id) return "Checked";
+  return job.status.replaceAll("_", " ");
+}
+
+function statusTone(job: IntakeJob): string {
+  if (job.status === WAITING_STATUS) return "warning";
+  if (job.status === "rejected") return "danger";
+  if (job.run_id) return "success";
+  return "neutral";
+}
+
+function createdAt(job: IntakeJob): number {
+  const parsed = Date.parse(job.created_at);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
 
 export function DocumentIntakePage() {
   const { data, busy, error, setError, load } = useRemote<IntakeJob[]>("/v1/intake-jobs");
@@ -155,6 +191,10 @@ export function DocumentIntakePage() {
   const [saving, setSaving] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [completedRun, setCompletedRun] = useState<string | null>(null);
+  /** Job ids whose check request is in flight. More than one can run: the demo starts several in a row. */
+  const [checking, setChecking] = useState<string[]>([]);
+  const queue = (data ?? []).slice().sort((left, right) => createdAt(right) - createdAt(left));
+  const groups = INTAKE_GROUPS.map((group) => ({ ...group, jobs: queue.filter((job) => intakeGroup(job) === group.key) }));
 
   async function readFile(file: File | undefined) {
     if (!file) return;
@@ -183,10 +223,9 @@ export function DocumentIntakePage() {
       const sidecar = sourceFormat === "fhir_bundle" ? JSON.parse(sidecarText) as Row : null;
       const payload = { filename, content, source_format: sourceFormat, files: sourceFormat === "csv_split" ? csvFiles : null, sidecar };
       const job = await json<IntakeJob>(await fetch("/v1/intake-jobs", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(payload) }));
-      setNotice(job.status === "rejected" ? `Package quarantined: ${INTAKE_ERRORS[job.error_code ?? ""] ?? job.error_code}.` : "Normalized draft ready. Verify the source facts, then run all 15 checks.");
+      setNotice(job.status === "rejected" ? `Package quarantined: ${INTAKE_ERRORS[job.error_code ?? ""] ?? job.error_code}.` : "Package received and normalized. It is waiting in the list - press Start check when you are ready.");
       setCompletedRun(null);
       setFilename(""); setContent(""); setCsvFiles(null); setSidecarText(""); await load();
-      if (job.status === "needs_review") await inspect(job.job_id);
     } catch (cause) { setError(cause instanceof SyntaxError ? "The normalized sidecar is not valid JSON." : cause instanceof Error ? cause.message : "Document intake failed."); }
     finally { setSaving(false); }
   }
@@ -196,19 +235,29 @@ export function DocumentIntakePage() {
     catch (cause) { setError(cause instanceof Error ? cause.message : "Draft could not be loaded."); }
   }
 
+  /** Starts the 15 checks for one queued job. Only that row is marked busy; the rest stay usable. */
+  async function runCheck(jobId: string) {
+    setChecking((old) => (old.includes(jobId) ? old : [...old, jobId]));
+    setError(null); setNotice(null);
+    try {
+      const result = await json<{ run: { run_id: string } }>(await fetch(`/v1/intake-jobs/${encodeURIComponent(jobId)}/submit`, { method: "POST" }));
+      setNotice(`Claim checked and recorded as ${result.run.run_id}. Open its findings from the list.`);
+      setCompletedRun(result.run.run_id);
+      setSelected((current) => (current && current.job_id === jobId ? null : current));
+      await load();
+    } catch (cause) { setError(cause instanceof Error ? cause.message : "The draft could not be checked. Confirm the full claim envelope is present."); }
+    finally { setChecking((old) => old.filter((id) => id !== jobId)); }
+  }
+
   async function submit() {
     if (!selected) return;
-    setSaving(true); setError(null); setNotice(null);
-    try {
-      const result = await json<{ run: { run_id: string } }>(await fetch(`/v1/intake-jobs/${selected.job_id}/submit`, { method: "POST" }));
-      setNotice(`Claim checked and recorded as ${result.run.run_id}.`); setCompletedRun(result.run.run_id); setSelected(null); await load();
-    } catch (cause) { setError(cause instanceof Error ? cause.message : "The draft could not be checked. Confirm the full claim envelope is present."); }
-    finally { setSaving(false); }
+    setSaving(true);
+    try { await runCheck(selected.job_id); } finally { setSaving(false); }
   }
 
   return <section className="clinic-page" aria-busy={busy}>
     <header className="clinic-page-heading"><div><p className="eyebrow">Source to checked claim</p><h1>Document Intake</h1></div><button type="button" className="secondary-button" disabled={busy} onClick={() => void load()}>Refresh</button></header>
-    <p>Upload one synthetic claim as a complete ClaimGuard JSON envelope, a five-file relational CSV package, or a FHIR R4 Bundle with its normalized sidecar. ClaimGuard verifies the source, keeps a hash, asks you to review the draft, then runs the same 15 deterministic checks. PDFs and free-text extraction are not supported here.</p>
+    <p>Upload one synthetic claim as a complete ClaimGuard JSON envelope, a five-file relational CSV package, or a FHIR R4 Bundle with its normalized sidecar. ClaimGuard verifies the source, keeps a hash and puts the package in the waiting list. Nothing runs yet: press Start check on a waiting package to run the same 15 deterministic checks. PDFs and free-text extraction are not supported here.</p>
     {error ? <p role="alert" className="clinic-error">{error}</p> : null}{notice ? <p role="status" className="clinic-success">{notice}</p> : null}
     {completedRun ? <a className="secondary-button" href={`/workspace/my-queue?run=${encodeURIComponent(completedRun)}`}>Open checked claim and findings</a> : null}
     <form className="clinic-form clinic-form-wide" onSubmit={(event) => void ingest(event)}><h2>Normalize a claim package</h2>
@@ -216,13 +265,30 @@ export function DocumentIntakePage() {
       {sourceFormat === "envelope_json" ? <label>Complete claim JSON file<input required type="file" accept=".json,application/json" onChange={(event) => void readFile(event.target.files?.[0])} /></label> : null}
       {sourceFormat === "csv_split" ? <><label>Five CSV files<input required type="file" accept=".csv,text/csv" multiple onChange={(event) => void readCsvFiles(event.target.files)} /></label><p className="intake-help">Choose claims.csv, coverage.csv, lines.csv, authorizations.csv and attachments.csv together. One claim per package; empty child files still need their headers.</p></> : null}
       {sourceFormat === "fhir_bundle" ? <><label>FHIR R4 Bundle JSON file<input required type="file" accept=".json,application/fhir+json,application/json" onChange={(event) => void readFile(event.target.files?.[0])} /></label><label>Full normalized sidecar JSON file<input required type="file" accept=".json,application/json" onChange={async (event) => setSidecarText(await event.target.files?.[0]?.text() ?? "")} /></label><p className="intake-help">The teaching Bundle includes patient, encounter, coverage, provider, diagnosis and line resources. The current scoring envelope does not retain encounter details, and 11 required claim fields are absent from FHIR projection. The sidecar supplies those gaps; matching projected FHIR values are verified. ClaimGuard does not invent missing values.</p></> : null}
-      <button type="submit" className="primary-button" disabled={saving || (sourceFormat === "csv_split" ? !csvFiles : !content || (sourceFormat === "fhir_bundle" && !sidecarText))}>Normalize and review draft</button>
+      <button type="submit" className="primary-button" disabled={saving || (sourceFormat === "csv_split" ? !csvFiles : !content || (sourceFormat === "fhir_bundle" && !sidecarText))}>Normalize and add to waiting list</button>
     </form>
-    <h2>Recent jobs</h2>
-    {busy ? <p>Loading intake jobs…</p> : null}
+    <h2>Claim package queue</h2>
+    {busy && !data ? <p>Loading intake jobs…</p> : null}
     {!busy && data?.length === 0 ? <p className="clinic-empty">No source documents have been processed yet.</p> : null}
-    <div className="clinic-cards">{data?.map((job) => <article className="clinic-work-card" key={job.job_id}><div><span className="status-chip">{job.status}</span><small>{new Date(job.created_at).toLocaleString()}</small></div><h2>{job.filename}</h2><p>{job.error_code ? `Issue: ${INTAKE_ERRORS[job.error_code] ?? job.error_code}` : job.run_id ? `Checked run: ${job.run_id}` : "Draft ready for review"}</p>{job.status === "needs_review" ? <button type="button" className="secondary-button" onClick={() => void inspect(job.job_id)}>Review draft</button> : job.run_id ? <a className="secondary-button" href={`/workspace/my-queue?run=${encodeURIComponent(job.run_id)}`}>Open findings</a> : null}</article>)}</div>
-    {selected ? <div className="drawer-backdrop"><section className="correction-drawer" role="dialog" aria-modal="true" aria-label="Intake draft"><header><h2>Review normalized draft</h2><button type="button" className="secondary-button" onClick={() => setSelected(null)}>Close</button></header><p>Compare these facts with the uploaded package. This step does not approve or submit a claim to a payer.</p><dl className="intake-draft-facts"><div><dt>Claim</dt><dd>{String(selected.draft?.claim_id ?? "—")}</dd></div><div><dt>Patient</dt><dd>{String(selected.draft?.patient_id ?? "—")}</dd></div><div><dt>Provider</dt><dd>{String(selected.draft?.provider_id ?? "—")}</dd></div><div><dt>Coverage ends</dt><dd>{String((selected.draft?.coverage as Row | undefined)?.end_date ?? "—")}</dd></div><div><dt>Service lines</dt><dd>{Array.isArray(selected.draft?.lines) ? selected.draft.lines.length : 0}</dd></div><div><dt>Claim total</dt><dd>{String(selected.draft?.total_amount ?? "—")} {String(selected.draft?.currency ?? "")}</dd></div></dl>{selected.content_sha256 ? <p className="intake-source-digest">Source package SHA-256 <code>{selected.content_sha256}</code></p> : null}<details><summary>Inspect all normalized fields</summary><pre className="clinic-json-preview">{JSON.stringify(selected.draft, null, 2)}</pre></details><div className="drawer-actions"><button type="button" className="primary-button" disabled={saving} onClick={() => void submit()}>Run 15 checks and create claim</button></div></section></div> : null}
+    {groups.map((group) => group.jobs.length === 0 ? null : <section key={group.key} aria-labelledby={`intake-group-${group.key}`}>
+      <h2 id={`intake-group-${group.key}`}>{group.title} ({group.jobs.length})</h2>
+      {group.hint ? <p className="intake-help">{group.hint}</p> : null}
+      <div className="clinic-cards">{group.jobs.map((job) => {
+        const waiting = job.status === WAITING_STATUS;
+        const working = checking.includes(job.job_id);
+        return <article className="clinic-work-card" key={job.job_id}>
+          <div><span className={`status-chip ${waiting ? "warning" : statusTone(job)}`} title={`Stored status: ${job.status}`}>{working && waiting ? "Checking…" : statusLabel(job)}</span><small>{new Date(job.created_at).toLocaleString()}</small></div>
+          <h2>{job.filename}</h2>
+          <p>{job.error_code ? `Issue: ${INTAKE_ERRORS[job.error_code] ?? job.error_code}` : job.run_id ? `Checked run: ${job.run_id}` : "Waiting for you to start the check."}</p>
+          <div className="intake-row-actions">
+            {waiting ? <button type="button" className="primary-button" disabled={working} aria-busy={working} onClick={() => void runCheck(job.job_id)}>Start check</button> : null}
+            {waiting ? <button type="button" className="secondary-button" onClick={() => void inspect(job.job_id)}>Review draft</button> : null}
+            {job.run_id ? <a className="secondary-button" href={`/workspace/my-queue?run=${encodeURIComponent(job.run_id)}`}>Open findings</a> : null}
+          </div>
+        </article>;
+      })}</div>
+    </section>)}
+    {selected ? <div className="drawer-backdrop"><section className="correction-drawer" role="dialog" aria-modal="true" aria-label="Intake draft"><header><h2>Review normalized draft</h2><button type="button" className="secondary-button" onClick={() => setSelected(null)}>Close</button></header><p>Compare these facts with the uploaded package. This step does not approve or submit a claim to a payer.</p><dl className="intake-draft-facts"><div><dt>Claim</dt><dd>{String(selected.draft?.claim_id ?? "—")}</dd></div><div><dt>Patient</dt><dd>{String(selected.draft?.patient_id ?? "—")}</dd></div><div><dt>Provider</dt><dd>{String(selected.draft?.provider_id ?? "—")}</dd></div><div><dt>Coverage ends</dt><dd>{String((selected.draft?.coverage as Row | undefined)?.end_date ?? "—")}</dd></div><div><dt>Service lines</dt><dd>{Array.isArray(selected.draft?.lines) ? selected.draft.lines.length : 0}</dd></div><div><dt>Claim total</dt><dd>{String(selected.draft?.total_amount ?? "—")} {String(selected.draft?.currency ?? "")}</dd></div></dl>{selected.content_sha256 ? <p className="intake-source-digest">Source package SHA-256 <code>{selected.content_sha256}</code></p> : null}<details><summary>Inspect all normalized fields</summary><pre className="clinic-json-preview">{JSON.stringify(selected.draft, null, 2)}</pre></details><div className="drawer-actions"><button type="button" className="primary-button" disabled={saving || checking.includes(selected.job_id)} onClick={() => void submit()}>Run 15 checks and create claim</button></div></section></div> : null}
   </section>;
 }
 

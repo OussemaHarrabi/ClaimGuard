@@ -102,6 +102,54 @@ class AssignmentStore:
             )
         return Assignment(tenant_id, claim_id, reviewer_user_id, assigned_by)
 
+    def claim_for_intake(self, tenant_id: str, claim_id: str, reviewer_user_id: str) -> bool:
+        """Let whoever intook an unassigned claim review it. Returns whether it was claimed.
+
+        WHY THIS IS NOT `assign` AND TAKES NO `assigned_by`
+        --------------------------------------------------
+        Assignment is a lead's or an admin's act: `assign` refuses anyone else, which is the point
+        of it. Intake is a reviewer's act that happens to create work, and a reviewer cannot
+        delegate to themselves through that door. So this is a separate, narrower write - and the
+        narrowness IS the safeguard:
+
+        * it never displaces an existing assignment, so intake never takes work from a reviewer a
+          lead already gave it to, and a later reassignment still removes the intaker's access;
+        * it still refuses a claim that is not in this clinic, and refuses to hand it to anyone
+          who is not an active reviewer or lead;
+        * `assigned_by` is the intaker themselves, because that is who decided the work is theirs.
+
+        It exists because of de-duplication. `record_run` keys on the submitted content, so a
+        package whose claim was already checked resolves to the run that already exists and
+        `initiated_by` names its first submitter. The intaker would otherwise be handed a run id
+        they cannot open, and their own package would vanish from their intake list.
+        """
+        with self._engine.begin() as connection:
+            role = _active_role(connection, tenant_id, reviewer_user_id)
+            if role not in {Role.RCM_REVIEWER, Role.RCM_LEAD}:
+                return False
+            exists = connection.execute(
+                select(RUNS.c.run_id)
+                .where(RUNS.c.tenant_id == tenant_id, RUNS.c.claim_id == claim_id)
+                .limit(1)
+            ).scalar_one_or_none()
+            if exists is None:
+                return False
+            claimed = connection.execute(
+                insert(ASSIGNMENTS)
+                .values(
+                    tenant_id=tenant_id,
+                    claim_id=claim_id,
+                    reviewer_user_id=reviewer_user_id,
+                    assigned_by=reviewer_user_id,
+                    assigned_at=func.now(),
+                )
+                .on_conflict_do_nothing(
+                    index_elements=[ASSIGNMENTS.c.tenant_id, ASSIGNMENTS.c.claim_id]
+                )
+                .returning(ASSIGNMENTS.c.claim_id)
+            ).scalar_one_or_none()
+        return claimed is not None
+
     def my_claim_ids(self, tenant_id: str, user_id: str) -> list[str]:
         with self._engine.connect() as connection:
             rows = connection.execute(

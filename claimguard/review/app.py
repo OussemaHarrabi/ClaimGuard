@@ -975,6 +975,14 @@ def submit_intake_job(request: Request, job_id: str) -> RunResponse:
             initiated_by=principal.user_id,
             explanations=explained.provenance,
         )
+        # The intaker keeps the claim they just created, so the package stays in their queue and
+        # the run they were handed is one they may open. This only ever fills an empty slot: when
+        # the same claim content was already checked by somebody else, `record_run` returns THAT
+        # run and this is what puts the intaker back in front of it. See `claim_for_intake`.
+        if principal.role is Role.RCM_REVIEWER:
+            AssignmentStore(_store_of(request).engine).claim_for_intake(
+                principal.tenant_id, recorded.run.claim_id, principal.user_id
+            )
         return recorded.run.run_id, _run_response(recorded)
 
     try:

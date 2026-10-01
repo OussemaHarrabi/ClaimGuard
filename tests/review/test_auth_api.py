@@ -44,6 +44,15 @@ def create_test_account(engine: Engine, role: str) -> tuple[str, str, str]:
 
 def remove_test_account(engine: Engine, user_id: str) -> None:
     with engine.begin() as connection:
+        # A test account can be the reviewer of a claim, and the assignment row pins it: `users`
+        # cannot go while `claim_assignments` still names it.
+        connection.execute(
+            text(
+                "DELETE FROM claimguard.claim_assignments "
+                "WHERE reviewer_user_id = :user_id OR assigned_by = :user_id"
+            ),
+            {"user_id": user_id},
+        )
         connection.execute(
             text("DELETE FROM claimguard.clinic_memberships WHERE user_id = :user_id"),
             {"user_id": user_id},

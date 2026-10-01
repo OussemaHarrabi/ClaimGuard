@@ -307,7 +307,8 @@ class WorkspaceStore:
                      draft, status, error_code)
                 VALUES (:id, :tenant, :actor, :filename, :digest,
                         CAST(:draft AS jsonb), :status, :error)
-                RETURNING job_id, filename, content_sha256, status, error_code, created_at
+                RETURNING job_id, filename, content_sha256, status, error_code, run_id,
+                          created_at
             """),
                     {
                         "id": job_id,
@@ -331,6 +332,14 @@ class WorkspaceStore:
         submitted_by: str | None = None,
         allowed_claim_ids: list[str] | None = None,
     ) -> list[dict[str, Any]]:
+        """The clinic's intake packages, or one submitter's own when ``submitted_by`` is given.
+
+        A checked package carries its `run_id` and the stored `draft` of the claim it produced, so
+        a reviewer sees it only while they may read that claim: an intake row must not outlive the
+        reviewer's access to the claim behind it. `submit_intake_job` claims an unassigned claim
+        for whoever intook it, so a reviewer does not lose the package they just started - and a
+        lead who assigns that claim to somebody else does take it away again.
+        """
         scope = "" if submitted_by is None else " AND submitted_by=:actor"
         claim_scope = (
             ""
@@ -359,6 +368,7 @@ class WorkspaceStore:
         submitted_by: str | None = None,
         allowed_claim_ids: list[str] | None = None,
     ) -> dict[str, Any] | None:
+        """One intake package. See `intake_jobs` for why the claim scope is also applied here."""
         scope = "" if submitted_by is None else " AND submitted_by=:actor"
         claim_scope = (
             ""

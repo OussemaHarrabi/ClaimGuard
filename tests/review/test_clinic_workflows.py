@@ -33,6 +33,82 @@ async def _login(client: httpx.AsyncClient, role: str, engine: Engine) -> str:
 
 
 @pytest.mark.asyncio
+async def test_intake_keeps_the_package_and_the_run_usable_for_whoever_intook_it(
+    store: ReviewStore, engine: Engine, sandbox: Sandbox
+) -> None:
+    """The intaker must be able to open what they just started, and keep seeing the package.
+
+    De-duplication is what makes this interesting: `record_run` keys on the submitted content, so
+    when the SAME claim was already checked by somebody else the submission resolves to their run
+    and `initiated_by` names them. The intaker is then a stranger to their own claim - the run
+    answers 403 and the package, which is filtered on the readability of the claim behind it,
+    disappears from the list they were just working in.
+
+    The intaker therefore claims the unassigned claim on submission. The companion guarantee is in
+    `test_assignments.py`: a lead who assigns that claim to someone else still takes both away.
+    """
+    envelope = sandbox.coverage_lapse()
+    app = create_app(
+        store=store,
+        rules_dir=RULES_DIR,
+        signer=SessionSigner(b"clinic-workflow-tests-session-key-012345"),
+    )
+    accounts: list[str] = []
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+        ) as lead:
+            accounts.append(await _login(lead, "rcm_lead", engine))
+            first = await lead.post("/v1/claims", json={"claim": envelope})
+            assert first.status_code == 201, first.text
+            existing_run = first.json()["run"]["run_id"]
+
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+        ) as reviewer:
+            accounts.append(await _login(reviewer, "rcm_reviewer", engine))
+            created = await reviewer.post(
+                "/v1/intake-jobs",
+                json={
+                    "filename": "same-claim.json",
+                    "content": json.dumps(envelope),
+                    "source_format": "auto",
+                },
+            )
+            assert created.status_code == 201, created.text
+            job_id = created.json()["job_id"]
+            assert created.json()["run_id"] is None, "uploading must not check the claim"
+
+            started = await reviewer.post(f"/v1/intake-jobs/{job_id}/submit")
+            assert started.status_code == 200, started.text
+            assert started.json()["run"]["run_id"] == existing_run, "the same content de-duplicates"
+
+            # The run the submission handed back is one the intaker may actually open.
+            readable = await reviewer.get(f"/v1/runs/{existing_run}/results")
+            assert readable.status_code == 200, readable.text
+            assert envelope["claim_id"] in {
+                row["claim_id"] for row in (await reviewer.get("/v1/my-queue")).json()["claims"]
+            }
+
+            fetched = await reviewer.get(f"/v1/intake-jobs/{job_id}")
+            assert fetched.status_code == 200, fetched.text
+            assert fetched.json()["run_id"] == existing_run
+
+            listed = {job["job_id"] for job in (await reviewer.get("/v1/intake-jobs")).json()}
+            assert job_id in listed, "the intaker's own package left the queue"
+    finally:
+        # The intake job references its submitter, so it goes before the account can be removed.
+        with engine.begin() as connection:
+            for account in accounts:
+                connection.execute(
+                    text("DELETE FROM claimguard.intake_jobs WHERE submitted_by = :actor"),
+                    {"actor": account},
+                )
+        for account in accounts:
+            remove_test_account(engine, account)
+
+
+@pytest.mark.asyncio
 async def test_request_escalation_and_clinic_reporting(
     store: ReviewStore, engine: Engine, sandbox: Sandbox
 ) -> None:
