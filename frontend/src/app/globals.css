@@ -296,7 +296,8 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
    The collapse animates grid-template-rows so the panel opens to its own height without a
    measured max-height; visibility and inert keep the closed panel out of the tab order. */
 .assistant-block { margin-top: 13px; }
-.assistant-trigger { display: inline-flex; align-items: center; gap: 7px; }
+.assistant-trigger { display: inline-flex; align-items: center; gap: 7px; letter-spacing: .08em; }
+.assistant-trigger svg { color: oklch(44% 0.12 195); }
 .assistant-collapse { display: grid; grid-template-rows: 0fr; visibility: hidden; opacity: 0; transition: grid-template-rows 240ms ease, opacity 200ms ease, visibility 0s linear 240ms; }
 .assistant-collapse[data-open="true"] { grid-template-rows: 1fr; visibility: visible; opacity: 1; transition: grid-template-rows 240ms ease, opacity 200ms ease, visibility 0s; }
 .assistant-collapse-inner { overflow: hidden; }
@@ -332,6 +333,17 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 .provenance.repaired { background: oklch(94% 0.05 155); color: oklch(40% 0.11 155); }
 .provenance.refused { background: var(--danger-soft); color: oklch(44% 0.16 27); }
 .verifier-warning.refusal { background: var(--danger-soft); color: oklch(44% 0.16 27); }
+
+/* The assistant sits in the guidance column, which is ~270px wide rather than the finding card's
+   width. The composer stacks so the message box keeps a workable line length, the scope chip
+   wraps under the mark, a long cited value ellipsizes inside its own chip instead of pushing it
+   out of the column, and the turn provenance keeps one column rather than two ~90px slivers. */
+.finding-row .assistant-panel-head { flex-wrap: wrap; }
+.finding-row .assistant-scope { max-width: 100%; margin-left: 40px; text-align: left; }
+.finding-row .assistant-composer { flex-direction: column; align-items: stretch; }
+.finding-row .assistant-turn .evidence-item { max-width: 100%; grid-template-columns: minmax(0, 1fr); justify-items: start; }
+.finding-row .assistant-turn .evidence-item strong { max-width: 100%; }
+.finding-row .assistant-panel .provenance-details { grid-template-columns: minmax(0, 1fr); }
 
 @media (prefers-reduced-motion: reduce) {
   .assistant-collapse, .assistant-collapse[data-open="true"] { transition: none; }

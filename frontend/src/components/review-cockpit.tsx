@@ -208,6 +208,9 @@ function FindingGuidance({ finding, run }: { finding: Finding; run: Run }) {
       <p>{plainRecommendation(finding.correctionRecommendation)}</p>
       <small>Verify against source documents. No claim field is changed automatically.</small>
     </section>
+    {/* The conversation belongs with the deterministic explanation it is about: same finding,
+        same run, and the same resumed thread when the reviewer comes back to it. */}
+    <AssistantPanel runId={run.runId} ruleId={finding.ruleId} evidence={finding.evidence} />
     <details className="technical-provenance"><summary>Technical provenance for {finding.ruleId}</summary>
       <dl className="provenance-details" aria-label={`Provenance for ${finding.ruleId}`}>
         <div><dt>Provider</dt><dd>{finding.provenance.provider}</dd></div>
@@ -429,11 +432,6 @@ export function ReviewCockpit({
                           </span>
                         ))}
                       </div>
-                      <AssistantPanel
-                        runId={selected.run.runId}
-                        ruleId={finding.ruleId}
-                        evidence={finding.evidence}
-                      />
                       <div className="finding-actions">
                         <label className="review-note">
                           <span>Reviewer note for {finding.ruleId}</span>

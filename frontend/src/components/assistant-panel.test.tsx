@@ -95,7 +95,7 @@ function stubFetch(routes: Record<string, () => Promise<Response>>) {
 
 function renderPanel() {
   render(<AssistantPanel runId="RUN-031" ruleId="R004" evidence={EVIDENCE} />);
-  return screen.getByRole("button", { name: /Explain with AI for finding R004/ });
+  return screen.getByRole("button", { name: /XAI: explain finding R004/ });
 }
 
 afterEach(() => {
@@ -114,16 +114,22 @@ describe("AssistantPanel", () => {
     expect(trigger).toHaveAttribute("aria-expanded", "false");
     fireEvent.click(trigger);
 
-    const region = screen.getByRole("region", { name: "AI assistant for R004" });
+    const region = screen.getByRole("region", { name: "XAI assistant for R004" });
     expect(region).toHaveFocus();
     expect(screen.getByLabelText("Conversation about R004")).toHaveAttribute("aria-live", "polite");
 
     expect(await screen.findByText(EXPLANATION.explanation)).toBeInTheDocument();
     expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(trigger).toHaveAttribute("aria-label", "XAI: hide the explanation for R004");
+    expect(trigger).toHaveTextContent("XAI");
     expect(screen.getByText(EXPLANATION.correction_recommendation)).toBeInTheDocument();
-    expect(screen.getByText("Model-assisted answer")).toBeInTheDocument();
-    expect(screen.getByText(/qwen3\.8-27b · 640 ms/)).toBeInTheDocument();
-    expect(screen.getByText(/Model-assisted · qwen3\.8-27b · assistant-v1/)).toBeInTheDocument();
+    expect(screen.getByText("AI-assisted wording")).toBeInTheDocument();
+    // The latency may stay in the turn header; the model and its provider must not be rendered.
+    expect(screen.getByText("640 ms", { selector: "span" })).toBeInTheDocument();
+    expect(
+      screen.getByText("AI-assisted wording, checked by the verifier"),
+    ).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/qwen|groq/i);
 
     const cited = screen.getByLabelText("Cited evidence for R004");
     expect(within(cited).getByText("Coverage · end date")).toBeInTheDocument();
@@ -156,13 +162,11 @@ describe("AssistantPanel", () => {
 
     fireEvent.click(renderPanel());
 
-    expect(await screen.findByText("Deterministic fallback")).toBeInTheDocument();
-    expect(screen.queryByText("Model-assisted answer")).not.toBeInTheDocument();
-    expect(screen.getByText(/No model wording used/)).toBeInTheDocument();
+    expect(await screen.findByText("AI wording not used — deterministic explanation shown")).toBeInTheDocument();
+    expect(screen.queryByText("AI-assisted wording")).not.toBeInTheDocument();
     expect(screen.getByText(/Draft answer not used: unsupported citation\./)).toBeInTheDocument();
-    expect(
-      screen.getByText(/Deterministic explanations only · No model configured\./),
-    ).toBeInTheDocument();
+    expect(screen.getByText("Deterministic explanations only")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(/qwen|groq/i);
   });
 
   it("renders a refusal and its reason, not an error", async () => {
@@ -183,7 +187,7 @@ describe("AssistantPanel", () => {
 
     fireEvent.click(renderPanel());
 
-    expect(await screen.findByText("Refused by the assistant")).toBeInTheDocument();
+    expect(await screen.findByText("Declined by the assistant")).toBeInTheDocument();
     expect(screen.getByText("The assistant declined to answer this question.")).toBeInTheDocument();
     expect(
       screen.getByText(/Declined because: the question asks for a clinical diagnosis\./),
@@ -284,7 +288,7 @@ describe("AssistantPanel", () => {
     expect(send).toBeEnabled();
   });
 
-  it("wires the assistant onto every finding the reviewer can act on", async () => {
+  it("wires the assistant into the guidance column of every finding the reviewer can act on", async () => {
     const workspace = {
       counts: { findings: 1, unresolved: 1, resolved: 0 },
       claims: [
@@ -335,7 +339,7 @@ describe("AssistantPanel", () => {
       },
     } as const satisfies ReviewWorkspace;
 
-    stubFetch({
+    const requests = stubFetch({
       "/v1/ai/status": async () => respond(STATUS),
       "/v1/runs/RUN-031/findings/R004/explain": async () =>
         respond({ thread: THREAD, turns: [assistantTurn({})] }),
@@ -355,13 +359,32 @@ describe("AssistantPanel", () => {
     );
 
     const finding = screen.getByTestId("finding-R004");
-    fireEvent.click(
-      within(finding).getByRole("button", { name: /Explain with AI for finding R004/ }),
-    );
+    const assistant = within(finding).getByTestId("assistant-R004");
+    // The conversation belongs to the guidance panel: inside the right-hand column, and never in
+    // the middle card where the evidence chips, reviewer note and decision buttons live.
+    expect(within(finding).getByTestId("explanation-R004")).toContainElement(assistant);
+    expect(finding.querySelector(".finding-content")).not.toContainElement(assistant);
+    expect(finding.querySelector(".finding-actions")).not.toContainElement(assistant);
+
+    const trigger = within(within(finding).getByTestId("explanation-R004")).getByRole("button", {
+      name: /XAI: explain finding R004/,
+    });
+    fireEvent.click(trigger);
 
     expect(await within(finding).findByText(EXPLANATION.explanation)).toBeInTheDocument();
     expect(
       within(finding).getByText(/cannot change a status, severity, evidence/),
     ).toBeInTheDocument();
+
+    // Closing and re-opening shows the turns the reviewer already read, without asking again.
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "false");
+    expect(
+      within(finding).getByTestId("assistant-R004").querySelector(".assistant-collapse"),
+    ).toHaveAttribute("data-open", "false");
+    fireEvent.click(trigger);
+    expect(trigger).toHaveAttribute("aria-expanded", "true");
+    expect(within(finding).getByText(EXPLANATION.explanation)).toBeInTheDocument();
+    expect(requests.filter((request) => request.url.endsWith("/explain"))).toHaveLength(1);
   });
 });

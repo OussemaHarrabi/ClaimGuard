@@ -191,7 +191,14 @@ class AssistantState(_StateInputs, total=False):
 #: outcomes this layer never touches.
 _DECISION_WORDS: Final = re.compile(
     r"\b(?:approv\w*|deni\w*|deny|reject\w*|pay|paid|payments?|payouts?|reimburs\w*"
-    r"|adjudicat\w*|finali[sz]\w*|decid\w*|decision|settle\w*|sign[ -]?off)\b",
+    r"|adjudicat\w*|finali[sz]\w*|decid\w*|decision|settle\w*|sign[ -]?off)\b"
+    # Pricing and billing DECISIONS, as opposed to the claim's own amounts, which stay
+    # askable: "is the net amount correct?" is a question about this finding.
+    r"|\bhow much (?:should|shall|can|could|will|would|do|does|did)\s+"
+    r"(?:we|i|the clinic|the hospital)\b"
+    r"|\bwhat (?:should|shall|can|do|does|did)\s+(?:we|i)\s+"
+    r"(?:bill|charge|pay|invoice|reimburse)\b"
+    r"|\b(?:negotiat\w*|write[ -]?off|fee schedule)\b",
     re.IGNORECASE,
 )
 
@@ -205,7 +212,15 @@ _CLINICAL_WORDS: Final = re.compile(
     r"|\b(?:diagnose|prognosis)\b"
     r"|\bis (?:this|the) (?:treatment|therapy|diagnosis|medication)\b"
     r"|\bwhat should the patient\b"
-    r"|\bdoes the patient (?:need|require)\b",
+    r"|\bdoes the patient (?:need|require)\b"
+    # Any question whose SUBJECT is the patient's own state rather than the record:
+    # "is this patient diabetic?", "should the patient take ...", "what is the patient's
+    # condition?". Written as verb + article + "patient" so that `patient_id` - a field
+    # name, with no word boundary between "patient" and "_" - stays askable.
+    r"|\b(?:is|are|was|were|does|do|did|can|could|should|will|would|has|have|had)\s+"
+    r"(?:the|this|our|that)\s+patient\b"
+    r"|\b(?:what|which)\s+(?:condition|illness|disease|disorder)\b"
+    r"|\bpatient(?:'s)?\s+(?:condition|health|prognosis|medication|symptoms?)\b",
     re.IGNORECASE,
 )
 
@@ -229,10 +244,323 @@ _INJECTION_WORDS: Final = re.compile(
 #: verifier refuses an answer that is not about this finding's evidence.
 _OFF_TOPIC_WORDS: Final = re.compile(
     r"\b(?:write|draft) (?:me )?(?:an? )?(?:email|poem|essay|story|code|script|letter)\b"
-    r"|\bweather\b|\bjoke\b|\btranslate\b|\bcapital of\b|\bstock price\b"
-    r"|\bwho (?:is|was) the (?:president|ceo|prime minister)\b",
+    r"|\bweather\b|\bjoke\b|\btranslate\b|\bcapital of\b|\bstock price\b|\brecipe\b"
+    r"|\bwho (?:is|was) the (?:president|ceo|prime minister)\b"
+    # Topics a reviewer has no reason to raise at a claim record. Each one also closes a shape
+    # that the short-question path could otherwise reach once its guidance words are in play.
+    r"|\b(?:football|basketball|sports?|match|olympics?|movie|film|song|music|celebrity)\b"
+    r"|\b(?:news|headlines|election|politics|president|prime minister|government)\b"
+    r"|\b(?:crypto|bitcoin|stock market|shares?|invest(?:ment|ing)?|lottery)\b"
+    r"|\b(?:tall|high) is the (?:eiffel|burj|statue)\b|\bwhat time is it\b"
+    # A known probe for "does this thing have a topic at all", and the one shape the
+    # short-question path above can otherwise reach through the word "meaning".
+    r"|\bmeaning of life\b",
     re.IGNORECASE,
 )
+
+# ---------------------------------------------------------------------------
+# Grounding: a question must be ABOUT this finding
+#
+# A blocklist cannot do this job, and pretending otherwise shipped a real leak: with
+# only the patterns above, "Who won the 2022 World Cup?", "Write me a Python script to
+# scrape LinkedIn." and "Is this patient diabetic?" were all ANSWERED, because each one
+# happens to avoid every listed phrase and the verifier only checks the SHAPE of the
+# answer (its five keys and its citations), not whether the answer is about the claim.
+#
+# So scope is decided POSITIVELY instead: a question is in scope when it shares at least
+# one word with the vocabulary of the finding in front of the reviewer - the rule's own
+# text, the fields its evidence points at, the claim's identifiers and structure, the
+# policy, and anything already said in this conversation. A question that shares nothing
+# with any of that is not about this claim, whatever it is about.
+#
+# The two-word categories below exist because some words are true of ANY claim sentence
+# and therefore prove nothing on their own. Without that list "is this patient diabetic?"
+# would pass on the word "patient" alone.
+# ---------------------------------------------------------------------------
+
+#: Words that appear in almost any sentence about a claim record. They are removed from the
+#: anchor vocabulary because sharing one of them says nothing about the subject of a question.
+_GENERIC_WORDS: Final[frozenset[str]] = frozenset(
+    {
+        "about",
+        "after",
+        "again",
+        "against",
+        "amount",
+        "amounts",
+        "another",
+        "because",
+        "before",
+        "being",
+        "between",
+        "check",
+        "checks",
+        "claim",
+        "claims",
+        "could",
+        "data",
+        "date",
+        "dates",
+        "does",
+        "doing",
+        "done",
+        "each",
+        "else",
+        "even",
+        "every",
+        "field",
+        "fields",
+        "find",
+        "found",
+        "from",
+        "given",
+        "have",
+        "having",
+        "here",
+        "into",
+        "just",
+        "line",
+        "lines",
+        "made",
+        "make",
+        "many",
+        "more",
+        "most",
+        "much",
+        "must",
+        "need",
+        "needs",
+        "other",
+        "over",
+        "patient",
+        "please",
+        "record",
+        "records",
+        "result",
+        "results",
+        "rule",
+        "rules",
+        "same",
+        "severity",
+        "should",
+        "show",
+        "shows",
+        "some",
+        "status",
+        "still",
+        "such",
+        "than",
+        "that",
+        "their",
+        "them",
+        "then",
+        "there",
+        "these",
+        "they",
+        "thing",
+        "things",
+        "this",
+        "those",
+        "under",
+        "value",
+        "values",
+        "very",
+        "want",
+        "well",
+        "were",
+        "what",
+        "when",
+        "where",
+        "which",
+        "while",
+        "will",
+        "with",
+        "within",
+        "without",
+        "would",
+        "your",
+        "policy",
+        "member",
+        "provider",
+        "payer",
+        "finding",
+        "findings",
+        "evidence",
+        "code",
+        "codes",
+    }
+)
+
+#: A short question that talks ABOUT THE RECORD or asks for guidance on it, rather than about
+#: the world: "why is this flagged?", "what should I check first?", "which evidence should I look
+#: at?". Such a question carries no case NOUN, so it cannot anchor; but its subject is plainly
+#: the finding on screen, so it is in scope. Together with the interrogative shape and the length
+#: cap below, this is what separates "and what do I check first?" from "who won the World Cup?".
+_GUIDANCE_WORDS: Final = re.compile(
+    # about the record's own condition
+    r"\b(?:flag\w*|fail\w*|wrong|incorrect|mismatch\w*|missing|issue\w*|problem\w*|error\w*|"
+    r"discrepan\w*|unclear|confus\w*|mean\w*|matter\w*|reason\w*|cause\w*|because|happen\w*|"
+    # what to do about it
+    r"fix|correct\w*|resolve|recheck|recommend\w*|suggest\w*|guidance|guide|advice|advise|next|"
+    r"first|priority|start)\b"
+    # asking for the material itself
+    r"|\b(?:check|verify|confirm|review|inspect|examine|look|see|show|read|tell|explain|help|"
+    r"expect\w*|require\w*|meaning|imply|implies|"
+    r"evidence|detail\w*|citation\w*|cite\w*|support\w*|provide\w*|request|ask|send|obtain|"
+    r"need|give)\b",
+    re.IGNORECASE,
+)
+
+#: The shape of something a reviewer types AT A FINDING: an interrogative, optionally after a
+#: conversational opener ("and what do I check first?"). The shape matters as much as the words -
+#: it is what keeps an imperative request ("write me an email", "summarise the news") out even
+#: when it is short.
+_QUESTION_SHAPE: Final = re.compile(
+    r"^(?:(?:and|so|ok|okay|then|also|but)\s+)?"
+    r"(?:why|how|what|which|where|when|who|can|could|should|is|are|does|do|did|will)\b",
+    re.IGNORECASE,
+)
+
+#: How long a record-relative question may be before it must carry an anchor word. Long
+#: questions have room to say what they are about; short ones are follow-ups by nature.
+_CONTINUATION_MAX_WORDS: Final = 7
+
+#: Shortest token kept from the anchor vocabulary. Three-letter words are too common to
+#: mean anything ("end", "sum", "day"), which is the whole reason for the floor.
+_MIN_ANCHOR_CHARS: Final = 4
+
+#: Field names are split on underscores as well as punctuation: a reviewer says "which line is
+#: affected", not "affected_line_ids", and a tokenizer that keeps the underscore can never match
+#: the two (which is exactly how a legitimate question was refused the first time).
+_PUNCTUATION: Final = re.compile(r"[^a-z0-9]+")
+
+
+def _words(text: object) -> set[str]:
+    """The comparable words of ``text``: lowercase alphanumeric tokens, punctuation dropped."""
+    if not isinstance(text, str):
+        return set()
+    return {token for token in _PUNCTUATION.split(text.casefold()) if token}
+
+
+def _answer_text(answer: object) -> str:
+    """Every string inside a stored turn's answer, flattened for vocabulary purposes."""
+    if isinstance(answer, str):
+        return answer
+    if isinstance(answer, Mapping):
+        stored = cast("Mapping[str, Any]", answer)
+        return " ".join(_answer_text(value) for value in stored.values())
+    if isinstance(answer, (list, tuple)):
+        stored_list = cast("Sequence[Any]", answer)
+        return " ".join(_answer_text(value) for value in stored_list)
+    return ""
+
+
+def anchor_words(
+    finding: Mapping[str, Any],
+    *,
+    rule: Mapping[str, Any] | None = None,
+    envelope: Mapping[str, Any] | None = None,
+    policy: Mapping[str, Any] | None = None,
+    history: Sequence[Mapping[str, Any]] = (),
+) -> frozenset[str]:
+    """The vocabulary in which a question about THIS finding can reasonably be asked.
+
+    Built from what the reviewer is looking at, never from a topic list: the rule's identity and
+    text, the fields its evidence cites, the shape and identifiers of the claim itself, the
+    policy, and the conversation so far (a follow-up legitimately reuses the words the previous
+    answer introduced).
+    """
+    words: set[str] = set()
+
+    def add(value: object) -> None:
+        words.update(_words(value))
+
+    # The finding: its identity, its verdict words, the NAMES of its own fields (a reviewer
+    # asks "which line is affected?" - `affected_line_ids` is where that word comes from) and
+    # every field its evidence cites.
+    for key in finding:
+        add(key)
+    add(finding.get("rule_id"))
+    add(finding.get("claim_id"))
+    add(finding.get("status"))
+    add(finding.get("severity"))
+    add(finding.get("explanation"))
+    add(finding.get("corrective_action"))
+    evidence = finding.get("evidence")
+    if isinstance(evidence, Sequence):
+        for entry in cast("Sequence[Any]", evidence):
+            if isinstance(entry, Mapping):
+                add(cast("Mapping[str, Any]", entry).get("path"))
+
+    # The rule as the catalogue states it.
+    for key in ("rule_id", "title", "logic", "corrective_action"):
+        add(None if rule is None else rule.get(key))
+
+    # The claim: its identifiers and the NAMES of its fields, which is the vocabulary a reviewer
+    # naturally uses ("coverage", "service", "quantity", "authorization").
+    if envelope is not None:
+        for key in envelope:
+            add(key)
+        for key in (
+            "claim_id",
+            "policy_id",
+            "payer_id",
+            "provider_id",
+            "diagnosis_code",
+            "currency",
+        ):
+            add(envelope.get(key))
+        try:
+            for code in claim_service_codes(envelope):
+                add(code)
+        except (
+            TypeError,
+            ValueError,
+        ):  # pragma: no cover - a malformed envelope is refused earlier
+            pass
+
+    # The policy, plus the service codes it prices.
+    if policy is not None:
+        add(policy.get("policy_id"))
+        add(policy.get("payer_id"))
+        add(policy.get("currency"))
+
+    # What has already been said in this conversation.
+    for turn in history:
+        add(turn.get("question"))
+        add(_answer_text(turn.get("answer")))
+
+    return frozenset(
+        word for word in words if len(word) >= _MIN_ANCHOR_CHARS and word not in _GENERIC_WORDS
+    )
+
+
+def in_scope(
+    question: str,
+    finding: Mapping[str, Any],
+    *,
+    rule: Mapping[str, Any] | None = None,
+    envelope: Mapping[str, Any] | None = None,
+    policy: Mapping[str, Any] | None = None,
+    history: Sequence[Mapping[str, Any]] = (),
+) -> bool:
+    """True when ``question`` is about this finding rather than about something else.
+
+    Two ways to qualify, and no third: it shares a word with :func:`anchor_words`, or it is a
+    short question whose predicate is about the record on screen ("why is this flagged?").
+    """
+    stripped = question.strip()
+    if not stripped:
+        return False
+    words = _words(stripped)
+    if words & anchor_words(finding, rule=rule, envelope=envelope, policy=policy, history=history):
+        return True
+    return bool(
+        len(words) <= _CONTINUATION_MAX_WORDS
+        and _QUESTION_SHAPE.match(stripped)
+        and _GUIDANCE_WORDS.search(stripped)
+    )
+
 
 #: A claim id as the pack writes them (`PHASE1-JSON-001`), used to notice that the
 #: reviewer has switched claims.
@@ -295,11 +623,21 @@ def _record_value(value: Any) -> str:
     return value.strip() if isinstance(value, str) else ""
 
 
-def scope_refusal(question: str, finding: Mapping[str, Any]) -> str | None:
+def scope_refusal(
+    question: str,
+    finding: Mapping[str, Any],
+    *,
+    rule: Mapping[str, Any] | None = None,
+    envelope: Mapping[str, Any] | None = None,
+    policy: Mapping[str, Any] | None = None,
+    history: Sequence[Mapping[str, Any]] = (),
+) -> str | None:
     """The refusal code for ``question``, or ``None`` when it is in scope.
 
-    Deterministic, model-free, and total: this is the check that must hold even
-    when nothing else in the graph works.
+    Deterministic, model-free, and total: this is the check that must hold even when nothing else
+    in the graph works. The optional context (rule, envelope, policy, history) is what makes the
+    GROUNDING test possible; without it only the pattern checks run, which is exactly the weaker
+    behaviour that let off-topic questions through.
     """
     text = question.strip()
     if not text:
@@ -330,6 +668,8 @@ def scope_refusal(question: str, finding: Mapping[str, Any]) -> str | None:
     if rule_id and any(token != rule_id for token in _RULE_ID.findall(text)):
         return "other_claim"
     if _OFF_TOPIC_WORDS.search(text):
+        return "off_topic"
+    if not in_scope(text, finding, rule=rule, envelope=envelope, policy=policy, history=history):
         return "off_topic"
     return None
 
@@ -374,7 +714,14 @@ def guard_scope(state: AssistantState) -> dict[str, Any]:
     """Node 1 — refuse an out-of-scope question before any model is involved."""
     finding = state["finding"]
     rule = state["rule"]
-    code = scope_refusal(state.get("question", ""), finding)
+    code = scope_refusal(
+        state.get("question", ""),
+        finding,
+        rule=rule,
+        envelope=state.get("envelope"),
+        policy=state.get("policy"),
+        history=state.get("history", ()),
+    )
     if code is None:
         return {"reasons": _add_reasons(state)}
     return {

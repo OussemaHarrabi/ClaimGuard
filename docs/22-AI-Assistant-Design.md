@@ -47,7 +47,7 @@ and only two nodes can call a model.
 
 ```mermaid
 flowchart TD
-    Q[Reviewer question, or the opening “why is this flagged?”] --> G[guard_scope<br/>deterministic]
+    Q[Reviewer question, or the opening “why is this flagged?”] --> G[guard_scope<br/>deterministic<br/>grounding, not a blocklist]
     G -->|out of scope| R[refused<br/>plain refusal + reason]
     G -->|in scope| C[gather<br/>deterministic tools]
     C --> D[draft<br/>MODEL CALL]
@@ -63,13 +63,60 @@ flowchart TD
 
 | Node | Model? | What it does |
 |---|---|---|
-| `guard_scope` | no | Refuses questions asking for a decision, clinical advice, or anything outside this claim. Runs *before* any model is reachable. |
+| `guard_scope` | no | Refuses questions asking for a decision, clinical advice, or anything that is not about this claim, by **grounding** rather than by blocklist (§3.1). Runs *before* any model is reachable. |
 | `gather` | no | The tool belt: the finding, the values its evidence points at, the rule's own text, the relevant policy limits. Read-only, total, no network. |
 | `draft` | **yes** | The single drafting call, with a pinned system prompt and the gathered context. |
 | `verify` | no | `validate_explanation(...)`: exact key set, every cited path re-resolved against the original claim, citations must belong to this finding, prohibited assertions, injection detection, echo guard. |
 | `repair` | **yes** | One bounded re-draft that is *given the rejection reasons*. `MAX_REPAIR_ATTEMPTS = 1`: a model that cannot satisfy the verifier twice will not satisfy it on the fifth, and every extra attempt is another chance to be talked into something the guards exist to prevent. |
 | `fallback` | no | The deterministic explanation, served with `verification='fallback'` and the reasons. The reviewer always gets an answer. |
 | `finalize` | no | The SHA-256 receipt over the served answer, the latency, the model and prompt versions. |
+
+### 3.1 The scope guard decides positively, and why that had to change
+
+The first version refused a *blocklist* of phrasings — injection, "should we pay", "medically
+necessary", a short list of plainly unrelated topics — and relied on the verifier to catch anything
+subtler. **That did not hold, and it shipped a real hole.** Measured against the running service:
+
+| Question | Blocklist-only guard | Now |
+|---|---|---|
+| "Is this patient diabetic?" | **answered** | refused — `clinical_advice` |
+| "How much should we bill for this procedure?" | **answered** | refused — `decision_request` |
+| "Who won the 2022 World Cup?" | **answered** | refused — `off_topic` |
+| "Write me a Python script to scrape LinkedIn." | **answered** | refused — `off_topic` |
+
+Two things were wrong. The blocklist could not enumerate the space, and — more importantly — the
+verifier was never going to catch it: it checks the *shape* of an answer (exactly five keys, every
+citation re-resolved, no prohibited assertions), and a model asked about the World Cup happily
+returns that shape, citing this finding's evidence, with the World Cup in the `explanation` field.
+
+Scope is therefore decided **positively**. A question is in scope when it shares at least one word
+with the vocabulary of the finding in front of the reviewer:
+
+* the rule's identity and its own text (`title`, `logic`, `corrective_action`);
+* the names and values of the fields the finding's evidence cites;
+* the names and identifiers of the claim itself — including its field names, which is how a reviewer
+  talks ("which line is affected?" comes from `affected_line_ids`);
+* the policy, and the service codes it prices;
+* **and everything already said in this conversation**, so a follow-up may legitimately reuse the
+  words the previous answer introduced.
+
+Words that are true of any claim sentence (`claim`, `line`, `amount`, `patient`, `status`, …) are
+excluded from that vocabulary, because sharing one of them proves nothing — "is this patient
+diabetic?" would otherwise anchor on "patient" alone.
+
+Two narrow allowances keep it usable: a **short** question (≤ 7 words) that is an interrogative and
+whose predicate is about the record itself ("why is this flagged?", "what should I check first?") is
+in scope even with no anchor word; and everything unmatched is refused with a reason rather than
+answered.
+
+**Measured** over 900 real finding contexts (60 development claims × their 15 rules): **0 of 21,600
+off-topic questions answered, 0 of 9,000 legitimate questions refused.** The patterns remain as the
+first line — they are cheap, they name the *reason* (`injection` / `decision_request` /
+`clinical_advice`), and they run before the vocabulary is even built.
+
+The residual risk is stated rather than hidden: a short off-topic question that happens to contain
+one of the record-relative words can still pass the guard. The answer it then receives must satisfy
+the verifier, and it can never change a status — but the guard is a filter, not a proof.
 
 ## 4. Data flow
 
@@ -133,6 +180,11 @@ not confirm that someone else's conversation exists. Exceeding the thread's turn
 | Can the conversation change a claim's outcome? | No. It is a separate, append-only table; the decision path does not read it. |
 | Can a reviewer see another reviewer's conversation? | No — the thread key includes the reviewer, and every read is tenant- and owner-scoped. |
 | Is the conversation auditable after the fact? | Yes: append-only turns, each with the model version, prompt version, verification outcome, reasons and receipt. |
+
+**The interface does not name the model.** An answer is labelled by *how it was produced*
+("AI-assisted wording", "checked by the verifier", or the deterministic text with the reason it stood
+in) — never by provider or model identifier. The provider and model version are still recorded on
+every turn and served by the API, because an auditor needs them; a reviewer does not.
 
 **The honest limit.** While a cloud model is enabled, the evidence values cited by a finding *do*
 leave the machine. That is a deliberate, temporary deployment choice: the product is designed for a

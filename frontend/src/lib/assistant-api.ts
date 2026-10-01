@@ -62,6 +62,13 @@ export type AssistantConversation = {
   turns: AssistantTurnPayload[];
 };
 
+/** Whether the assistant can answer, and with what. Called before the first request so the
+ *  panel can label a deterministic answer honestly instead of implying a model wrote it.
+ *
+ *  ``mode``, ``model`` and the free-text ``detail`` name a provider and its model (and the
+ *  deployment's configuration around them). They are read here because the route is the contract,
+ *  and deliberately never rendered: the interface tells a reviewer *whether* an AI drafted the
+ *  wording, not which vendor produced it. */
 export type AssistantStatus = {
   enabled: boolean;
   mode: string;

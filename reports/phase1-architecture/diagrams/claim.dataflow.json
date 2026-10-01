@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Claim package data flow",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1075, 610]
+  },
+  "stages": [
+    { "label": "Source" },
+    { "label": "Normalize" },
+    { "label": "Check" },
+    { "label": "Review" },
+    { "label": "Record" }
+  ],
+  "nodes": [
+    { "id": "jsonCsv", "type": "external", "label": "JSON or CSV", "sublabel": "synthetic files", "stage": 0, "row": 0 },
+    { "id": "fhirSource", "type": "external", "label": "FHIR Bundle", "sublabel": "Bundle + sidecar", "stage": 0, "row": 2 },
+    { "id": "intake", "type": "backend", "label": "Intake gate", "sublabel": "verify / quarantine", "stage": 1, "row": 1 },
+    { "id": "envelope", "type": "database", "label": "Claim envelope", "sublabel": "17-key contract", "stage": 1, "row": 2 },
+    { "id": "engine", "type": "backend", "label": "15 payer rules", "sublabel": "deterministic", "stage": 2, "row": 2 },
+    { "id": "results", "type": "database", "label": "Result records", "sublabel": "evidence + action", "stage": 3, "row": 2 },
+    { "id": "guidance", "type": "security", "label": "Guidance gate", "sublabel": "verify or fallback", "stage": 3, "row": 0 },
+    { "id": "reviewer", "type": "frontend", "label": "Human review", "sublabel": "correct or decide", "stage": 4, "row": 0, "width": 112 },
+    { "id": "persistence", "type": "database", "label": "Versioned store", "sublabel": "immutable rows", "stage": 4, "row": 2, "width": 112 },
+    { "id": "ledger", "type": "database", "label": "Audit ledger", "sublabel": "chained events", "stage": 4, "row": 3, "width": 112 }
+  ],
+  "flows": [
+    { "id": "jsonIntake", "from": "jsonCsv", "to": "intake", "label": "file content", "variant": "emphasis" },
+    { "id": "fhirIntake", "from": "fhirSource", "to": "intake", "label": "Bundle and sidecar", "variant": "security" },
+    { "id": "intakeEnvelope", "from": "intake", "to": "envelope", "label": "validated fields", "variant": "emphasis", "labelAt": [315, 314] },
+    { "id": "envelopeEngine", "from": "envelope", "to": "engine", "label": "canonical claim", "variant": "emphasis" },
+    { "id": "engineResults", "from": "engine", "to": "results", "label": "R001-R015", "variant": "emphasis" },
+    { "id": "resultsGuidance", "from": "results", "to": "guidance", "label": "flagged evidence", "variant": "security" },
+    { "id": "guidanceReviewer", "from": "guidance", "to": "reviewer", "label": "verified next step", "variant": "security" },
+    { "id": "resultsPersistence", "from": "results", "to": "persistence", "label": "15 structured rows", "variant": "emphasis" },
+    { "id": "reviewerPersistence", "from": "reviewer", "to": "persistence", "label": "new version or decision", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [960, 200] },
+    { "id": "persistenceLedger", "from": "persistence", "to": "ledger", "label": "run and decision events", "variant": "security", "fromSide": "bottom", "toSide": "top", "route": "straight", "labelAt": [960, 445] }
+  ]
+}

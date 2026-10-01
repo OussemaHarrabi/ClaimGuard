@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState } from "react";
-import { AlertTriangle, CircleAlert, Send, ShieldCheck, Sparkles } from "lucide-react";
+import { AlertTriangle, CircleAlert, Send, ShieldCheck, WandSparkles } from "lucide-react";
 
 import { Button } from "./ui/button";
 import { Textarea } from "./ui/textarea";
@@ -38,13 +38,14 @@ type Failure = {
   readonly message: string;
 };
 
-/** Plain-word labels. A fallback never borrows the model's wording: the reviewer has to see
- *  that the deterministic text stood in. */
+/** Plain-word labels. A fallback never borrows the assistant's wording: the reviewer has to see
+ *  that the deterministic text stood in. Deliberately provider- and model-free — which model
+ *  drafted an answer is an audit record (the API and the database keep it), not reviewer prose. */
 const VERIFICATION_LABELS: Record<AssistantVerification, string> = {
-  accepted: "Model-assisted answer",
-  repaired: "Model answer, repaired by the verifier",
-  fallback: "Deterministic fallback",
-  refused: "Refused by the assistant",
+  accepted: "AI-assisted wording",
+  repaired: "AI-assisted wording, repaired by the verifier",
+  fallback: "AI wording not used — deterministic explanation shown",
+  refused: "Declined by the assistant",
 };
 
 const VERIFICATION_TONES: Record<AssistantVerification, string> = {
@@ -82,14 +83,11 @@ function readAnswer(answer: AssistantAnswerPayload | null): AssistantAnswerPaylo
   };
 }
 
-/** What produced this answer, in the reviewer's words. A fallback says so instead of showing a
- *  model version the answer did not come from. */
-function modelLine(turn: AssistantTurnPayload) {
-  const latency = typeof turn.latency_ms === "number" ? `${turn.latency_ms} ms` : null;
-  if (turn.verification === "fallback" || turn.verification === "refused") {
-    return ["No model wording used", latency].filter((part): part is string => Boolean(part)).join(" · ");
-  }
-  return [turn.model_version, latency].filter((part): part is string => Boolean(part)).join(" · ");
+/** The secondary line beside a turn's label. Latency is the reviewer's own signal — how long the
+ *  answer took — and it is all that belongs there: the provider and model that drafted the turn
+ *  stay in the audit record the API and database keep, and are never rendered here. */
+function turnMeta(turn: AssistantTurnPayload): string | null {
+  return typeof turn.latency_ms === "number" ? `${turn.latency_ms} ms` : null;
 }
 
 function AssistantTurnView({
@@ -103,6 +101,7 @@ function AssistantTurnView({
 }) {
   const answer = readAnswer(turn.answer);
   const reasons = Array.isArray(turn.reasons) ? turn.reasons : [];
+  const meta = turnMeta(turn);
 
   return (
     <li
@@ -114,7 +113,7 @@ function AssistantTurnView({
         <span className={`provenance ${VERIFICATION_TONES[turn.verification]}`}>
           {VERIFICATION_LABELS[turn.verification]}
         </span>
-        <span>{modelLine(turn)}</span>
+        {meta ? <span>{meta}</span> : null}
       </div>
 
       {answer ? (
@@ -182,10 +181,6 @@ function AssistantTurnView({
             <dd>{turn.verification}</dd>
           </div>
           <div>
-            <dt>Model</dt>
-            <dd>{turn.model_version || "not recorded"}</dd>
-          </div>
-          <div>
             <dt>Prompt</dt>
             <dd>{turn.prompt_version || "not recorded"}</dd>
           </div>
@@ -210,7 +205,8 @@ function AssistantTurnView({
 }
 
 /**
- * The assistant surface beside one finding.
+ * The assistant surface inside one finding's guidance column, under the deterministic wording
+ * and the rule-based next step, above the technical provenance.
  *
  * It reads a stored run and writes only its own conversation: the deterministic engine stays the
  * authority on status, severity, evidence and routing, which is why every answer carries its own
@@ -218,7 +214,9 @@ function AssistantTurnView({
  *
  * The first explanation and the status check are requested by the reviewer's click, not on
  * render: a cockpit with twelve findings must not fire twelve model requests just because the
- * claim was opened.
+ * claim was opened. Re-opening asks for the same thread again — ``POST …/explain`` opens or
+ * resumes it — so the turns a reviewer already read come back instead of being lost with the
+ * panel.
  */
 export function AssistantPanel({ runId, ruleId, evidence }: AssistantPanelProps) {
   const panelId = useId();
@@ -310,10 +308,13 @@ export function AssistantPanel({ runId, ruleId, evidence }: AssistantPanelProps)
 
   const turns = conversation?.turns ?? [];
   const busy = pending !== null;
+  // What the reviewer is about to read, in their own words. The provider, its mode and the model
+  // name the status route reports stay out of the interface: a reviewer needs to know whether an
+  // AI drafted the wording, not which vendor produced it.
   const scopeLabel = status
     ? status.enabled
-      ? `Model-assisted · ${status.model} · ${status.prompt_version}`
-      : `Deterministic explanations only · ${status.detail}`
+      ? "AI-assisted wording, checked by the verifier"
+      : "Deterministic explanations only"
     : null;
 
   return (
@@ -324,11 +325,13 @@ export function AssistantPanel({ runId, ruleId, evidence }: AssistantPanelProps)
         type="button"
         aria-expanded={open}
         aria-controls={panelId}
-        aria-label={`Explain with AI for finding ${ruleId}`}
+        aria-label={
+          open ? `XAI: hide the explanation for ${ruleId}` : `XAI: explain finding ${ruleId}`
+        }
         onClick={toggle}
       >
-        <Sparkles size={15} aria-hidden="true" />
-        {open ? "Hide assistant" : "Explain with AI"}
+        <WandSparkles size={16} aria-hidden="true" />
+        XAI
       </Button>
 
       {started ? (
@@ -338,16 +341,16 @@ export function AssistantPanel({ runId, ruleId, evidence }: AssistantPanelProps)
               className="assistant-panel"
               id={panelId}
               role="region"
-              aria-label={`AI assistant for ${ruleId}`}
+              aria-label={`XAI assistant for ${ruleId}`}
               tabIndex={-1}
               ref={regionRef}
             >
               <div className="assistant-panel-head">
                 <span className="assistant-mark" aria-hidden="true">
-                  <Sparkles size={15} />
+                  <WandSparkles size={15} />
                 </span>
                 <div>
-                  <p className="eyebrow">Interactive assistant</p>
+                  <p className="eyebrow">XAI</p>
                   <h4>Ask about {ruleId}</h4>
                 </div>
                 {scopeLabel ? (
