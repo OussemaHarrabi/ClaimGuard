@@ -103,8 +103,14 @@ syntax like `level:error service:api`; collapsible JSON.
 **Traces:** category cards that group recent traces by request family (claim
 submission, claims, review, intake, auth, ops, other). Each card shows a title,
 description, trace count and the slowest duration in the family. Clicking a card
-opens a detail timeline with method, route, duration against a baseline,
-status-class badge and trace id. Empty categories stay visible and read
+opens a detail timeline where each row explains that it is one request, that the
+duration is total time from start to response, and labels each value as either
+"total time" or "slowest". The list is sorted by start time and offers a pause
+control so live WebSocket updates do not reorder values while they are being
+read. Clicking a request opens a span-flow waterfall: the parent span and its
+children nested by depth, each bar positioned by start time and sized by
+duration, so a reader can see exactly where the time went (e.g. a database call
+inside a rule-evaluation span). Empty categories stay visible and read
 "no traffic" so the manager can see what parts of the API surface are idle.
 
 ## 6. Motion

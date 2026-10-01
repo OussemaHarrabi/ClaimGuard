@@ -407,6 +407,101 @@ describe("OpsConsole", () => {
     expect(screen.getByText("GET /v1/claims")).toBeInTheDocument();
   });
 
+  it("uses singular metric units when a count is exactly one", async () => {
+    mockSnapshot({
+      metrics: makeMetrics({
+        series: [
+          { name: "http_requests_total", labels: { route_template: "/v1/claims", method: "GET", status_class: "2xx" }, value: 1 },
+        ],
+      }),
+    });
+    render(<OpsConsole section="metrics" variant="embedded" />);
+
+    const httpCard = await screen.findByRole("button", { name: /HTTP requests:/i });
+    expect(httpCard.textContent).toMatch(/1\s+request/);
+
+    fireEvent.click(httpCard);
+    expect(await screen.findByText("Back to categories")).toBeInTheDocument();
+    const row = screen.getByText("Listing claims").closest("li");
+    expect(row?.textContent).toMatch(/1\s+request/);
+  });
+
+  it("translates review decision action labels into plain language", async () => {
+    mockSnapshot({
+      metrics: makeMetrics({
+        series: [{ name: "claimguard_decisions_total", labels: { action: "confirm_issue" }, value: 1 }],
+      }),
+    });
+    render(<OpsConsole section="metrics" variant="embedded" />);
+
+    const decisionsCard = await screen.findByRole("button", { name: /Review decisions:/i });
+    fireEvent.click(decisionsCard);
+
+    expect(await screen.findByText("Back to categories")).toBeInTheDocument();
+    expect(screen.getByText("Confirmed as a real issue")).toBeInTheDocument();
+  });
+
+  it("opens a trace and shows its span flow waterfall", async () => {
+    const traceDetail = {
+      source: { state: "healthy", last_data_at: CHECKED_AT, detail: null },
+      trace_id: "trace-1",
+      root_name: "GET /v1/claims",
+      duration_ms: 412,
+      spans: [
+        {
+          span_id: "root",
+          parent_span_id: null,
+          name: "GET /v1/claims",
+          service: "api",
+          start_offset_ms: 0,
+          duration_ms: 412,
+          depth: 0,
+          status: "ok",
+        },
+        {
+          span_id: "eval",
+          parent_span_id: "root",
+          name: "claim.evaluate",
+          service: "api",
+          start_offset_ms: 40,
+          duration_ms: 143,
+          depth: 1,
+          status: "ok",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/v1/operations/traces/trace-1")) {
+          return { ok: true, json: async () => traceDetail };
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    mockSnapshot();
+    render(<OpsConsole section="traces" variant="embedded" />);
+
+    const claimCard = await screen.findByRole("button", { name: "Claim queries: 1 trace" });
+    fireEvent.click(claimCard);
+
+    const traceRow = await screen.findByRole("button", { name: /Trace trace-1:/i });
+    fireEvent.click(traceRow);
+
+    expect(await screen.findByText("Trace flow")).toBeInTheDocument();
+    expect(screen.getByText("claim.evaluate")).toBeInTheDocument();
+
+    const header = screen.getByText("total").closest(".ops-trace-flow-header");
+    expect(header).toBeInTheDocument();
+    expect(within(header as HTMLElement).getByText("412 ms")).toBeInTheDocument();
+
+    const timeline = screen.getByLabelText("Spans for trace trace-1");
+    expect(within(timeline).getByText("143 ms")).toBeInTheDocument();
+
+    vi.unstubAllGlobals();
+  });
+
   it("renders the activity feed with sentence rows, area badge, and outcome chip", async () => {
     mockSnapshot({
       activity: makeActivity({

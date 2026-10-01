@@ -15,6 +15,8 @@ import {
   ChevronRight,
   Clock,
   LayoutDashboard,
+  Pause,
+  Play,
   RefreshCw,
   Timer,
   Users,
@@ -447,6 +449,13 @@ const OUTCOME_MEANING: Record<string, Record<string, string>> = {
   },
 };
 
+const ACTION_MEANING: Record<string, string> = {
+  confirm_issue: "Confirmed as a real issue",
+  dismiss_with_reason: "Dismissed with a recorded reason",
+  request_information: "More information requested",
+  mark_corrected_for_recheck: "Marked corrected and rechecked",
+};
+
 function routeAction(route: string, method: string): string {
   const normalizedRoute = route ?? "";
   const normalizedMethod = (method ?? "").toUpperCase();
@@ -456,6 +465,20 @@ function routeAction(route: string, method: string): string {
     return `${normalizedMethod} ${normalizedRoute}`;
   }
   return normalizedRoute ? `${normalizedMethod} ${normalizedRoute}` : normalizedMethod;
+}
+
+const UNIT_SINGULAR: Record<string, string> = {
+  requests: "request",
+  observations: "observation",
+  claims: "claim",
+  decisions: "decision",
+  jobs: "job",
+  turns: "turn",
+  samples: "sample",
+};
+
+function pluralUnit(count: number, unit: string): string {
+  return count === 1 ? (UNIT_SINGULAR[unit] ?? unit) : unit;
 }
 
 function metricCategoryUnit(categoryKey: string): string {
@@ -499,6 +522,14 @@ function metricLineDescription(series: OpsMetricSeries): MetricLineDescription {
       const meaning = OUTCOME_MEANING[familyKey]?.[labels.outcome] ?? `outcome ${labels.outcome}`;
       return { primary: familyTitle, secondary: meaning, raw };
     }
+  }
+
+  if (labels.action) {
+    const familyTitle = name.includes("decisions")
+      ? (METRIC_CATEGORIES.find((c) => c.key === "decisions")?.title ?? "Review decision")
+      : "Action";
+    const meaning = ACTION_MEANING[labels.action] ?? `action ${labels.action}`;
+    return { primary: familyTitle, secondary: meaning, raw };
   }
 
   return { primary: series.name, secondary: raw || null, raw };
@@ -1345,7 +1376,7 @@ function MetricSeriesRow({ series, categoryTotal, changed, reduced, index }: Met
   const share = categoryTotal > 0 ? series.value / categoryTotal : 0;
   const heat = metricHeatLevel(series.value, categoryTotal || 1);
   const description = metricLineDescription(series);
-  const unit = metricCategoryUnit(metricCategory(series.name).key);
+  const unit = pluralUnit(series.value, metricCategoryUnit(metricCategory(series.name).key));
   const percent = Math.round(share * 100);
   const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
   return (
@@ -1361,17 +1392,17 @@ function MetricSeriesRow({ series, categoryTotal, changed, reduced, index }: Met
             <span className="ops-metric-series-detail">{description.secondary}</span>
           )}
         </div>
-        <div className="ops-metric-series-row-value">
-          <AnimatedNumber
-            value={series.value}
-            reduced={reduced}
-            className={`ops-metric-series-value ops-signal-heat-${heat}`}
-          />
-          <span className="ops-metric-series-unit">{unit}</span>
-          <span className="ops-metric-series-share" aria-hidden="true">
-            {percent}% of category
-          </span>
-        </div>
+      <div className="ops-metric-series-row-value">
+        <AnimatedNumber
+          value={series.value}
+          reduced={reduced}
+          className={`ops-metric-series-value ops-signal-heat-${heat}`}
+        />{" "}
+        <span className="ops-metric-series-unit">{unit}</span>
+        <span className="ops-metric-series-share" aria-hidden="true">
+          {percent}% of category
+        </span>
+      </div>
       </div>
       <div className="ops-metric-series-row-bar" aria-hidden="true">
         <div
@@ -1559,7 +1590,7 @@ function MetricCategoryCard({ summary, index, reduced, onSelect }: MetricCategor
           <>
             <span className="ops-category-card-figure">
               <AnimatedNumber value={summary.total} reduced={reduced} />{" "}
-              {metricCategoryUnit(summary.category.key)}
+              {pluralUnit(summary.total, metricCategoryUnit(summary.category.key))}
             </span>
             <span className="ops-category-card-hint">
               view details
@@ -1662,6 +1693,13 @@ function summarizeTraces(traces: readonly OpsTrace[]): TraceCategorySummary[] {
     } else {
       map.set(cat.key, { category: cat, traces: [t] });
     }
+  }
+  for (const summary of map.values()) {
+    summary.traces.sort((a, b) => {
+      const byTime = new Date(b.start_time).getTime() - new Date(a.start_time).getTime();
+      if (byTime !== 0) return byTime;
+      return a.trace_id.localeCompare(b.trace_id);
+    });
   }
   return Array.from(map.values()).sort((a, b) => a.category.title.localeCompare(b.category.title));
 }
@@ -1800,10 +1838,67 @@ type TraceCategoryDetailProps = {
   onBack: () => void;
 };
 
+type OpsSpan = {
+  span_id: string;
+  parent_span_id: string | null;
+  name: string;
+  service: string;
+  start_offset_ms: number;
+  duration_ms: number;
+  depth: number;
+  status: "ok" | "error";
+};
+
+type OpsTraceDetailResponse = {
+  source: import("@/lib/ops-api").OpsSource;
+  trace_id: string;
+  root_name: string;
+  duration_ms: number;
+  spans: OpsSpan[];
+};
+
+async function fetchTraceDetail(traceId: string, signal?: AbortSignal): Promise<OpsTraceDetailResponse> {
+  const response = await fetch(`/v1/operations/traces/${encodeURIComponent(traceId)}`, {
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = (await response.json()) as { detail?: string; message?: string };
+      detail = payload.detail ?? payload.message ?? detail;
+    } catch {
+      // keep the HTTP detail if the body is not JSON
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as OpsTraceDetailResponse;
+}
+
 function TraceCategoryDetail({ summary, source, reduced, onBack }: TraceCategoryDetailProps) {
-  const durations = summary.traces.map((t) => t.duration_ms);
+  const [paused, setPaused] = useState(false);
+  const [heldSummary, setHeldSummary] = useState(summary);
+  const [viewedTraceId, setViewedTraceId] = useState<string | null>(null);
+
+  if (!paused && heldSummary !== summary) {
+    setHeldSummary(summary);
+  }
+
+  const displaySummary = paused ? heldSummary : summary;
+  const durations = displaySummary.traces.map((t) => t.duration_ms);
   const slowest = durations.length > 0 ? Math.max(...durations) : 0;
   const maxDuration = Math.max(1, slowest);
+
+  if (viewedTraceId) {
+    return (
+      <TraceFlowView
+        traceId={viewedTraceId}
+        source={source}
+        reduced={reduced}
+        onBack={() => setViewedTraceId(null)}
+      />
+    );
+  }
 
   return (
     <div className="ops-category-detail">
@@ -1813,20 +1908,36 @@ function TraceCategoryDetail({ summary, source, reduced, onBack }: TraceCategory
           <span>Back to categories</span>
         </button>
         <div className="ops-category-detail-title">
-          <span className="ops-panel-title">{summary.category.title}</span>
-          <span className="ops-category-detail-meta">{summary.category.description}</span>
+          <span className="ops-panel-title">{displaySummary.category.title}</span>
+          <span className="ops-category-detail-meta">{displaySummary.category.description}</span>
         </div>
+        {displaySummary.traces.length > 0 && (
+          <button
+            type="button"
+            className={`ops-trace-pause ${paused ? "ops-trace-pause-active" : ""}`}
+            onClick={() => setPaused((p) => !p)}
+            aria-pressed={paused}
+            aria-label={paused ? "Resume live updates" : "Pause live updates"}
+          >
+            {paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}
+            <span>{paused ? "live" : "pause"}</span>
+          </button>
+        )}
       </div>
 
-      {summary.traces.length === 0 ? (
+      {displaySummary.traces.length === 0 ? (
         <div className="ops-empty-state">
           <Timer size={24} aria-hidden="true" />
           <p>No traffic in this category.</p>
         </div>
       ) : (
         <div className="ops-traces-body">
-          <ul className="ops-trace-rows" aria-label={`${summary.category.title} traces`}>
-            {summary.traces.map((t, i) => (
+          <p className="ops-traces-explainer">
+            Each row is one request. Duration is the total time from request start to response.
+            Typical = median of the category; slowest = longest in the category.
+          </p>
+          <ul className="ops-trace-rows" aria-label={`${displaySummary.category.title} traces`}>
+            {displaySummary.traces.map((t, i) => (
               <TraceRow
                 key={t.trace_id}
                 trace={t}
@@ -1834,6 +1945,8 @@ function TraceCategoryDetail({ summary, source, reduced, onBack }: TraceCategory
                 maxDuration={maxDuration}
                 slowest={slowest}
                 reduced={reduced}
+                paused={paused}
+                onSelect={() => setViewedTraceId(t.trace_id)}
               />
             ))}
           </ul>
@@ -1844,6 +1957,8 @@ function TraceCategoryDetail({ summary, source, reduced, onBack }: TraceCategory
         <span>
           {source.name} {source.state}
         </span>
+        {paused && <span aria-hidden="true">·</span>}
+        {paused && <span>updates paused</span>}
       </div>
     </div>
   );
@@ -1855,9 +1970,169 @@ type TraceRowProps = {
   maxDuration: number;
   slowest: number;
   reduced: boolean;
+  paused?: boolean;
+  onSelect: () => void;
 };
 
-function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps) {
+type TraceFlowViewProps = {
+  traceId: string;
+  source: import("@/lib/ops-api").OpsSource;
+  reduced: boolean;
+  onBack: () => void;
+};
+
+function TraceFlowView({ traceId, source, reduced, onBack }: TraceFlowViewProps) {
+  const [detail, setDetail] = useState<Loadable<OpsTraceDetailResponse>>({ state: "loading" });
+  const [retryKey, setRetryKey] = useState(0);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let ignore = false;
+    fetchTraceDetail(traceId, controller.signal)
+      .then((data) => {
+        if (ignore) return;
+        setDetail({ state: "ok", data });
+      })
+      .catch((err) => {
+        if (ignore || controller.signal.aborted) return;
+        const message =
+          err instanceof Error && err.message.includes("404")
+            ? "Trace not found or expired."
+            : fetchErrorMessage(err);
+        setDetail({ state: "error", message });
+      });
+    return () => {
+      ignore = true;
+      controller.abort();
+    };
+  }, [traceId, retryKey]);
+
+  const retry = () => {
+    setDetail({ state: "loading" });
+    setRetryKey((k) => k + 1);
+  };
+
+  return (
+    <div className="ops-category-detail">
+      <div className="ops-category-detail-header">
+        <button type="button" className="ops-category-detail-back" onClick={onBack} aria-label="Back to trace list">
+          <ChevronLeft size={16} aria-hidden="true" />
+          <span>Back to traces</span>
+        </button>
+        <div className="ops-category-detail-title">
+          <span className="ops-panel-title">Trace flow</span>
+          <span className="ops-category-detail-meta">
+            {traceId} · {source.name} <StateBadge state={source.state} />
+          </span>
+        </div>
+      </div>
+
+      {detail.state === "loading" && (
+        <div className="ops-empty-state">
+          <Activity size={24} aria-hidden="true" className="ops-spin" />
+          <p>Loading span details…</p>
+        </div>
+      )}
+
+      {detail.state === "error" && (
+        <div className="ops-error-card">
+          <AlertTriangle size={18} aria-hidden="true" />
+          <span>{detail.message}</span>
+          <button type="button" onClick={() => retry()}>
+            Retry
+          </button>
+        </div>
+      )}
+
+      {detail.state === "ok" && <TraceFlowContent detail={detail.data} reduced={reduced} />}
+    </div>
+  );
+}
+
+function TraceFlowContent({ detail, reduced }: { detail: OpsTraceDetailResponse; reduced: boolean }) {
+  const totalMs = Math.max(1, detail.duration_ms);
+  const unavailable = detail.source.state !== "healthy";
+  const notFound = detail.spans.length === 0 && !unavailable;
+
+  if (unavailable) {
+    return (
+      <div className="ops-empty-state">
+        <AlertTriangle size={24} aria-hidden="true" />
+        <p>Tempo is currently unavailable — span details cannot be loaded.</p>
+      </div>
+    );
+  }
+
+  if (notFound) {
+    return (
+      <div className="ops-empty-state">
+        <Timer size={24} aria-hidden="true" />
+        <p>Trace not found or expired.</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="ops-trace-flow">
+      <div className="ops-trace-flow-header">
+        <div className="ops-trace-flow-title">
+          <span>{traceTitle(detail.root_name)}</span>
+          <span className="ops-trace-flow-route" title={detail.root_name}>
+            {detail.root_name}
+          </span>
+        </div>
+        <div className="ops-trace-flow-figures">
+          <span className="ops-trace-flow-figure">
+            total <strong>{formatDuration(detail.duration_ms)}</strong>
+          </span>
+          <span className="ops-trace-flow-figure">
+            spans <strong>{detail.spans.length.toLocaleString()}</strong>
+          </span>
+        </div>
+      </div>
+
+      <p className="ops-trace-flow-explainer">
+        Each row is a span — one step inside the request. The left edge is when it started;
+        the width is how long it took. Nested rows are children of the span above them.
+      </p>
+
+      <ul className="ops-trace-flow-timeline" aria-label={`Spans for trace ${detail.trace_id}`}>
+        {detail.spans.map((span, index) => {
+          const left = (span.start_offset_ms / totalMs) * 100;
+          const width = (span.duration_ms / totalMs) * 100;
+          const clampedLeft = clamp(left, 0, 100);
+          const clampedWidth = clamp(width, 0.2, 100 - clampedLeft);
+          const delay = reduced ? "0ms" : `${clamp(index, 0, MAX_STAGGER_NODES - 1) * STAGGER_MS}ms`;
+          return (
+            <li
+              key={span.span_id}
+              className={`ops-trace-flow-row ${reduced ? "" : "ops-trace-flow-row-enter"}`}
+              style={{
+                "--row-delay": delay,
+                paddingLeft: `${12 + span.depth * 18}px`,
+              } as React.CSSProperties}
+              title={`span ${span.span_id}${span.parent_span_id ? ` · parent ${span.parent_span_id}` : ""}`}
+            >
+              <div className="ops-trace-flow-row-label">
+                <span className="ops-trace-flow-row-name">{span.name}</span>
+                <span className="ops-trace-flow-row-service">{span.service}</span>
+              </div>
+              <div className="ops-trace-flow-row-track" aria-hidden="true">
+                <div
+                  className={`ops-trace-flow-row-bar ${span.status === "error" ? "ops-trace-flow-row-bar-error" : ""}`}
+                  style={{ left: `${clampedLeft}%`, width: `${clampedWidth}%` }}
+                />
+              </div>
+              <span className="ops-trace-flow-row-duration">{formatDuration(span.duration_ms)}</span>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function TraceRow({ trace, index, maxDuration, slowest, reduced, paused, onSelect }: TraceRowProps) {
   const title = traceTitle(trace.root_name);
   const latency = traceLatencyClass(trace.duration_ms);
   const isSlowest = trace.duration_ms === slowest && slowest > 0;
@@ -1869,9 +2144,10 @@ function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps
     <li>
       <button
         type="button"
-        className={`ops-trace-row ${isSlowest ? "ops-trace-row-slowest" : ""} ${reduced ? "" : "ops-trace-row-enter"}`}
+        className={`ops-trace-row ${isSlowest ? "ops-trace-row-slowest" : ""} ${reduced ? "" : "ops-trace-row-enter"} ${paused ? "ops-trace-row-paused" : ""}`}
         style={{ "--row-delay": delay } as React.CSSProperties}
-        aria-label={`Trace ${trace.trace_id}: ${trace.root_name} in ${trace.service}, ${formatDuration(trace.duration_ms)}${isSlowest ? " (slowest)" : ""}`}
+        onClick={onSelect}
+        aria-label={`Trace ${trace.trace_id}: ${trace.root_name} in ${trace.service}, ${formatDuration(trace.duration_ms)}${isSlowest ? " (slowest)" : ""}. Open span flow.`}
       >
         <div className="ops-trace-gutter">
           <span className="ops-trace-gutter-title" title={title}>
@@ -1888,16 +2164,21 @@ function TraceRow({ trace, index, maxDuration, slowest, reduced }: TraceRowProps
         </div>
         <div className="ops-trace-track" aria-hidden="true">
           <div
-            className={`ops-trace-bar ops-trace-bar-${latency} ${reduced ? "" : "ops-trace-bar-grow"}`}
+            className={`ops-trace-bar ops-trace-bar-${latency} ${reduced || paused ? "" : "ops-trace-bar-grow"}`}
             style={{
               "--bar-scale": String(scale),
               "--bar-delay": delay,
             } as React.CSSProperties}
           />
         </div>
-        <span className="ops-trace-duration">
-          {formatDuration(trace.duration_ms)}
-        </span>
+        <div className="ops-trace-value">
+          <span className="ops-trace-duration">
+            {formatDuration(trace.duration_ms)}
+          </span>
+          <span className="ops-trace-duration-label">
+            {isSlowest ? "slowest" : "total time"}
+          </span>
+        </div>
         <div className="ops-trace-detail">
           <span className="ops-trace-detail-id" title={trace.trace_id}>
             {trace.trace_id}
