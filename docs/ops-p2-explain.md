@@ -31,7 +31,7 @@ behind our API, never a screen the reviewer has to learn.
 
 ## 2. Capability map — what exists today
 
-Nine pages in the technical-manager workspace, all on the dark surface:
+Ten pages in the technical-manager workspace, all on the dark surface:
 
 | Page | What the reviewer gets | Where the data comes from |
 |---|---|---|
@@ -40,6 +40,7 @@ Nine pages in the technical-manager workspace, all on the dark surface:
 | **Traces** | requests grouped into categories, each explained, then drilled into | Tempo via the backend |
 | **Audit Integrity** | hash-chain verification status + event count | PostgreSQL audit ledger |
 | **Intake Jobs** | intake job counts by status | PostgreSQL |
+| **Redacted Logs** | recent intake job status and error codes — no document or claim content | PostgreSQL |
 | **Versions** | active rule / model / provider versions | PostgreSQL |
 | **Configuration** | tenant-scoped intake toggle — audited | PostgreSQL |
 | **Platform Activity** | who did what, in which area, with what outcome — filterable, live | PostgreSQL (real actor columns) |
@@ -607,4 +608,56 @@ would have removed an authorisation guarantee.
   and when it was last active. Selecting a role drills into its members and its own
   filtered feed. A role with no activity says so rather than showing zeroes as if they
   were data.
+
+---
+
+## 16. Merging the clinic platform into the operations branch
+
+The operations work lived on `ops-p2-test` while the clinic platform kept moving on
+`main`. Merging brought seven commits, three of which matter to this document:
+
+- **evidence-preserving document intake** — `create_intake_job` gained `source_format`,
+  `files` and `sidecar`;
+- **an interactive AI assistant** — four reviewer-facing routes (`GET /v1/ai/status`,
+  `POST /v1/runs/{run_id}/findings/{rule_id}/explain`,
+  `POST /v1/threads/{thread_id}/messages`, `GET /v1/threads/{thread_id}`) that read a
+  stored run and write only their own conversation, never the graded record;
+- **a frontend design refresh** — a new `ClinicDashboard`, a workspace topbar, and a
+  rewritten shared stylesheet.
+
+Only two files actually conflicted. **Every conflict was resolved by keeping both sides**,
+because in each case the two sides were adding different things rather than competing for
+the same thing: the import list; the constants block (this branch's span names, main's
+assistant contract); the intake call (main's new arguments *and* this branch's intake
+metric — the leader's feature was not traded away for a metric); and the layout element
+(this branch's `ops-dark` class *and* main's new topbar, which already renders only for
+non-operator roles).
+
+**One conflict was not a conflict — it was a trap.** Main added `audit-integrity` to the
+list of pages rendered by the shared clinic report component. That id belongs to the
+operator's Audit Integrity page, so listing it would have mounted a second component on
+the same page id and rendered two audit panels. It is the same double-render defect that
+had already broken Platform Activity, so it was removed from that list rather than merged
+in.
+
+**Merging also exposed a feature this branch had dropped.** Main has a *Redacted Logs*
+operator page (`GET /v1/redacted-logs`). It was missing from this branch's navigation and
+report map, and the merge preserved that removal silently, because main never touched
+those lines. The endpoint requires `READ_OPERATIONS`, which the technical manager holds,
+and returns no document or claim content, so it is a legitimate claim-blind operator page.
+It was restored in all three places it needs to exist — including the sidebar icon map,
+where a missing entry would crash the navigation on an undefined component.
+
+**What was verified after the merge:** ruff, ruff format, pyright (0 errors) and the
+backend suite (973 passed); frontend lint, typecheck and suite (85 passed); a runtime smoke
+test of every operator endpoint plus the new `/v1/ai/status`; and a browser pass over all
+6 operator pages and all 15 clinic-role pages, which reported no JavaScript errors on
+either surface.
+
+**Known cosmetic gap, stated rather than hidden:** the restored Redacted Logs page is
+rendered by the shared clinic report component, so it carries that component's header
+(eyebrow, title, description, Refresh) instead of the console chrome its nine siblings
+share (health pill, live badge, checked timestamp). The page is dark, readable and fully
+functional; it simply does not look like its neighbours yet.
+
 
