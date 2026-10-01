@@ -35,6 +35,8 @@ uncertain cases to a human. **Review, don't adjudicate.**
 
 For the current submission decision and remaining deliverables, see the
 [Phase-1 readiness assessment](docs/verification/PHASE-1-SUBMISSION-READINESS.md).
+To reproduce all three synthetic intake formats, a failed rule, correction and
+audit replay, follow the [hands-on Phase-1 rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md).
 The frontend opens on a public product landing page at `/`; use **Open workspace**
 or `/workspace/home` to sign in and reach the appropriate clinic role's home.
 

@@ -67,7 +67,7 @@ import os
 import threading
 from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Annotated, Any, Final, cast
+from typing import Annotated, Any, Final, Literal, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -823,7 +823,10 @@ def resolve_escalation(
 class IntakePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     filename: str
-    content: str
+    content: str = ""
+    source_format: Literal["envelope_json", "csv_split", "fhir_bundle"] = "envelope_json"
+    files: dict[str, str] | None = None
+    sidecar: dict[str, Any] | None = None
 
 
 def list_intake_jobs(request: Request) -> list[dict[str, Any]]:
@@ -839,7 +842,13 @@ def create_intake_job(request: Request, payload: IntakePayload) -> dict[str, Any
     principal, work = _workspaces(request, Action.CREATE_CLAIM)
     try:
         return work.create_intake_job(
-            principal.tenant_id, principal.user_id, payload.filename, payload.content
+            principal.tenant_id,
+            principal.user_id,
+            payload.filename,
+            payload.content,
+            source_format=payload.source_format,
+            files=payload.files,
+            sidecar=payload.sidecar,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc

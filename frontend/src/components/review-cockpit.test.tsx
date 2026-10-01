@@ -120,17 +120,20 @@ describe("ReviewCockpit", () => {
     expect(screen.getByRole("heading", { name: "Claims queue" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Deterministic findings" })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Explanation & next step" })).toBeInTheDocument();
-    expect(screen.getAllByText("Coverage ended before the service date.")).toHaveLength(1);
+    expect(screen.getAllByText("Issue: Coverage ended before the service date.")).toHaveLength(1);
     expect(screen.queryByRole("navigation", { name: "Primary navigation" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "ClaimGuard review workspace" })).not.toBeInTheDocument();
     expect(
-      within(screen.getByLabelText("Evidence for R004")).getByText("coverage end date"),
+      within(screen.getByLabelText("Evidence for R004")).getByText("Coverage · end date"),
     ).toBeInTheDocument();
     expect(screen.getByText(/AI wording cannot change this claim status/i)).toBeInTheDocument();
     expect(screen.getByText("Model-assisted wording")).toBeInTheDocument();
     expect(screen.getByText("benchmark-candidate")).toBeInTheDocument();
     expect(screen.getByText(/Verify the service date against the eligibility source/i)).toBeInTheDocument();
     expect(screen.getByLabelText("SLM correction recommendation for R004")).toBeInTheDocument();
+    const pairedFinding = screen.getByTestId("finding-R004");
+    expect(within(pairedFinding).getByTestId("explanation-R004")).toBeInTheDocument();
+    expect(within(pairedFinding).getByText(/Verify the service date against the eligibility source/i)).toBeInTheDocument();
     expect(screen.getByText(/Receipt aaaaaaaa/i)).toBeInTheDocument();
     expect(screen.getAllByText("slm-benchmark-pending")).not.toHaveLength(0);
     expect(screen.getAllByText("explain-v1")).not.toHaveLength(0);

@@ -198,31 +198,76 @@ class WorkspaceStore:
         return dict(row) if row else None
 
     def create_intake_job(
-        self, tenant_id: str, actor: str, filename: str, content: str
+        self,
+        tenant_id: str,
+        actor: str,
+        filename: str,
+        content: str,
+        source_format: str = "envelope_json",
+        files: dict[str, str] | None = None,
+        sidecar: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        if len(content.encode("utf-8")) > 64 * 1024:
+        from claimguard.clinic.intake_formats import (
+            IntakeNormalizationError,
+            normalize_csv_package,
+            normalize_fhir_with_sidecar,
+        )
+
+        if source_format == "csv_split" and (files is None or content or sidecar is not None):
+            raise ValueError("CSV intake needs exactly five files, without JSON content or sidecar")
+        if source_format == "fhir_bundle" and (not content or files is not None):
+            raise ValueError("FHIR intake needs one Bundle JSON file and no CSV files")
+        if source_format == "envelope_json" and (
+            not content or files is not None or sidecar is not None
+        ):
+            raise ValueError("ClaimGuard JSON intake needs one document and no companion files")
+
+        source_content = (
+            json.dumps(files, sort_keys=True)
+            if source_format == "csv_split"
+            else json.dumps({"bundle": content, "sidecar": sidecar}, sort_keys=True)
+            if source_format == "fhir_bundle"
+            else content
+        )
+        if len(source_content.encode("utf-8")) > 64 * 1024:
             raise ValueError("document exceeds the 64 KiB pilot limit")
-        if not filename.lower().endswith(".json"):
+        if source_format == "envelope_json" and not filename.lower().endswith(".json"):
             raise ValueError("the pilot currently accepts ClaimGuard JSON documents only")
+        if source_format not in {"envelope_json", "csv_split", "fhir_bundle"}:
+            raise ValueError("unsupported intake source format")
         if not self.configuration(tenant_id)["intake_enabled"]:
             raise ValueError("document intake is disabled for this clinic")
         draft: dict[str, Any] | None = None
         error_code: str | None = None
         try:
-            parsed: object = json.loads(content)
-            envelope = cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
-            candidate: object = envelope.get("claim", envelope) if envelope is not None else None
-            if isinstance(candidate, dict):
-                typed_candidate = cast(dict[str, Any], candidate)
-                try:
-                    validate_transport(typed_candidate)
-                    draft = typed_candidate
-                except TransportError:
-                    error_code = "invalid_claim_envelope"
+            if source_format == "csv_split":
+                draft = normalize_csv_package(files or {})
+            elif source_format == "fhir_bundle":
+                parsed_bundle: object = json.loads(content)
+                if not isinstance(parsed_bundle, dict):
+                    raise IntakeNormalizationError(
+                        "invalid_fhir_package", "Expected a FHIR Bundle JSON object"
+                    )
+                draft = normalize_fhir_with_sidecar(cast(dict[str, Any], parsed_bundle), sidecar)
             else:
-                error_code = "invalid_claim_envelope"
+                parsed: object = json.loads(content)
+                envelope = cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
+                candidate: object = (
+                    envelope.get("claim", envelope) if envelope is not None else None
+                )
+                if isinstance(candidate, dict):
+                    typed_candidate = cast(dict[str, Any], candidate)
+                    try:
+                        validate_transport(typed_candidate)
+                        draft = typed_candidate
+                    except TransportError:
+                        error_code = "invalid_claim_envelope"
+                else:
+                    error_code = "invalid_claim_envelope"
         except json.JSONDecodeError:
             error_code = "invalid_json"
+        except IntakeNormalizationError as exc:
+            error_code = exc.code
         job_id = uuid.uuid4()
         with self.engine.begin() as connection:
             row = (
@@ -233,14 +278,14 @@ class WorkspaceStore:
                      draft, status, error_code)
                 VALUES (:id, :tenant, :actor, :filename, :digest,
                         CAST(:draft AS jsonb), :status, :error)
-                RETURNING job_id, filename, status, error_code, created_at
+                RETURNING job_id, filename, content_sha256, status, error_code, created_at
             """),
                     {
                         "id": job_id,
                         "tenant": tenant_id,
                         "actor": actor,
                         "filename": filename,
-                        "digest": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+                        "digest": hashlib.sha256(source_content.encode("utf-8")).hexdigest(),
                         "draft": json.dumps(draft) if draft is not None else None,
                         "status": "needs_review" if draft is not None else "rejected",
                         "error": error_code,
@@ -269,7 +314,7 @@ class WorkspaceStore:
         )
         return self._rows(
             f"""
-            SELECT job_id, filename, status, error_code, run_id, created_at
+            SELECT job_id, filename, content_sha256, status, error_code, run_id, created_at
             FROM claimguard.intake_jobs WHERE tenant_id=:tenant {scope} {claim_scope}
             ORDER BY created_at DESC LIMIT 200
         """,  # noqa: S608 - scope is fixed; values remain bound parameters
@@ -297,7 +342,7 @@ class WorkspaceStore:
         )
         return self._one(
             f"""
-            SELECT job_id, filename, status, error_code, draft, run_id, created_at
+            SELECT job_id, filename, content_sha256, status, error_code, draft, run_id, created_at
             FROM claimguard.intake_jobs
             WHERE tenant_id=:tenant AND job_id=:id {scope} {claim_scope}
         """,  # noqa: S608 - scope is fixed; values remain bound parameters

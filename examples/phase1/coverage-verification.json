@@ -1,0 +1,10 @@
+{
+  "document_type": "synthetic_coverage_verification",
+  "case_id": "PHASE1-JSON-001",
+  "member_id": "MEM-PHASE1-001",
+  "coverage_id": "COV-PHASE1-JSON-001",
+  "effective_from": "2026-01-01",
+  "effective_until": "2026-12-31",
+  "verified_by": "Fictional Education Payer — synthetic exercise",
+  "note": "Use this synthetic source to rehearse a human correction. It is not a real eligibility decision and is not ingested automatically."
+}

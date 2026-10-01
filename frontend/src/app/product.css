@@ -114,3 +114,22 @@ a.dashboard-stat:hover { border-color: var(--blue); box-shadow: 0 5px 20px oklch
   .business-workspace .explanation-panel { grid-column: auto; border-top: 0; border-left: 1px solid var(--line); }
   .business-workspace .explanation-list { display: block; }
 }
+
+/* The guidance is paired with its finding, not rendered as a second scrolling list. */
+.business-workspace .review-grid { grid-template-columns: minmax(190px, 22%) minmax(0, 1fr); }
+.business-workspace .findings-panel { grid-column: 2 / -1; }
+.business-workspace .finding-row { grid-template-columns: 25px minmax(0, 1.15fr) minmax(260px, .85fr); gap: 18px; }
+.business-workspace .finding-row .explanation-block { padding: 15px; background: oklch(98% .009 220); }
+.business-workspace .paired-review-heading { grid-template-columns: minmax(0, 1.15fr) minmax(260px, .85fr) auto; }
+.business-workspace .review-resolution { display: flex; align-items: center; }
+@media (max-width: 1200px) {
+  .business-workspace .finding-row { grid-template-columns: 25px minmax(0, 1fr); }
+  .business-workspace .finding-row .explanation-block { grid-column: 2; }
+  .business-workspace .paired-review-heading { grid-template-columns: 1fr auto; }
+  .business-workspace .paired-review-heading > div:nth-child(2) { display: none; }
+  .business-workspace .review-resolution { display: block; }
+}
+@media (max-width: 760px) {
+  .business-workspace .findings-panel { grid-column: auto; }
+}
+.intake-source-digest code { overflow-wrap: anywhere; }

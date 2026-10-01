@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from pathlib import Path
 
 import httpx
 import pytest
@@ -14,6 +16,8 @@ from sqlalchemy import Engine, text
 from tests.edu import RULES_DIR
 from tests.review.conftest import Sandbox, requires_db
 from tests.review.test_auth_api import create_test_account, remove_test_account
+
+PHASE1_EXAMPLES = Path(__file__).resolve().parents[2] / "examples" / "phase1"
 
 pytestmark = [pytest.mark.integration, requires_db]
 
@@ -200,5 +204,123 @@ async def test_intake_and_claim_blind_technical_pages(
                     WHERE tenant_id = 'clinic-legacy-demo'"""
                 )
             )
+        for account in accounts:
+            remove_test_account(engine, account)
+
+
+@pytest.mark.asyncio
+async def test_csv_and_fhir_packages_reach_results_and_audit(
+    store: ReviewStore, engine: Engine, sandbox: Sandbox
+) -> None:
+    app = create_app(
+        store=store,
+        rules_dir=RULES_DIR,
+        signer=SessionSigner(b"phase-one-package-tests-session-key-01234"),
+    )
+    accounts: list[str] = []
+    job_ids: list[str] = []
+    suffix = uuid.uuid4().hex[:10]
+    try:
+        async with httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=app), base_url="http://review.test"
+        ) as reviewer:
+            accounts.append(await _login(reviewer, "rcm_reviewer", engine))
+            csv_files = {
+                path.name: path.read_text(encoding="utf-8").replace(
+                    "PHASE1-CSV-001", f"PHASE1-CSV-{suffix}"
+                )
+                for path in (PHASE1_EXAMPLES / "csv").glob("*.csv")
+            }
+            bundle = (
+                (PHASE1_EXAMPLES / "fhir-bundle.json")
+                .read_text(encoding="utf-8")
+                .replace("PHASE1-FHIR-001", f"PHASE1-FHIR-{suffix}")
+            )
+            sidecar = json.loads(
+                (PHASE1_EXAMPLES / "fhir-sidecar.json")
+                .read_text(encoding="utf-8")
+                .replace("PHASE1-FHIR-001", f"PHASE1-FHIR-{suffix}")
+            )
+            sandbox.register({"claim_id": f"PHASE1-CSV-{suffix}"})
+            sandbox.register(sidecar)
+            ambiguous = await reviewer.post(
+                "/v1/intake-jobs",
+                json={
+                    "filename": "ambiguous",
+                    "source_format": "csv_split",
+                    "content": bundle,
+                    "files": csv_files,
+                },
+            )
+            assert ambiguous.status_code == 422
+            for payload, claim_id in [
+                (
+                    {
+                        "filename": "phase1-csv-package",
+                        "source_format": "csv_split",
+                        "files": csv_files,
+                    },
+                    f"PHASE1-CSV-{suffix}",
+                ),
+                (
+                    {
+                        "filename": "phase1-fhir-bundle.json",
+                        "source_format": "fhir_bundle",
+                        "content": bundle,
+                        "sidecar": sidecar,
+                    },
+                    f"PHASE1-FHIR-{suffix}",
+                ),
+            ]:
+                created = await reviewer.post("/v1/intake-jobs", json=payload)
+                assert created.status_code == 201, created.text
+                job_ids.append(created.json()["job_id"])
+                assert created.json()["status"] == "needs_review"
+                source = await reviewer.get(f"/v1/intake-jobs/{created.json()['job_id']}")
+                assert source.status_code == 200
+                assert len(source.json()["content_sha256"]) == 64
+                checked = await reviewer.post(f"/v1/intake-jobs/{created.json()['job_id']}/submit")
+                assert checked.status_code == 200, checked.text
+                run_id = checked.json()["run"]["run_id"]
+                assert checked.json()["run"]["claim_id"] == claim_id
+                results = await reviewer.get(f"/v1/runs/{run_id}/results")
+                assert results.status_code == 200
+                payload = results.json()
+                assert len(payload["results"]) == 15
+                assert any(
+                    row["rule_id"] == "R003" and row["status"] == "FAIL"
+                    for row in payload["results"]
+                )
+                coverage = next(row for row in payload["results"] if row["rule_id"] == "R003")
+                assert coverage["claim_id"] == claim_id
+                assert coverage["severity"] == "high"
+                assert coverage["confidence"] is None
+                assert coverage["confidence_kind"] == "not_probabilistic"
+                assert any(item["path"] == "/coverage/end_date" for item in coverage["evidence"])
+                assert coverage["corrective_action"]
+                assert len(payload["explanations"]) == 15
+                assert any(
+                    explanation["rule_id"] == "R003" and explanation["correction_recommendation"]
+                    for explanation in payload["explanations"]
+                )
+                assert store.run_audit_stamp(run_id).chain_hash
+            no_sidecar = await reviewer.post(
+                "/v1/intake-jobs",
+                json={
+                    "filename": "phase1-fhir-bundle.json",
+                    "source_format": "fhir_bundle",
+                    "content": bundle,
+                },
+            )
+            assert no_sidecar.status_code == 201
+            job_ids.append(no_sidecar.json()["job_id"])
+            assert no_sidecar.json()["error_code"] == "fhir_requires_sidecar"
+    finally:
+        for job_id in job_ids:
+            with engine.begin() as connection:
+                connection.execute(
+                    text("DELETE FROM claimguard.intake_jobs WHERE job_id=:id"), {"id": job_id}
+                )
+        sandbox.purge()
         for account in accounts:
             remove_test_account(engine, account)

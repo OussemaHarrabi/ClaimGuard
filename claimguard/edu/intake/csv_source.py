@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import io
 import re
 import sys
 from collections.abc import Mapping, Sequence
@@ -137,23 +138,29 @@ def _read_rows(path: Path, columns: tuple[str, ...]) -> list[dict[str, str | Non
     if not path.is_file():
         raise CsvIntakeError(f"missing CSV file: {path}")
     with path.open(newline="", encoding="utf-8-sig") as handle:
-        reader = csv.DictReader(handle)
-        header = reader.fieldnames
-        if header is None:
-            raise CsvIntakeError(f"{path.name}: empty file (no header row)")
-        missing = [column for column in columns if column not in header]
-        unknown = [column for column in header if column not in columns]
-        if missing or unknown:
-            raise CsvIntakeError(
-                f"{path.name}: columns do not match the transport contract"
-                f" (missing={missing}, unknown={unknown})"
-            )
-        rows: list[dict[str, str | None]] = []
-        for line_number, row in enumerate(reader, start=2):
-            if None in row:
-                raise CsvIntakeError(f"{path.name}:{line_number}: ragged row (extra cells)")
-            rows.append(dict(row))
-        return rows
+        return _parse_rows(handle, path.name, columns)
+
+
+def _parse_rows(
+    handle: Any, filename: str, columns: tuple[str, ...]
+) -> list[dict[str, str | None]]:
+    reader = csv.DictReader(handle)
+    header = reader.fieldnames
+    if header is None:
+        raise CsvIntakeError(f"{filename}: empty file (no header row)")
+    missing = [column for column in columns if column not in header]
+    unknown = [column for column in header if column not in columns]
+    if missing or unknown:
+        raise CsvIntakeError(
+            f"{filename}: columns do not match the transport contract"
+            f" (missing={missing}, unknown={unknown})"
+        )
+    rows: list[dict[str, str | None]] = []
+    for line_number, row in enumerate(reader, start=2):
+        if None in row:
+            raise CsvIntakeError(f"{filename}:{line_number}: ragged row (extra cells)")
+        rows.append(dict(row))
+    return rows
 
 
 def _record(row: Mapping[str, str | None], child: str) -> dict[str, Any]:
@@ -193,7 +200,27 @@ def read_csv_split(folder: str | Path) -> list[Envelope]:
     :func:`claimguard.edu.intake.dump_envelope`.
     """
     directory = Path(folder)
-    claim_rows = _read_rows(directory / CLAIMS_FILE, COLUMNS[CLAIMS_FILE])
+    rows = {filename: _read_rows(directory / filename, COLUMNS[filename]) for filename in COLUMNS}
+    return _rebuild_rows(rows)
+
+
+def read_csv_files(files: Mapping[str, str]) -> list[Envelope]:
+    """Normalize a browser-provided five-file CSV package in memory."""
+    if set(files) != set(COLUMNS):
+        raise CsvIntakeError(
+            f"CSV package needs exactly {', '.join(COLUMNS)} "
+            f"(missing={sorted(set(COLUMNS) - set(files))}, "
+            f"unknown={sorted(set(files) - set(COLUMNS))})"
+        )
+    rows = {
+        filename: _parse_rows(io.StringIO(content.lstrip("\ufeff")), filename, COLUMNS[filename])
+        for filename, content in files.items()
+    }
+    return _rebuild_rows(rows)
+
+
+def _rebuild_rows(rows: Mapping[str, list[dict[str, str | None]]]) -> list[Envelope]:
+    claim_rows = rows[CLAIMS_FILE]
 
     identified: list[tuple[str, Mapping[str, str | None]]] = []
     claim_ids: set[str] = set()
@@ -207,9 +234,7 @@ def read_csv_split(folder: str | Path) -> list[Envelope]:
         identified.append((claim_id, row))
 
     children = {
-        child: _group_by_claim(
-            _read_rows(directory / filename, COLUMNS[filename]), filename, claim_ids
-        )
+        child: _group_by_claim(rows[filename], filename, claim_ids)
         for child, filename in CHILD_FILES.items()
     }
 

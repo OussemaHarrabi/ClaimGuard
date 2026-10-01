@@ -325,10 +325,45 @@ h3 { font-size: 16px; letter-spacing: -.015em; }
 .guided-field-grid label { display: grid; gap: 6px; min-width: 0; font-weight: 650; }
 .guided-field-grid label span { color: var(--muted); font-size: 12px; }
 .guided-field-grid input { min-height: 42px; background: var(--surface); }
+.correction-groups { display: grid; gap: 14px; margin-top: 18px; }
+.correction-group { padding: 16px; border: 1px solid var(--line); border-radius: 11px; background: var(--surface-2); }
+.correction-group-heading { display: flex; align-items: baseline; gap: 10px; }
+.correction-group-heading strong { font-size: 14px; line-height: 1.45; }
+.correction-group > p { display: grid; gap: 4px; margin: 12px 0; color: var(--ink); font-size: 13px; line-height: 1.55; }
+.correction-group > p span { color: var(--blue); font-size: 10px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; }
+.correction-group small, .guided-field-grid label small { color: var(--muted); font-size: 11px; font-weight: 500; line-height: 1.4; }
+.intake-help { flex-basis: 100%; margin: 0; color: var(--muted); font-size: 12px; line-height: 1.6; }
+.intake-draft-facts { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin: 20px 0; }
+.intake-draft-facts > div { padding: 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); }
+.intake-draft-facts dt { color: var(--muted); font-size: 11px; }
+.intake-draft-facts dd { margin: 4px 0 0; color: var(--ink); font-size: 14px; font-weight: 700; overflow-wrap: anywhere; }
 .advanced-json { margin: 0 0 20px; border-top: 1px solid var(--line); padding-top: 16px; }
 .advanced-json summary { display: flex; align-items: center; gap: 8px; color: var(--navy); font-size: 13px; font-weight: 700; cursor: pointer; }
 .advanced-json .json-editor { display: block; margin-top: 15px; }
 .drawer-actions { position: sticky; bottom: 0; display: flex; justify-content: flex-end; gap: 9px; padding-top: 14px; background: var(--surface); }
+
+/* Each check and its advice form one row, including when the queue narrows. */
+.findings-panel { grid-column: 2 / -1; }
+.paired-review-heading { display: grid; grid-template-columns: minmax(0, 1.15fr) minmax(270px, .85fr) auto; gap: 18px; align-items: end; }
+.finding-row { grid-template-columns: 30px minmax(0, 1.15fr) minmax(270px, .85fr); gap: 18px; align-items: start; }
+.finding-content { min-width: 0; }
+.finding-row .explanation-block { min-width: 0; height: 100%; margin: -8px 0 0; padding: 12px 14px; border: 1px solid var(--line); border-radius: 10px; background: oklch(98% 0.008 235); }
+.finding-row .provenance-line { font-family: inherit; }
+.finding-row .explanation-block > p { font-size: 13px; }
+.finding-row .evidence-item strong { max-width: 190px; }
+.audit-preview { margin: 20px 28px 28px; }
+.all-rule-outcomes { margin: 0 28px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.all-rule-outcomes summary { color: var(--blue); font-weight: 700; cursor: pointer; }
+.all-rule-outcomes ol { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 6px; padding: 10px 0 0; margin: 0; list-style: none; }
+.all-rule-outcomes li { display: flex; justify-content: space-between; gap: 8px; padding: 7px 9px; border: 1px solid var(--line); border-radius: 7px; }
+.all-rule-outcomes li strong { font-size: 10px; }
+
+@media (max-width: 1050px) {
+  .paired-review-heading { grid-template-columns: 1fr auto; }
+  .paired-review-heading > div:nth-child(2) { display: none; }
+  .finding-row { grid-template-columns: 30px minmax(0, 1fr); }
+  .finding-row .explanation-block { grid-column: 2; margin-top: 0; }
+}
 
 @keyframes drawer-in { from { transform: translateX(28px); opacity: .6; } to { transform: translateX(0); opacity: 1; } }
 

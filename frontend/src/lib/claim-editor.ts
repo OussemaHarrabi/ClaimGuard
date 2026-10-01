@@ -39,6 +39,63 @@ export function editableEvidencePaths(
   return [...paths];
 }
 
+const FIELD_NAMES: Readonly<Record<string, string>> = {
+  claim_id: "claim ID", invoice_number: "invoice number", patient_id: "patient ID",
+  member_id: "member ID", provider_id: "provider ID", payer_id: "payer ID",
+  policy_id: "policy ID", diagnosis_code: "diagnosis code",
+  submission_date: "submission date", total_amount: "claim total",
+  coverage_id: "coverage ID", beneficiary_patient_id: "covered patient ID",
+  start_date: "start date", end_date: "end date", status: "status",
+  line_id: "line ID", service_code: "service code", service_date: "service date",
+  unit_price: "unit price", net_amount: "line amount", quantity: "quantity",
+  authorization_id: "authorization ID", valid_from: "valid from", valid_to: "valid until",
+  max_quantity: "maximum quantity", attachment_id: "document ID",
+  document_status: "document status", currency: "currency", notes: "notes",
+};
+
+/** A reviewer-facing label; the original pointer remains in the advanced JSON. */
+export function fieldLabel(pointer: string): string {
+  const parts = segments(pointer);
+  const field = parts.at(-1)!;
+  const name = FIELD_NAMES[field] ?? field.replaceAll("_", " ");
+  const container = parts[0];
+  if (container === "coverage") return `Coverage · ${name}`;
+  if (["lines", "authorizations", "attachments"].includes(container) && /^\d+$/.test(parts[1] ?? "")) {
+    const entity = container === "lines" ? "Line" : container === "authorizations" ? "Authorization" : "Document";
+    return `${entity} ${Number(parts[1]) + 1} · ${name}`;
+  }
+  return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+type CorrectableFinding = {
+  ruleId: string;
+  status: string;
+  explanation: string;
+  correctionRecommendation: string;
+  evidence: readonly { path: string }[];
+};
+
+export function buildCorrectionGroups(findings: readonly CorrectableFinding[], claim: unknown) {
+  return findings
+    .filter((finding) => ["FAIL", "UNABLE_TO_ASSESS"].includes(finding.status))
+    .map((finding) => ({
+      ruleId: finding.ruleId,
+      explanation: finding.explanation,
+      recommendation: finding.correctionRecommendation,
+      fields: editableEvidencePaths([finding], claim).map((path) => ({ path, label: fieldLabel(path) })),
+    }));
+}
+
+export function plainIssue(explanation: string): string {
+  const detected = explanation.match(/Detected:\s*(.*?)\.\s*Evidence\s*\(/s)?.[1];
+  if (detected) return `${detected.charAt(0).toUpperCase()}${detected.slice(1)}.`;
+  return explanation.replace(/^\[deterministic\]\s*/, "");
+}
+
+export function plainRecommendation(recommendation: string): string {
+  return recommendation.replace(/^\[deterministic\]\s*/, "");
+}
+
 export function updatePointer(text: string, pointer: string, input: string): string {
   const claim = JSON.parse(text) as Record<string, unknown>;
   const path = segments(pointer);
