@@ -45,7 +45,7 @@ checked yet. They are queued."* Point at the list.
 > an auto-run. Pressing is a decision.
 
 ### Segment 3 — A valid claim is not flagged (2 min)
-Press **Start check** on `01-clean` → open it from the queue.
+Press **Start check** on `01-clean` → it moves to the **Checked** group → press **Open findings**.
 
 Say: *"Fourteen checks passed and three are not applicable to this claim — not 'approved'. The three
 are `NOT_APPLICABLE` because the rules do not apply here; they are not passes, and I will show you the
