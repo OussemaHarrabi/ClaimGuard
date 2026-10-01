@@ -135,6 +135,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+      # gitleaks queries the PR commit list before scanning the diff.
+      pull-requests: read
     steps:
       - uses: actions/checkout@v7.0.1
         with:
