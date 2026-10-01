@@ -26,8 +26,16 @@ class Action(StrEnum):
     READ_AUDIT = "read_audit"
     READ_OPERATIONS = "read_operations"
     MANAGE_OPERATIONS = "manage_operations"
+    ASK_ASSISTANT = "ask_assistant"
 
 
+#: What a reviewer does with a claim: read it, create it, decide about it, ask
+#: for it to be rechecked, list the queue — and ask the interactive assistant
+#: about a finding it already carries. The assistant is granted with the same
+#: set: it answers *about* a finding the caller may already read, so a role that
+#: may not read a claim has nothing to ask about, and a role that may read one
+#: needs no second gate to have it explained. The assistant never edits a
+#: record, so this does not widen what the role can change.
 _REVIEW: Final[frozenset[Action]] = frozenset(
     {
         Action.READ_CLAIM,
@@ -35,6 +43,7 @@ _REVIEW: Final[frozenset[Action]] = frozenset(
         Action.RECORD_DECISION,
         Action.RECHECK_CLAIM,
         Action.READ_QUEUE,
+        Action.ASK_ASSISTANT,
     }
 )
 

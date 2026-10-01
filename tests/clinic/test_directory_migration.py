@@ -29,7 +29,15 @@ def test_clinic_directory_migration_has_tables_and_role_guard() -> None:
         assert role.value in migration
     assert "PRIMARY KEY (tenant_id, user_id)" in migration
     assert "UNIQUE (tenant_id, name)" in migration
-    assert SCHEMA_REVISION == "0010"
+    # The constant must name the newest migration on disk, not a number someone remembered:
+    # a hardcoded literal here is exactly how it drifted when 0011 landed.
+    newest = max(
+        p.name[:4]
+        for p in (
+            Path(__file__).resolve().parents[2] / "claimguard" / "db" / "migrations" / "versions"
+        ).glob("*.sql")
+    )
+    assert newest == SCHEMA_REVISION
     assert {table.name for table in (CLINICS, USERS, MEMBERSHIPS, DEPARTMENTS)}.issubset(
         REQUIRED_TABLES
     )

@@ -208,11 +208,19 @@ class WorkspaceStore:
         sidecar: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         from claimguard.clinic.intake_formats import (
+            DetectedFormat,
             IntakeNormalizationError,
+            detect_format,
             normalize_csv_package,
             normalize_fhir_with_sidecar,
         )
 
+        has_document = bool(content)
+        has_files = files is not None
+        if source_format == "auto" and has_document == has_files:
+            raise ValueError(
+                "auto intake needs either one document or the five CSV files, not both"
+            )
         if source_format == "csv_split" and (files is None or content or sidecar is not None):
             raise ValueError("CSV intake needs exactly five files, without JSON content or sidecar")
         if source_format == "fhir_bundle" and (not content or files is not None):
@@ -224,7 +232,7 @@ class WorkspaceStore:
 
         source_content = (
             json.dumps(files, sort_keys=True)
-            if source_format == "csv_split"
+            if source_format == "csv_split" or (source_format == "auto" and has_files)
             else json.dumps({"bundle": content, "sidecar": sidecar}, sort_keys=True)
             if source_format == "fhir_bundle"
             else content
@@ -233,23 +241,44 @@ class WorkspaceStore:
             raise ValueError("document exceeds the 64 KiB pilot limit")
         if source_format == "envelope_json" and not filename.lower().endswith(".json"):
             raise ValueError("the pilot currently accepts ClaimGuard JSON documents only")
-        if source_format not in {"envelope_json", "csv_split", "fhir_bundle"}:
+        if source_format not in {"envelope_json", "csv_split", "fhir_bundle", "auto"}:
             raise ValueError("unsupported intake source format")
         if not self.configuration(tenant_id)["intake_enabled"]:
             raise ValueError("document intake is disabled for this clinic")
         draft: dict[str, Any] | None = None
         error_code: str | None = None
         try:
-            if source_format == "csv_split":
+            resolved_format: str | None = source_format
+            if source_format == "auto":
+                # The reviewer did not say which encoding this is; the payload did.
+                diagnosis = (
+                    detect_format(files)
+                    if files is not None
+                    else detect_format(content, filenames=(filename,))
+                )
+                if diagnosis.format is DetectedFormat.UNKNOWN:
+                    detail = "; ".join(diagnosis.problems or diagnosis.reasons)
+                    error_code = f"unknown_intake_format: {detail}"
+                    resolved_format = None
+                elif diagnosis.format is DetectedFormat.CSV_PACKAGE and diagnosis.problems:
+                    error_code = f"invalid_csv_package: {'; '.join(diagnosis.problems)}"
+                    resolved_format = None
+                elif diagnosis.format is DetectedFormat.CSV_PACKAGE:
+                    resolved_format = "csv_split"
+                elif diagnosis.format is DetectedFormat.FHIR_BUNDLE:
+                    resolved_format = "fhir_bundle"
+                else:
+                    resolved_format = "envelope_json"
+            if resolved_format == "csv_split":
                 draft = normalize_csv_package(files or {})
-            elif source_format == "fhir_bundle":
+            elif resolved_format == "fhir_bundle":
                 parsed_bundle: object = json.loads(content)
                 if not isinstance(parsed_bundle, dict):
                     raise IntakeNormalizationError(
                         "invalid_fhir_package", "Expected a FHIR Bundle JSON object"
                     )
                 draft = normalize_fhir_with_sidecar(cast(dict[str, Any], parsed_bundle), sidecar)
-            else:
+            elif resolved_format == "envelope_json":
                 parsed: object = json.loads(content)
                 envelope = cast(dict[str, object], parsed) if isinstance(parsed, dict) else None
                 candidate: object = (

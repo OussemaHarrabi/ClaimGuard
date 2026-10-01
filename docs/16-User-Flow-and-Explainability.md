@@ -42,7 +42,7 @@ supports the finding, what to review or correct, and which questions remain unre
 | | |
 |---|---|
 | **Needs to see** | A filtered queue that defaults to the checks that need attention, per-claim rollups, and an explicit count of what is still owed. |
-| **May do** | Record one of the pack's four actions against a finding, with a self-declared actor and a reason: `confirm_issue`, `dismiss_with_reason`, `request_information`, `mark_corrected_for_recheck` (`ReviewAction`, `claimguard/review/models.py`). |
+| **May do** | Record one of the pack's four actions against a finding, in their own name — the signed-in session supplies the actor, and the API refuses a decision whose `actor` is not that user (403) — with a reason: `confirm_issue`, `dismiss_with_reason`, `request_information`, `mark_corrected_for_recheck` (`ReviewAction`, `claimguard/review/models.py`). |
 | **Must never be able to do** | Change a check's status, severity, evidence or review flag. `ResultRecord` refuses a `method` other than `deterministic` and a `review_status` other than `unreviewed`, and the store never writes to `rule_results` after the run commits — migration `0002` refuses `UPDATE` on that table (§7.4 shows the refusal). Also: decide on a version that has been superseded (409, `RunSupersededError`). |
 
 ### 1.3 The senior reviewer — handle escalations
@@ -61,19 +61,30 @@ supports the finding, what to review or correct, and which questions remain unre
 | **May do** | Read all of it: `GET /v1/runs/{run_id}`, `GET /v1/runs/{run_id}/results`, `GET /v1/runs/{run_id}/decisions`, and `SELECT claimguard.verify_audit_chain()`. |
 | **Must never be able to do** | Alter the record. The `0001` trigger refuses `UPDATE`/`DELETE` on `audit_events`; `0002` refuses them on `review_decisions` and refuses `UPDATE` on `rule_runs`/`rule_results` — for the table owner too (measured in §7.4). **Honest limit:** this is tamper-*evident*, not tamper-*proof*; a superuser can disable a trigger or drop the table, and the application connects as a superuser here (`docs/12-Privacy-and-Security-Note.md` §4, measured: `current_user = claimguard`, `rolsuper = True`). |
 
-### 1.5 There are no roles, and the document says so
+### 1.5 Roles and permissions — corrected 2026-10-01
 
-The page has **no authentication and no permission model**. The pack's own teaching page states its
-position — *"Reviewer identity is self-declared"* (`<pack>/examples/review_demo.html`) and *"The
-supplied static interface uses self-declared reviewer names and does not authenticate users"*
-(`<pack>/START_HERE.html`) — and this page carries the same sentence in its own honesty notice and
-above the actor field. Whoever types a name into the reviewer field is recorded as the decision's
-actor (`claimguard/review/ui/static/index.html`, `#detail-actor`, `#recheck-actor`). The four
-personas above are therefore **distinguished by what they do, not by what the system allows them to
-do**. The only identity control in the code is that the actor must be non-blank
-(`ReviewDecisionEvent._text_is_present`).
+**This subsection previously read "There are no roles, and the document says so". That was true when
+it was written and is not any more**, so it is replaced rather than quietly deleted.
 
----
+The clinic platform (2026-09-29) put every route behind a signed session and a permission matrix:
+
+*   **Identity** comes from a signed `HttpOnly`, `SameSite=Strict` session cookie (8 hours, role
+    re-read from live membership on every request), not from a field on the page. Both the Next.js
+    workspace and the legacy reviewer page require it.
+*   **Roles** are `rcm_reviewer`, `rcm_lead`, `clinic_admin` and `technical_manager`, mapped to eleven
+    actions in `claimguard/clinic/access.py::PERMISSIONS`. A technical manager deliberately cannot
+    read claim content at all.
+*   **Tenants** isolate clinics: every run, result, decision and assistant thread carries a
+    `tenant_id`, and `authorize()` fails closed on a mismatch.
+*   **The actor is no longer self-declared.** `record_decision` and `recheck_claim` reject a payload
+    whose `actor` is not the signed-in principal (`403`, `claimguard/review/app.py`).
+*   An unauthenticated request is `401`; a deployment with no `CLAIMGUARD_SESSION_KEY` configured is
+    `503`. Both are covered by the review tests.
+
+The pack's teaching page still uses self-declared reviewer names, and that comparison is worth
+keeping — it is one of the places this product goes beyond the pack rather than mirroring it. The
+security position, including what is still missing (TLS, encryption at rest, rate limiting), is
+`docs/12-Privacy-and-Security-Note.md` §5 and §6.
 
 ## 2. The user journey, step by step
 
@@ -132,7 +143,7 @@ sequenceDiagram
 | 4 | The submitter gets a 201 | `run` (id, version, input hash, rule/model/prompt versions, who initiated it, when, what it supersedes), `results: 15`, `needs_attention`, `by_status`, `duplicate`, and an `audit` stamp | One transaction writes the run row, its 15 result rows and its audit event; a resubmission whose canonical bytes equal the current version writes **nothing** and returns `duplicate: true` | `store.record_run` → `envelope_digest` → `_persist_run` → `audit_events.append` |
 | 5 | The reviewer opens `/review` | A static honesty notice, a status legend, then "1. Review queue" with four filters (rule status, severity, rule, *include checks that do not need attention*) | The queue is read with the filters, listing each claim's **latest** version, with counts that describe the returned set | page `refreshQueue()` → `GET /v1/queue` → `get_queue` → `store.queue` → `_queue_statement` |
 | 6 | The reviewer reads the counts | *"N unresolved check(s) still need a decision, of M finding(s) shown"*, then "R resolved", a per-status table, and a per-claim table (claim, version, findings, unresolved, latest decision) | Counts and rollups are computed from the returned items only | `render.renderCounts`, `render.renderClaims`; `store._queue_counts`, `store._claim_summaries` |
-| 7 | The reviewer clicks **Open this claim** / **Open claim** | The run header (`run`, input hash, rule version, model version, prompt version, initiated by, created, supersedes), a notice that the reviewer field is self-declared, the versions open in this page, then **all 15 findings**, then the decision history | Two reads: the 15 records and the decision history; the reviewer's current state per finding is derived from the latest decision | page `openClaim()` → `GET /v1/runs/{run_id}/results` (`get_results`) + `GET /v1/runs/{run_id}/decisions` (`list_decisions`); `store._reviews_for` |
+| 7 | The reviewer clicks **Open this claim** / **Open claim** | The run header (`run`, input hash, rule version, model version, prompt version, initiated by, created, supersedes), the signed-in reviewer's name, the versions open in this page, then **all 15 findings**, then the decision history | Two reads: the 15 records and the decision history; the reviewer's current state per finding is derived from the latest decision | page `openClaim()` → `GET /v1/runs/{run_id}/results` (`get_results`) + `GET /v1/runs/{run_id}/decisions` (`list_decisions`); `store._reviews_for` |
 | 8 | The reviewer types their name into the reviewer field and a reason into a finding's box, then clicks one of **Confirm issue / Dismiss with reason / Request information / Mark corrected for recheck** | Either a green notice — *"Recorded \<action\> for \<rule\> on \<run\> (HTTP 201); the finding's review state is now \<state\> (still unresolved); Audit chain hash: …"* — or the API's own refusal, printed unedited | Four ordered checks: run exists (404), finding exists (404), the run is still the claim's current version (409), the state machine allows the action (409); then the 7-key event is built from the stored finding and the DB clock and validated, and one decision row plus one audit event are written in one transaction | page `decide()` → `POST /v1/runs/{run_id}/decisions` → `record_decision` → `store.record_decision` → `models.next_status` |
 | 9 | The reviewer pastes the corrected envelope as JSON and clicks **Submit corrected claim for recheck** | *"The recheck produced version N as RUN-… (HTTP 201), superseding RUN-…. Version M (RUN-…) is unchanged and still viewable — nothing in this page replaced it."* The new version is added to the page's version list and each is viewable | The corrected envelope is re-validated and re-evaluated, then persisted as a **new version** (`version + 1`, `supersedes_run_id` set). An envelope whose canonical bytes are unchanged is refused | page `recheck()` → `POST /v1/claims/{claim_id}/recheck` → `recheck` → `store.record_recheck` |
 | 10 | The reviewer looks at the queue again | The corrected claim has left the default listing (its only objection is gone); with *include checks that do not need attention* ticked, all 15 checks appear at version 2 | Default listing = `requires_human_review` or `NOT_IMPLEMENTED`; `include_all` drops that filter | `store._queue_statement`, `models.requires_attention` |
@@ -444,7 +455,7 @@ that URL (`claimguard/cli/serve.py`).
 
 | Cost | Reality in the code |
 |---|---|
-| **No login, no permission model** | The reviewer name is a text field; whoever types it is the actor. Stated on the page and in `claimguard/review/ui/__init__.py`. Same position as the pack's own page, and this page persists to the ledger where the pack's page lost its decisions when the tab closed. |
+| **No login, no permission model** | *Corrected 2026-10-01: the platform now requires a signed clinic session and enforces a four-role permission matrix — see §1.5.* What remains true from this row: neither interface carries a permission model of its own; authorisation lives in the API middleware, so a page cannot widen what its session is allowed to do. |
 | **No saved views** | No `localStorage`, `sessionStorage` or cookie use anywhere in the UI, and no `pushState`/`replaceState`/`location` write either (checked: §7.5). The filters are sent as query parameters to `/v1/queue` for one request and are not written into the address bar, so a filter selection cannot be bookmarked or shared. |
 | **No keyboard workflow** | The only listeners in the whole page are a form `submit` and `click` handlers on buttons. There is no `keydown`/`keypress` handler, no shortcut, no focus management beyond the browser default. A reviewer works this queue with a mouse. |
 | **No pagination, no virtualisation** | `_queue_statement` has no `LIMIT`, and `renderQueueItems` loops over every returned finding. The page renders the whole filtered listing into the DOM in one pass. Measured: with `include_all=true` over the two claims in the local database the queue returned **30 findings in one response** (§7.5). **Note on the brief:** this document's brief mentioned a "100-card render cap"; I searched the UI, the store and the tests and found no cap, so none is claimed here. |
@@ -474,8 +485,13 @@ required behaviours — and today's page already does what the required behaviou
 
 Stated plainly, so nothing here is read as a promise:
 
-1. **No authentication, no sessions, no per-user authorisation, no roles.** One self-declared actor
-   string. Nothing in this repository should be exposed to an untrusted network as it stands.
+1. ~~**No authentication, no sessions, no per-user authorisation, no roles.** One self-declared
+   actor string. Nothing in this repository should be exposed to an untrusted network as it
+   stands.~~ **Corrected 2026-10-01: this is built.** Sessions, four roles, per-route
+   authorisation and tenant isolation landed with the clinic platform (2026-09-29) — see §1.5 and
+   `docs/12` §5. What is *still* not built is the transport and operational hardening around it:
+   TLS, encryption at rest, rate limiting, a vault. **Nothing in this repository should be
+   exposed to an untrusted network as it stands**, and that sentence survives the correction.
 2. **No adjudication of any kind.** No approve, deny, price, pay, appeal or submit-to-payer
    operation exists — not in the API, not in the page, not as a column.
 3. **No live-model explanation benchmark has been completed.** The bounded layer is wired into the

@@ -11,7 +11,7 @@ from claimguard.clinic.passwords import hash_password
 from claimguard.clinic.session import SessionSigner
 from claimguard.review.app import create_app
 from claimguard.review.explanations import TemplateExplanationProvider
-from claimguard.review.store import ReviewStore
+from claimguard.review.store import SCHEMA_REVISION, ReviewStore
 from sqlalchemy import Engine, text
 
 from tests.edu import RULES_DIR
@@ -116,7 +116,7 @@ async def test_technical_manager_can_sign_in_but_cannot_read_claims(
             assert queue.status_code == 403
             operations = await client.get("/v1/operations")
             assert operations.status_code == 200
-            assert operations.json()["schema_revision"] == "0010"
+            assert operations.json()["schema_revision"] == SCHEMA_REVISION
             assert "claim_id" not in operations.text
     finally:
         sandbox.purge()

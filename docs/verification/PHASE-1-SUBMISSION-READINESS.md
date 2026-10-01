@@ -51,7 +51,29 @@ The scores below are the book's allocations, not a predicted jury score.
 
 `slm-benchmark/2026-09-25/README.md` records the supplied Colab experiment: five configurations ran, every `safety_gate_pass` is false, Gemma 4 BF16 was skipped for memory, and the 22-row semantic-review sheet contains no completed `supported` labels. **There is no approved winner from that run.**
 
-The review service defaults to deterministic mode in `claimguard/review/explanations.py`. Model use requires explicit mode, endpoint and model configuration. In this iteration, the live stored claims inspected in the browser displayed **Deterministic wording**. Neither UI appearance nor safety-gate tests prove model quality.
+The review service defaults to deterministic mode in `claimguard/review/explanations.py`. Model use requires explicit mode, endpoint and model configuration. **Neither UI appearance nor safety-gate tests prove model quality**, and nothing below changes that.
+
+### The interactive assistant, added 2026-10-01 — demonstrated, and bounded
+
+An assistant now sits beside the findings: a reviewer clicks **Explain with AI** on a finding, reads a
+real explanation of why that claim is flagged, and can then hold a conversation about it
+(`docs/22-AI-Assistant-Design.md`, migration `0011`). It is the one place a model is *visibly* in the
+product, so its evidence is stated here with the same honesty rules as everything else:
+
+| Claim | Evidence | What is **not** claimed |
+|---|---|---|
+| A model drafted reviewer-facing text, live | Called the running server: opening a finding returned `verification=accepted`, `groq:qwen/qwen3.8-27b`, 1.5 s, with citations that re-resolved against the stored claim | That the wording is *good* by any measured standard. No assistant benchmark exists |
+| The answer is verified, not trusted | The draft passes the SAME verifier as the graded explanation layer: exact key set, every cited pointer re-resolved, prohibited assertions, injection detection | That the verifier cannot be improved on; a novel injection phrasing remains possible (cost: a refused answer, not a wrong one) |
+| It degrades to the deterministic answer | A live rate-limited call returned `verification=fallback` with the provider's own reason recorded, and the reviewer still received a complete deterministic explanation | That a fallback is a model answer. The interface labels it |
+| It refuses what it must not do | "Should we just pay this claim?" → `verification=refused`, reason *"out of scope (decision_request); no model was asked"* — deterministically, before any model was reachable | That every out-of-scope phrasing is caught |
+| It cannot change the graded record | Answers are stored in `claimguard.assistant_turns`, an append-only sidecar; no code path writes `rule_results`, `run_explanations` or the audit ledger | — |
+
+**What leaves the machine, and the choice behind it.** When the assistant runs against a cloud model,
+the finding, **the values of the evidence it cites** and the reviewer's question are sent to that
+provider. Nothing else, and never a credential. The default is `CLAIMGUARD_AI_MODE=off`, in which
+nothing leaves at all and the assistant still answers from the deterministic layer. Using a cloud
+model is a deliberate, temporary deployment decision: the design is a self-hosted or fine-tuned
+checkpoint, and the mode switch is what makes that a configuration change rather than a rewrite.
 
 Before claiming a successful AI demonstration:
 

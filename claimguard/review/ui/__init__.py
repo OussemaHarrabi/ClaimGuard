@@ -26,11 +26,17 @@ the ordinary ``APIRouter`` it needs, and the routes are declared here.
 
 WHAT THE PAGE IS NOT
 --------------------
-*   It is **not authenticated**. The pack's own review page says "Reviewer
-    identity is self-declared", and so is this one: whoever types a name into the
-    actor field is recorded as the actor. There is no login, no session, no
-    permission model, and nothing here should be exposed to an untrusted network
-    without one.
+*   It is **authenticated, but it is not a permission surface of its own.** The
+    session middleware in :mod:`claimguard.review.app` gates every route this
+    router exposes: no signed-in clinic session is a 401, an unconfigured
+    deployment is a 503, and reaching ``/review`` additionally requires
+    ``Action.READ_CLAIM`` in the caller's role. What the page still does *not*
+    have is its own notion of identity: the reviewer's name comes from the
+    session, not from a field on the page, and the API refuses a decision whose
+    ``actor`` is not the signed-in user (403). This paragraph previously said the
+    page was unauthenticated and self-declared; that stopped being true when the
+    clinic platform landed (2026-09-29) and is corrected here so the code does not
+    carry a false security claim.
 *   It is **not an adjudication surface**. There is no approve, deny, pay or
     submit-to-payer control, because the API has no such operation.
 *   It **marks the wording, never the verdict**. Each explanation carries the

@@ -169,7 +169,18 @@ def build_text(finding: Mapping[str, Any], rule: Mapping[str, Any]) -> str:
     claim_id = _required_text(finding, "claim_id")
     status = _required_text(finding, "status")
     severity = _required_text(finding, "severity")
-    detail = _sentence(_required_text(finding, "explanation"))
+    rendered = _required_text(finding, "explanation")
+    # A record that came back out of the store has already been through the explanation layer,
+    # which rewrites this field into the FULL marked sentence. Wrapping that in "Detected: …" nests
+    # the sentence inside itself - observed live when the assistant fell back after a rate limit
+    # ("Detected: [deterministic] Rule R007 … Detected: Line amount differs …").
+    # A raw engine record is unaffected: its `explanation` is the short detected phrase, and this
+    # branch does not trigger.
+    if rendered.startswith(DETERMINISTIC_PREFIX):
+        return rendered
+    # A model-written sentence cannot be reused as the "Detected:" clause either (same nesting), so
+    # the deterministic twin is built without it rather than restating the model's wording as fact.
+    detail = "" if rendered.startswith(MODEL_PREFIX) else _sentence(rendered)
     pairs = evidence_pairs(finding)
     lead = _STATUS_LEAD.get(status, f"reports {status}")
     title = rule.get("title")
@@ -198,7 +209,7 @@ def build_text(finding: Mapping[str, Any], rule: Mapping[str, Any]) -> str:
     )
     parts = [
         f"Rule {rule_id}{titled} {lead} (severity {severity}) for claim {claim_id}.",
-        f"Detected: {detail}",
+        f"Detected: {detail}" if detail else "",
         evidence,
         step,
         review,

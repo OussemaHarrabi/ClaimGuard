@@ -15,6 +15,7 @@ import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
+import { AssistantPanel } from "./assistant-panel";
 import { fieldLabel, plainIssue, plainRecommendation } from "../lib/claim-editor";
 
 export type Evidence = {
@@ -428,6 +429,11 @@ export function ReviewCockpit({
                           </span>
                         ))}
                       </div>
+                      <AssistantPanel
+                        runId={selected.run.runId}
+                        ruleId={finding.ruleId}
+                        evidence={finding.evidence}
+                      />
                       <div className="finding-actions">
                         <label className="review-note">
                           <span>Reviewer note for {finding.ruleId}</span>

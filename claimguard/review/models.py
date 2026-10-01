@@ -44,6 +44,19 @@ from typing import Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator
 
+# The interactive assistant's request/response contracts. They are the assistant
+# package's own shapes (``claimguard.ai.schemas``), re-exported rather than
+# redeclared: the object the API serves is exactly the object the model call
+# validated and the store persisted, so the reviewer surface cannot drift from
+# what the assistant actually produced. The ``as`` idiom marks them as
+# re-exports — a deliberate pass-through, not a second definition.
+from claimguard.ai.schemas import MAX_TURNS_PER_THREAD as MAX_TURNS_PER_THREAD
+from claimguard.ai.schemas import AssistantConversation as AssistantConversation
+from claimguard.ai.schemas import AssistantOpening as AssistantOpening
+from claimguard.ai.schemas import AssistantQuestion as AssistantQuestion
+from claimguard.ai.schemas import AssistantStatus as AssistantStatus
+from claimguard.ai.schemas import AssistantThreadRef as AssistantThreadRef
+from claimguard.ai.schemas import AssistantTurn as AssistantTurn
 from claimguard.edu.envelope import RULE_IDS, ResultRecord, Severity, Status
 from claimguard.edu.explain import SOURCE_DETERMINISTIC, SOURCE_MODEL
 

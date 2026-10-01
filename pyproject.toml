@@ -58,6 +58,11 @@ dev = [
     "pre-commit>=4.0",
     "hypothesis>=6.120",
 ]
+agent = [
+    "langchain-core>=0.3",
+    "langchain-groq>=0.2",
+    "langgraph>=0.2",
+]
 
 [project.scripts]
 claimguard = "claimguard.cli.main:main"
