@@ -74,6 +74,7 @@ _HISTOGRAM_NAME: Final = "claimguard_http_request_duration_milliseconds"
 _CLAIMS_SUBMITTED_COUNTER: Final = "claimguard_claims_submitted_total"
 _DECISIONS_COUNTER: Final = "claimguard_decisions_total"
 _INTAKE_JOBS_COUNTER: Final = "claimguard_intake_jobs_total"
+_ASSISTANT_TURNS_COUNTER: Final = "claimguard_assistant_turns_total"
 
 _DOMAIN_COUNTERS: Final[dict[str, tuple[str, frozenset[str]]]] = {
     _CLAIMS_SUBMITTED_COUNTER: ("outcome", frozenset({"submitted", "duplicate"})),
@@ -89,6 +90,10 @@ _DOMAIN_COUNTERS: Final[dict[str, tuple[str, frozenset[str]]]] = {
         ),
     ),
     _INTAKE_JOBS_COUNTER: ("outcome", frozenset({"needs_review", "rejected", "submitted"})),
+    _ASSISTANT_TURNS_COUNTER: (
+        "outcome",
+        frozenset({"accepted", "repaired", "fallback", "refused"}),
+    ),
 }
 
 

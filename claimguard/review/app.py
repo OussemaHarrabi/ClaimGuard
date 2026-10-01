@@ -200,6 +200,29 @@ _AUDIT_SPAN: Final = "claim.audit"
 _SUBMIT_ROUTE: Final = "/v1/claims"
 _RECHECK_ROUTE: Final = "/v1/claims/{claim_id}/recheck"
 
+#: Span names for the interactive assistant routes. Each answer route is one
+#: reviewer-facing turn; the two write routes also contribute a bounded outcome
+#: to ``claimguard_assistant_turns_total``. The names follow the pipeline's
+#: ``<area>.<stage>`` vocabulary; see :func:`claimguard.ops.telemetry.span`.
+_AI_STATUS_SPAN: Final = "ai.status"
+_AI_EXPLAIN_SPAN: Final = "ai.explain"
+_AI_MESSAGE_SPAN: Final = "ai.message"
+_AI_THREAD_SPAN: Final = "ai.thread"
+
+#: Policy-safe assistant route templates (placeholders, never a concrete run,
+#: thread or rule id) for span tags.
+_AI_STATUS_ROUTE: Final = "/v1/ai/status"
+_AI_EXPLAIN_ROUTE: Final = "/v1/runs/{run_id}/findings/{rule_id}/explain"
+_AI_MESSAGE_ROUTE: Final = "/v1/threads/{thread_id}/messages"
+_AI_THREAD_ROUTE: Final = "/v1/threads/{thread_id}"
+
+#: The bounded counter for assistant turns, labelled with the answer's own
+#: verification. The label space is closed in
+#: :data:`claimguard.ops.telemetry._DOMAIN_COUNTERS`, so only the four values the
+#: assistant's store accepts (accepted / repaired / fallback / refused) are ever
+#: emitted — never an id or free text.
+_ASSISTANT_TURNS_METRIC: Final = "claimguard_assistant_turns_total"
+
 #: The status / 503 body when the assistant's dependencies are absent. Same
 #: shape as the catalogue failure above: name what is missing, name the command
 #: that fixes it, and say what still works. The assistant is optional by design,
@@ -1161,12 +1184,13 @@ def ai_status(request: Request) -> AssistantStatus:
     itself as off rather than answering 503: "the assistant is not installed" is
     exactly what this endpoint exists to say.
     """
-    principal = cast(Principal, request.state.principal)
-    try:
-        authorize(principal, Action.READ_CLAIM, tenant_id=principal.tenant_id)
-    except PermissionError as exc:
-        raise HTTPException(status_code=403, detail="access denied") from exc
-    return _assistant_status()
+    with span(_AI_STATUS_SPAN, _route_attributes(_AI_STATUS_ROUTE, method="GET")):
+        principal = cast(Principal, request.state.principal)
+        try:
+            authorize(principal, Action.READ_CLAIM, tenant_id=principal.tenant_id)
+        except PermissionError as exc:
+            raise HTTPException(status_code=403, detail="access denied") from exc
+        return _assistant_status()
 
 
 def explain_finding(
@@ -1179,58 +1203,64 @@ def explain_finding(
     why is this finding flagged". The permissive model is deliberate; see
     :class:`claimguard.ai.schemas.AssistantOpening` for why a required field here was a bug.
     """
-    principal = cast(Principal, request.state.principal)
-    # The same gate the run's own results pass: the assistant explains a finding
-    # the caller may already read, and never one they may not.
-    review_store = _claim_store(request, run_id, Action.ASK_ASSISTANT)
-    run = review_store.get_run(run_id)
-    if run is None:  # pragma: no cover - _claim_store just proved otherwise
-        raise RunNotFoundError(f"unknown run: {run_id}")
-    envelope = review_store.get_claim_envelope(run_id)
-    if envelope is None:
-        raise RunNotFoundError(f"unknown run: {run_id}")
-    finding = _finding_of(review_store, run_id, rule_id)
-    question = payload.question if payload is not None else None
+    with span(_AI_EXPLAIN_SPAN, _route_attributes(_AI_EXPLAIN_ROUTE)):
+        principal = cast(Principal, request.state.principal)
+        # The same gate the run's own results pass: the assistant explains a finding
+        # the caller may already read, and never one they may not.
+        review_store = _claim_store(request, run_id, Action.ASK_ASSISTANT)
+        run = review_store.get_run(run_id)
+        if run is None:  # pragma: no cover - _claim_store just proved otherwise
+            raise RunNotFoundError(f"unknown run: {run_id}")
+        envelope = review_store.get_claim_envelope(run_id)
+        if envelope is None:
+            raise RunNotFoundError(f"unknown run: {run_id}")
+        finding = _finding_of(review_store, run_id, rule_id)
+        question = payload.question if payload is not None else None
+        outcome_verification: str | None = None
 
-    def run_turn(assistants: Any) -> AssistantConversation:
-        thread = cast(
-            AssistantThreadRef,
-            assistants.open_thread(
+        def run_turn(assistants: Any) -> AssistantConversation:
+            nonlocal outcome_verification
+            thread = cast(
+                AssistantThreadRef,
+                assistants.open_thread(
+                    tenant_id=principal.tenant_id,
+                    run_id=run_id,
+                    claim_id=run.claim_id,
+                    rule_id=rule_id,
+                    actor=principal.user_id,
+                ),
+            )
+            _require_room(assistants, thread, tenant_id=principal.tenant_id, planned=1)
+            outcome = _answer_question(
+                request,
+                thread=thread,
+                finding=finding,
+                envelope=envelope,
+                question=question,
                 tenant_id=principal.tenant_id,
-                run_id=run_id,
-                claim_id=run.claim_id,
-                rule_id=rule_id,
-                actor=principal.user_id,
-            ),
-        )
-        _require_room(assistants, thread, tenant_id=principal.tenant_id, planned=1)
-        outcome = _answer_question(
-            request,
-            thread=thread,
-            finding=finding,
-            envelope=envelope,
-            question=question,
-            tenant_id=principal.tenant_id,
-        )
-        assistants.append_turn(
-            thread.thread_id,
-            tenant_id=principal.tenant_id,
-            role="assistant",
-            question=question,
-            answer=outcome.answer,
-            verification=outcome.verification,
-            reasons=list(outcome.reasons),
-            model_version=outcome.model_version,
-            prompt_version=outcome.prompt_version,
-            receipt=outcome.receipt,
-            latency_ms=outcome.latency_ms,
-        )
-        return cast(
-            AssistantConversation,
-            assistants.conversation(thread.thread_id, tenant_id=principal.tenant_id),
-        )
+            )
+            outcome_verification = outcome.verification
+            assistants.append_turn(
+                thread.thread_id,
+                tenant_id=principal.tenant_id,
+                role="assistant",
+                question=question,
+                answer=outcome.answer,
+                verification=outcome.verification,
+                reasons=list(outcome.reasons),
+                model_version=outcome.model_version,
+                prompt_version=outcome.prompt_version,
+                receipt=outcome.receipt,
+                latency_ms=outcome.latency_ms,
+            )
+            return cast(
+                AssistantConversation,
+                assistants.conversation(thread.thread_id, tenant_id=principal.tenant_id),
+            )
 
-    return _assistant_operation(request, run_turn)
+        conversation = _assistant_operation(request, run_turn)
+        _record_assistant_turn(outcome_verification)
+        return conversation
 
 
 def post_thread_message(
@@ -1242,77 +1272,84 @@ def post_thread_message(
     gets explained, so a message cannot pivot the conversation onto a record the
     caller could not have opened.
     """
-    principal = cast(Principal, request.state.principal)
-    _migrated_store(request, Action.ASK_ASSISTANT)
+    with span(_AI_MESSAGE_SPAN, _route_attributes(_AI_MESSAGE_ROUTE)):
+        principal = cast(Principal, request.state.principal)
+        _migrated_store(request, Action.ASK_ASSISTANT)
+        outcome_verification: str | None = None
 
-    def take_turn(assistants: Any) -> AssistantConversation:
-        thread = _owned_thread(
-            assistants, thread_id, tenant_id=principal.tenant_id, user_id=principal.user_id
-        )
-        # Two rows: the reviewer's message, then the answer to it.
-        _require_room(assistants, thread, tenant_id=principal.tenant_id, planned=2)
-        review_store = _claim_store(request, thread.run_id, Action.ASK_ASSISTANT)
-        envelope = review_store.get_claim_envelope(thread.run_id)
-        if envelope is None:
-            raise RunNotFoundError(f"unknown run: {thread.run_id}")
-        finding = _finding_of(review_store, thread.run_id, thread.rule_id)
-        outcome = _answer_question(
-            request,
-            thread=thread,
-            finding=finding,
-            envelope=envelope,
-            question=payload.question,
-            tenant_id=principal.tenant_id,
-        )
-        assistants.append_turn(
-            thread_id,
-            tenant_id=principal.tenant_id,
-            role="reviewer",
-            question=payload.question,
-            answer=None,
-            verification=REVIEWER_TURN_VERIFICATION,
-            reasons=[],
-            model_version=outcome.model_version,
-            prompt_version=outcome.prompt_version,
-            receipt=None,
-            latency_ms=None,
-        )
-        assistants.append_turn(
-            thread_id,
-            tenant_id=principal.tenant_id,
-            role="assistant",
-            question=payload.question,
-            answer=outcome.answer,
-            verification=outcome.verification,
-            reasons=list(outcome.reasons),
-            model_version=outcome.model_version,
-            prompt_version=outcome.prompt_version,
-            receipt=outcome.receipt,
-            latency_ms=outcome.latency_ms,
-        )
-        return cast(
-            AssistantConversation,
-            assistants.conversation(thread_id, tenant_id=principal.tenant_id),
-        )
+        def take_turn(assistants: Any) -> AssistantConversation:
+            nonlocal outcome_verification
+            thread = _owned_thread(
+                assistants, thread_id, tenant_id=principal.tenant_id, user_id=principal.user_id
+            )
+            # Two rows: the reviewer's message, then the answer to it.
+            _require_room(assistants, thread, tenant_id=principal.tenant_id, planned=2)
+            review_store = _claim_store(request, thread.run_id, Action.ASK_ASSISTANT)
+            envelope = review_store.get_claim_envelope(thread.run_id)
+            if envelope is None:
+                raise RunNotFoundError(f"unknown run: {thread.run_id}")
+            finding = _finding_of(review_store, thread.run_id, thread.rule_id)
+            outcome = _answer_question(
+                request,
+                thread=thread,
+                finding=finding,
+                envelope=envelope,
+                question=payload.question,
+                tenant_id=principal.tenant_id,
+            )
+            outcome_verification = outcome.verification
+            assistants.append_turn(
+                thread_id,
+                tenant_id=principal.tenant_id,
+                role="reviewer",
+                question=payload.question,
+                answer=None,
+                verification=REVIEWER_TURN_VERIFICATION,
+                reasons=[],
+                model_version=outcome.model_version,
+                prompt_version=outcome.prompt_version,
+                receipt=None,
+                latency_ms=None,
+            )
+            assistants.append_turn(
+                thread_id,
+                tenant_id=principal.tenant_id,
+                role="assistant",
+                question=payload.question,
+                answer=outcome.answer,
+                verification=outcome.verification,
+                reasons=list(outcome.reasons),
+                model_version=outcome.model_version,
+                prompt_version=outcome.prompt_version,
+                receipt=outcome.receipt,
+                latency_ms=outcome.latency_ms,
+            )
+            return cast(
+                AssistantConversation,
+                assistants.conversation(thread_id, tenant_id=principal.tenant_id),
+            )
 
-    return _assistant_operation(request, take_turn)
+        conversation = _assistant_operation(request, take_turn)
+        _record_assistant_turn(outcome_verification)
+        return conversation
 
 
 def get_thread(request: Request, thread_id: str) -> AssistantConversation:
     """One of the caller's own conversations, and every turn in it."""
-    principal = cast(Principal, request.state.principal)
-    _migrated_store(request, Action.ASK_ASSISTANT)
+    with span(_AI_THREAD_SPAN, _route_attributes(_AI_THREAD_ROUTE, method="GET")):
+        principal = cast(Principal, request.state.principal)
+        _migrated_store(request, Action.ASK_ASSISTANT)
 
-    def read(assistants: Any) -> AssistantConversation:
-        thread = _owned_thread(
-            assistants, thread_id, tenant_id=principal.tenant_id, user_id=principal.user_id
-        )
-        return cast(
-            AssistantConversation,
-            assistants.conversation(thread.thread_id, tenant_id=principal.tenant_id),
-        )
+        def read(assistants: Any) -> AssistantConversation:
+            thread = _owned_thread(
+                assistants, thread_id, tenant_id=principal.tenant_id, user_id=principal.user_id
+            )
+            return cast(
+                AssistantConversation,
+                assistants.conversation(thread.thread_id, tenant_id=principal.tenant_id),
+            )
 
-    return _assistant_operation(request, read)
+        return _assistant_operation(request, read)
 
 
 # ---------------------------------------------------------------------------
@@ -1643,9 +1680,23 @@ def _run_response(recorded: RecordedRun) -> RunResponse:
     return _status_response(recorded.run, recorded.results, recorded.audit, recorded.duplicate)
 
 
-def _route_attributes(route_template: str) -> dict[str, str]:
-    """The policy-safe span tags for one claim route (template, never a concrete id)."""
-    return {"route_template": route_template, "method": "POST"}
+def _route_attributes(route_template: str, method: str = "POST") -> dict[str, str]:
+    """The policy-safe span tags for one route (template, never a concrete id)."""
+    return {"route_template": route_template, "method": method}
+
+
+def _record_assistant_turn(verification: str | None) -> None:
+    """Record one produced assistant answer under its bounded outcome label.
+
+    ``verification`` is the value the assistant package itself attached to the
+    answer (``accepted``/``repaired``/``fallback``/``refused``); a ``None`` means
+    no answer was produced — the request failed before the model returned — and
+    nothing is recorded, rather than inventing an outcome. The call is fail-open:
+    :func:`claimguard.ops.telemetry.record_domain_metric` never raises, and the
+    counter's label space is closed to those four values in code.
+    """
+    if verification is not None:
+        record_domain_metric(_ASSISTANT_TURNS_METRIC, verification)
 
 
 def _evaluate_stage(request: Request, envelope: Mapping[str, Any]) -> list[ResultRecord]:
