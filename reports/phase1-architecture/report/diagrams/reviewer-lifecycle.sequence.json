@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Claim submission, review, correction and recheck",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1080, 930],
+    "views": [
+      {"id": "intake", "label": "Intake and validation", "focus": ["reviewer", "web", "api", "gate", "engine"], "note": "The session determines tenant and actor before the package reaches the engine."},
+      {"id": "explain", "label": "Guarded explanation", "focus": ["api", "assistant", "db"], "note": "Optional wording is verified and cannot move a deterministic result."},
+      {"id": "correct", "label": "Correction and recheck", "focus": ["reviewer", "web", "api", "engine", "db"], "note": "A correction creates a new version; the original run remains readable."}
+    ]
+  },
+  "participants": [
+    {"id": "reviewer", "type": "external", "label": "RCM Reviewer", "sublabel": "accountable human"},
+    {"id": "web", "type": "frontend", "label": "Next.js Workspace", "sublabel": "evidence desk"},
+    {"id": "api", "type": "backend", "label": "FastAPI", "sublabel": "tenant-scoped API"},
+    {"id": "gate", "type": "security", "label": "Session Gate", "sublabel": "role + tenant"},
+    {"id": "engine", "type": "backend", "label": "Rule Engine", "sublabel": "R001-R015"},
+    {"id": "assistant", "type": "security", "label": "Assistant Gate", "sublabel": "verify or fallback"},
+    {"id": "db", "type": "database", "label": "PostgreSQL", "sublabel": "versions + audit"}
+  ],
+  "segments": [
+    {"from": 150, "to": 395, "label": "Submit and validate"},
+    {"from": 410, "to": 620, "label": "Explain and decide"},
+    {"from": 635, "to": 845, "label": "Correct and recheck"}
+  ],
+  "messages": [
+    {"id": "submit", "from": "reviewer", "to": "web", "y": 180, "label": "upload synthetic package", "variant": "default"},
+    {"id": "post", "from": "web", "to": "api", "y": 220, "label": "POST /v1/intake or /v1/claims", "variant": "emphasis"},
+    {"id": "scope", "from": "api", "to": "gate", "y": 260, "label": "resolve user, role and tenant", "variant": "security"},
+    {"id": "scope-ok", "from": "gate", "to": "api", "y": 298, "label": "authorized clinic scope", "variant": "return"},
+    {"id": "evaluate", "from": "api", "to": "engine", "y": 342, "label": "validate envelope and evaluate", "variant": "emphasis"},
+    {"id": "results", "from": "engine", "to": "api", "y": 382, "label": "15 evidence-linked results", "variant": "return"},
+    {"id": "explain", "from": "api", "to": "assistant", "y": 445, "label": "explain flagged finding", "variant": "security"},
+    {"id": "answer", "from": "assistant", "to": "api", "y": 486, "label": "accepted, repaired or fallback text", "variant": "return"},
+    {"id": "persist", "from": "api", "to": "db", "y": 530, "label": "atomic run, results, provenance and event", "variant": "emphasis"},
+    {"id": "run-response", "from": "api", "to": "web", "y": 574, "label": "run summary and finding views", "variant": "return"},
+    {"id": "decision", "from": "reviewer", "to": "web", "y": 650, "label": "decision with reason or correction", "variant": "default"},
+    {"id": "decision-post", "from": "web", "to": "api", "y": 692, "label": "append decision", "variant": "emphasis"},
+    {"id": "decision-write", "from": "api", "to": "db", "y": 734, "label": "decision and chained audit event", "variant": "security"},
+    {"id": "recheck", "from": "web", "to": "api", "y": 776, "label": "corrected envelope for recheck", "variant": "emphasis"},
+    {"id": "reevaluate", "from": "api", "to": "engine", "y": 800, "label": "evaluate new immutable version", "variant": "emphasis"},
+    {"id": "version-write", "from": "api", "to": "db", "y": 840, "label": "version + 1 and supersedes_run_id", "variant": "security"}
+  ],
+  "activations": [
+    {"participant": "web", "from": 180, "to": 845, "type": "frontend"},
+    {"participant": "api", "from": 220, "to": 845, "type": "backend"},
+    {"participant": "gate", "from": 255, "to": 305, "type": "security"},
+    {"participant": "engine", "from": 337, "to": 388, "type": "backend"},
+    {"participant": "assistant", "from": 440, "to": 494, "type": "security"},
+    {"participant": "db", "from": 525, "to": 845, "type": "database"}
+  ],
+  "cards": [
+    {"dot": "emerald", "title": "Authority", "items": ["The deterministic engine creates every status", "Exactly 15 results leave the engine", "Model wording is downstream of the result"]},
+    {"dot": "violet", "title": "History", "items": ["Run and results persist together", "Reviewer decisions append with an audit event", "Recheck creates version + 1 rather than overwriting"]},
+    {"dot": "rose", "title": "Boundaries", "items": ["Tenant and actor come from the session", "Assistant output is verified or replaced", "No path submits to a payer"]}
+  ]
+}

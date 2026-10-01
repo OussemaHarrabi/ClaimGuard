@@ -1,0 +1,55 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Claim submission, review, correction and recheck",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1240, 740],
+    "views": [
+      {"id": "intake", "label": "Intake and validation", "focus": ["reviewer", "web", "api", "gate", "engine"], "note": "The session determines tenant and actor before the package reaches the engine."},
+      {"id": "explain", "label": "Guarded explanation", "focus": ["api", "assistant", "db"], "note": "Optional wording is verified and cannot move a deterministic result."},
+      {"id": "correct", "label": "Correction and recheck", "focus": ["reviewer", "web", "api", "engine", "db"], "note": "A correction creates a new version; the original run remains readable."}
+    ]
+  },
+  "participants": [
+    {"id": "reviewer", "type": "external", "label": "RCM Reviewer"},
+    {"id": "web", "type": "frontend", "label": "Next.js Workspace"},
+    {"id": "api", "type": "backend", "label": "FastAPI"},
+    {"id": "gate", "type": "security", "label": "Session Gate"},
+    {"id": "engine", "type": "backend", "label": "Rule Engine"},
+    {"id": "assistant", "type": "security", "label": "Assistant Gate"},
+    {"id": "db", "type": "database", "label": "PostgreSQL"}
+  ],
+  "segments": [
+    {"from": 150, "to": 340, "label": "Submit and validate"},
+    {"from": 350, "to": 505, "label": "Explain and decide"},
+    {"from": 485, "to": 660, "label": "Correct and recheck"}
+  ],
+  "messages": [
+    {"id": "submit", "from": "reviewer", "to": "web", "y": 175, "label": "upload synthetic package", "variant": "default"},
+    {"id": "post", "from": "web", "to": "api", "y": 205, "label": "POST /v1/intake or /v1/claims", "variant": "emphasis"},
+    {"id": "scope", "from": "api", "to": "gate", "y": 235, "label": "resolve user, role and tenant", "variant": "security"},
+    {"id": "scope-ok", "from": "gate", "to": "api", "y": 265, "label": "authorized clinic scope", "variant": "return"},
+    {"id": "evaluate", "from": "api", "to": "engine", "y": 295, "label": "validate envelope and evaluate", "variant": "emphasis"},
+    {"id": "results", "from": "engine", "to": "api", "y": 325, "label": "15 evidence-linked results", "variant": "return"},
+    {"id": "explain", "from": "api", "to": "assistant", "y": 365, "label": "explain flagged finding", "variant": "security"},
+    {"id": "answer", "from": "assistant", "to": "api", "y": 395, "label": "accepted, repaired or fallback text", "variant": "return"},
+    {"id": "persist", "from": "api", "to": "db", "y": 425, "label": "atomic run, results, provenance and event", "variant": "emphasis"},
+    {"id": "run-response", "from": "api", "to": "web", "y": 465, "label": "run summary and finding views", "variant": "return"},
+    {"id": "decision", "from": "reviewer", "to": "web", "y": 495, "label": "decision with reason or correction", "variant": "default"},
+    {"id": "decision-post", "from": "web", "to": "api", "y": 525, "label": "append decision", "variant": "emphasis"},
+    {"id": "decision-write", "from": "api", "to": "db", "y": 555, "label": "decision and chained audit event", "variant": "security"},
+    {"id": "recheck", "from": "web", "to": "api", "y": 585, "label": "corrected envelope for recheck", "variant": "emphasis"},
+    {"id": "reevaluate", "from": "api", "to": "engine", "y": 620, "label": "evaluate new immutable version", "variant": "emphasis"},
+    {"id": "version-write", "from": "api", "to": "db", "y": 655, "label": "version + 1 and supersedes_run_id", "variant": "security"}
+  ],
+  "activations": [
+    {"participant": "web", "from": 175, "to": 662, "type": "frontend"},
+    {"participant": "api", "from": 205, "to": 662, "type": "backend"},
+    {"participant": "gate", "from": 230, "to": 270, "type": "security"},
+    {"participant": "engine", "from": 290, "to": 625, "type": "backend"},
+    {"participant": "assistant", "from": 360, "to": 400, "type": "security"},
+    {"participant": "db", "from": 420, "to": 662, "type": "database"}
+  ]
+}

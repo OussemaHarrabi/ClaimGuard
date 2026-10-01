@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ClaimGuard logical data architecture",
+    "quality_profile": "showcase",
+    "viewBox": [1390, 780],
+    "views": [
+      {"id": "tenant", "label": "Tenant and access", "focus": ["clinic", "identity", "configuration"], "note": "Clinic memberships provide the role and active state used by protected reads and writes."},
+      {"id": "review", "label": "Review record", "focus": ["intake", "runs", "results", "workflow", "history"], "note": "A run owns exactly fifteen results and may be superseded by a later version."},
+      {"id": "integrity", "label": "Assistance and audit", "focus": ["provenance", "assistant", "audit"], "note": "Assistant conversation state is separate from rule results; audit events form the integrity chain."}
+    ]
+  },
+  "components": [
+    {"id": "clinic", "type": "database", "label": "Clinic Directory", "sublabel": "clinics + departments", "pos": [100, 90], "size": [190, 72], "tag": "tenant root"},
+    {"id": "identity", "type": "security", "label": "Users and Memberships", "sublabel": "users + clinic_memberships", "pos": [370, 90], "size": [210, 72], "tag": "role + active"},
+    {"id": "configuration", "type": "database", "label": "Clinic Configuration", "sublabel": "clinic_configuration", "pos": [660, 90], "size": [200, 72], "tag": "tenant settings"},
+    {"id": "intake", "type": "database", "label": "Intake Jobs", "sublabel": "source digest + state", "pos": [100, 290], "size": [190, 72], "tag": "accepted / rejected"},
+    {"id": "runs", "type": "database", "label": "Rule Runs", "sublabel": "claim version + envelope", "pos": [370, 290], "size": [210, 72], "tag": "immutable version"},
+    {"id": "results", "type": "database", "label": "Rule Results", "sublabel": "15 rows per run", "pos": [660, 290], "size": [200, 72], "tag": "R001-R015"},
+    {"id": "workflow", "type": "database", "label": "Work Management", "sublabel": "assignments + requests + escalations", "pos": [940, 290], "size": [220, 72], "tag": "clinic scoped"},
+    {"id": "history", "type": "database", "label": "Review Decisions", "sublabel": "append-only actions", "pos": [1220, 290], "size": [150, 72], "tag": "actor + reason"},
+    {"id": "provenance", "type": "security", "label": "Explanation Provenance", "sublabel": "run_explanations", "pos": [370, 510], "size": [210, 72], "tag": "verified output"},
+    {"id": "assistant", "type": "security", "label": "Assistant Conversations", "sublabel": "threads + append-only turns", "pos": [660, 510], "size": [200, 72], "tag": "separate authority"},
+    {"id": "audit", "type": "database", "label": "Audit Ledger", "sublabel": "prev_hash -> chain_hash", "pos": [1080, 510], "size": [210, 72], "tag": "SHA-256 chain"}
+  ],
+  "boundaries": [
+    {"kind": "region", "label": "PostgreSQL 16 - ClaimGuard schema", "wraps": ["clinic", "identity", "configuration", "intake", "runs", "results", "workflow", "history", "provenance", "assistant", "audit"], "pad": 18},
+    {"kind": "security-group", "label": "Tenant-owned review records", "wraps": ["runs", "results", "workflow", "history", "provenance", "assistant"], "pad": 16}
+  ],
+  "connections": [
+    {"id": "clinic-membership", "from": "clinic", "to": "identity", "label": "many memberships", "variant": "security", "labelDy": -44},
+    {"id": "identity-config", "from": "identity", "to": "configuration", "label": "tenant settings", "variant": "default", "labelDy": -44},
+    {"id": "intake-run", "from": "intake", "to": "runs", "label": "accepted job", "variant": "emphasis", "labelDy": 50},
+    {"id": "run-results", "from": "runs", "to": "results", "label": "exactly 15 rows", "variant": "emphasis", "labelDy": -44},
+    {"id": "results-work", "from": "results", "to": "workflow", "label": "route findings", "variant": "default", "labelDy": -44},
+    {"id": "work-decisions", "from": "workflow", "to": "history", "label": "append action", "variant": "default", "labelDy": -44},
+    {"id": "run-provenance", "from": "runs", "to": "provenance", "label": "per-rule provenance", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelAt": [330, 430]},
+    {"id": "result-assistant", "from": "results", "to": "assistant", "label": "finding context", "variant": "security", "fromSide": "bottom", "toSide": "top", "labelAt": [825, 430]},
+    {"id": "run-audit", "from": "runs", "to": "audit", "label": "run event", "variant": "dashed", "fromSide": "right", "toSide": "left", "via": [[620, 326], [620, 690], [1040, 690], [1040, 546]], "labelAt": [820, 690]},
+    {"id": "decision-audit", "from": "history", "to": "audit", "label": "decision event", "variant": "dashed", "fromSide": "bottom", "toSide": "right", "via": [[1295, 445], [1340, 445], [1340, 546]], "labelAt": [1340, 450]}
+  ]
+}
