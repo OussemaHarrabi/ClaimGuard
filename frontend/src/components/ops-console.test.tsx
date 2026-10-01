@@ -90,6 +90,50 @@ const makeAudit = (overrides: Partial<OpsAuditResponse> = {}): OpsAuditResponse 
   ...overrides,
 });
 
+const makeAuditChain = (
+  overrides: { intact?: boolean; total_events?: number; links?: unknown[] } = {},
+) => ({
+  intact: true,
+  checked_at: CHECKED_AT,
+  total_events: 3,
+  links: [
+    {
+      sequence: 3,
+      event_id: "evt-3",
+      at: "2026-09-29T10:00:03Z",
+      kind: "validated",
+      prev_hash: "prev-2",
+      chain_hash: "hash-3",
+      claim_ref: "RUN-abc",
+      trace_id: "trace-abc",
+      linked: true,
+    },
+    {
+      sequence: 2,
+      event_id: "evt-2",
+      at: "2026-09-29T10:00:02Z",
+      kind: "finding_created",
+      prev_hash: "prev-1",
+      chain_hash: "prev-2",
+      claim_ref: "RUN-abc",
+      trace_id: "trace-abc",
+      linked: true,
+    },
+    {
+      sequence: 1,
+      event_id: "evt-1",
+      at: "2026-09-29T10:00:01Z",
+      kind: "claim_received",
+      prev_hash: "genesis",
+      chain_hash: "prev-1",
+      claim_ref: "RUN-abc",
+      trace_id: "trace-abc",
+      linked: true,
+    },
+  ],
+  ...overrides,
+});
+
 const makeActivity = (overrides: Partial<OpsActivityResponse> = {}): OpsActivityResponse => ({
   source: { state: "healthy", last_data_at: CHECKED_AT, detail: null },
   role: null,
@@ -146,6 +190,12 @@ beforeEach(() => {
   vi.resetAllMocks();
   MockWebSocket.lastInstance = null;
   vi.stubGlobal("WebSocket", MockWebSocket);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockImplementation(() =>
+      Promise.resolve(new Response(JSON.stringify(makeAuditChain()), { status: 200 })),
+    ),
+  );
 });
 
 describe("OpsConsole", () => {
@@ -226,6 +276,43 @@ describe("OpsConsole", () => {
   });
 
   it("renders the integrity-failure banner when the audit chain is broken", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(new Response(
+          JSON.stringify(
+            makeAuditChain({
+              intact: false,
+              links: [
+                {
+                  sequence: 2,
+                  event_id: "evt-2",
+                  at: "2026-09-29T10:00:02Z",
+                  kind: "validated",
+                  prev_hash: "prev-1",
+                  chain_hash: "hash-2",
+                  claim_ref: "RUN-abc",
+                  trace_id: "trace-abc",
+                  linked: false,
+                },
+                {
+                  sequence: 1,
+                  event_id: "evt-1",
+                  at: "2026-09-29T10:00:01Z",
+                  kind: "claim_received",
+                  prev_hash: "genesis",
+                  chain_hash: "prev-1",
+                  claim_ref: "RUN-abc",
+                  trace_id: "trace-abc",
+                  linked: true,
+                },
+              ],
+            }),
+          ),
+          { status: 200 }),
+        ),
+      ),
+    );
     mockSnapshot({ audit: makeAudit({ intact: false }) });
     render(<OpsConsole />);
 
@@ -234,6 +321,124 @@ describe("OpsConsole", () => {
       screen.getByText("Audit ledger integrity check failed. Escalate immediately."),
     ).toBeInTheDocument();
     expect(screen.queryByText("Audit chain intact")).not.toBeInTheDocument();
+  });
+
+  it("renders the audit chain as grouped series with hashes and linkage status", async () => {
+    mockSnapshot();
+    render(<OpsConsole section="audit" variant="embedded" />);
+
+    expect(await screen.findByText("Audit chain intact")).toBeInTheDocument();
+    expect(screen.getByText(/altering or removing any past event/)).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(screen.getByText("Claim received")).toBeInTheDocument();
+      expect(screen.getByText("A finding was raised")).toBeInTheDocument();
+      expect(screen.getByText("Claim was validated")).toBeInTheDocument();
+    });
+
+    expect(screen.getByText("#1")).toBeInTheDocument();
+    expect(screen.getByText("#2")).toBeInTheDocument();
+    expect(screen.getByText("#3")).toBeInTheDocument();
+
+    expect(screen.getByTitle("Previous hash: prev-1")).toBeInTheDocument();
+    expect(screen.getByTitle("This link: hash-3")).toBeInTheDocument();
+  });
+
+  it("surfaces a broken chain link that does not verify", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(new Response(
+          JSON.stringify(
+            makeAuditChain({
+              intact: false,
+              links: [
+                {
+                  sequence: 2,
+                  event_id: "evt-2",
+                  at: "2026-09-29T10:00:02Z",
+                  kind: "validated",
+                  prev_hash: "prev-1",
+                  chain_hash: "hash-2",
+                  claim_ref: "RUN-abc",
+                  trace_id: "trace-abc",
+                  linked: false,
+                },
+                {
+                  sequence: 1,
+                  event_id: "evt-1",
+                  at: "2026-09-29T10:00:01Z",
+                  kind: "claim_received",
+                  prev_hash: "genesis",
+                  chain_hash: "prev-1",
+                  claim_ref: "RUN-abc",
+                  trace_id: "trace-abc",
+                  linked: true,
+                },
+              ],
+            }),
+          ),
+          { status: 200 }),
+        ),
+      ),
+    );
+    mockSnapshot({ audit: makeAudit({ intact: false, event_count: 2 }) });
+    render(<OpsConsole section="audit" variant="embedded" />);
+
+    expect(await screen.findByText("Audit chain integrity failure")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getAllByLabelText("Link broken").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("shows an unknown audit kind as raw text instead of inventing a label", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(new Response(
+          JSON.stringify(
+            makeAuditChain({
+              total_events: 1,
+              links: [
+                {
+                  sequence: 1,
+                  event_id: "evt-1",
+                  at: "2026-09-29T10:00:01Z",
+                  kind: "mystery_event",
+                  prev_hash: "genesis",
+                  chain_hash: "hash-1",
+                  claim_ref: "RUN-abc",
+                  trace_id: "trace-abc",
+                  linked: true,
+                },
+              ],
+            }),
+          ),
+          { status: 200 }),
+        ),
+      ),
+    );
+    mockSnapshot({ audit: makeAudit({ event_count: 1 }) });
+    render(<OpsConsole section="audit" variant="embedded" />);
+
+    expect(await screen.findByText("mystery_event")).toBeInTheDocument();
+    expect(screen.queryByText("Mystery event")).not.toBeInTheDocument();
+  });
+
+  it("treats an empty link list with zero total events as unreadable, not empty-and-fine", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(() =>
+        Promise.resolve(new Response(
+          JSON.stringify(makeAuditChain({ total_events: 0, links: [] })),
+          { status: 200 }),
+        ),
+      ),
+    );
+    mockSnapshot({ audit: makeAudit({ intact: true, event_count: 0 }) });
+    render(<OpsConsole section="audit" variant="embedded" />);
+
+    expect(await screen.findByText("The audit ledger cannot be read right now.")).toBeInTheDocument();
   });
 
   it("still paints when the socket goes live before the first fetch resolves", async () => {
@@ -498,6 +703,76 @@ describe("OpsConsole", () => {
 
     const timeline = screen.getByLabelText("Spans for trace trace-1");
     expect(within(timeline).getByText("143 ms")).toBeInTheDocument();
+
+    vi.unstubAllGlobals();
+  });
+
+  it("formats durations with a fixed dot separator and switches to microseconds for sub-millisecond spans", async () => {
+    const traceDetail = {
+      source: { state: "healthy", last_data_at: CHECKED_AT, detail: null },
+      trace_id: "trace-decimal",
+      root_name: "GET /v1/decimal",
+      duration_ms: 7.611,
+      spans: [
+        {
+          span_id: "root",
+          parent_span_id: null,
+          name: "GET /v1/decimal",
+          service: "api",
+          start_offset_ms: 0,
+          duration_ms: 7.611,
+          depth: 0,
+          status: "ok",
+        },
+        {
+          span_id: "fast",
+          parent_span_id: "root",
+          name: "cache.read",
+          service: "api",
+          start_offset_ms: 2,
+          duration_ms: 0.062,
+          depth: 1,
+          status: "ok",
+        },
+      ],
+    };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string) => {
+        if (url.includes("/v1/operations/traces/trace-decimal")) {
+          return { ok: true, json: async () => traceDetail };
+        }
+        if (url.includes("/v1/operations/audit/chain")) {
+          return new Response(JSON.stringify(makeAuditChain()), { status: 200 });
+        }
+        throw new Error(`unexpected fetch: ${url}`);
+      }),
+    );
+
+    mockSnapshot({
+      traces: makeTraces({
+        traces: [
+          {
+            trace_id: "trace-decimal",
+            root_name: "GET /v1/decimal",
+            service: "api",
+            start_time: CHECKED_AT,
+            duration_ms: 7.611,
+          },
+        ],
+      }),
+    });
+    render(<OpsConsole section="traces" variant="embedded" />);
+
+    const otherCard = await screen.findByRole("button", { name: "Other requests: 1 trace" });
+    fireEvent.click(otherCard);
+
+    const traceRow = await screen.findByRole("button", { name: /Trace trace-decimal:/i });
+    fireEvent.click(traceRow);
+
+    expect(await screen.findByText("Trace flow")).toBeInTheDocument();
+    expect(screen.getAllByText("7.6 ms").length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText("62 µs")).toBeInTheDocument();
 
     vi.unstubAllGlobals();
   });

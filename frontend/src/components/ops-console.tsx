@@ -11,6 +11,7 @@ import {
 import {
   Activity,
   AlertTriangle,
+  Check,
   ChevronLeft,
   ChevronRight,
   Clock,
@@ -52,7 +53,7 @@ import {
 const REFRESH_INTERVAL_MS = 30_000;
 const STAGGER_MS = 35;
 const MAX_STAGGER_NODES = 8;
-const MAX_AUDIT_BLOCKS = 14;
+const AUDIT_CHAIN_LIMIT = 50;
 const COUNT_UP_MS = 250;
 const ACTIVITY_LIMIT = 50;
 
@@ -256,7 +257,19 @@ function traceLatencyClass(ms: number): "fast" | "medium" | "slow" {
 }
 
 function formatDuration(ms: number): string {
-  if (ms < 1000) return `${ms.toLocaleString()} ms`;
+  // Use a fixed "." decimal separator and readable units so values like
+  // 7.611 ms do not render as "7,611 ms" in comma-decimal locales, and so
+  // sub-millisecond spans are shown in microseconds instead of long decimals.
+  if (ms < 1) {
+    const us = Math.round(ms * 1000);
+    return us === 0 ? "0 µs" : `${us} µs`;
+  }
+  if (ms < 1000) {
+    const whole = Math.floor(ms);
+    const frac = ms - whole;
+    if (frac < 0.05) return `${whole} ms`;
+    return `${ms.toFixed(1)} ms`;
+  }
   if (ms < 60_000) return `${(ms / 1000).toFixed(1)} s`;
   const minutes = Math.floor(ms / 60_000);
   const seconds = Math.floor((ms % 60_000) / 1000);
@@ -902,17 +915,63 @@ function SignalNode({
   );
 }
 
-function HashChain({ intact, eventCount, checkedAt }: { intact: boolean; eventCount: number; checkedAt: string }) {
-  const reduced = usePrefersReducedMotion();
-  const displayed = eventCount > 0 ? clamp(Math.min(eventCount, MAX_AUDIT_BLOCKS), 1, MAX_AUDIT_BLOCKS) : 0;
-  const remainder = Math.max(0, eventCount - displayed);
-  const breakIndex = displayed > 0 ? Math.floor(displayed / 2) : 0;
+type AuditChainSurfaceProps = {
+  audit: OpsAuditResponse;
+  reduced: boolean;
+};
 
-  const blocks = Array.from({ length: displayed }, (_, i) => ({
-    id: `audit-block-${i}`,
-    fragment: `b${i.toString(16).padStart(2, "0")}`,
-    fallen: !intact && i >= breakIndex,
-  }));
+type AuditChainState =
+  | { state: "loading" }
+  | { state: "ok"; data: AuditChainResponse }
+  | { state: "error"; message: string };
+
+function groupAuditLinks(links: readonly AuditChainLink[]) {
+  const groups: { claimRef: string; traceId: string; links: AuditChainLink[] }[] = [];
+  for (const link of links) {
+    const last = groups[groups.length - 1];
+    if (last && last.claimRef === link.claim_ref) {
+      last.links.push(link);
+    } else {
+      groups.push({ claimRef: link.claim_ref, traceId: link.trace_id, links: [link] });
+    }
+  }
+  return groups;
+}
+
+function AuditChainSurface({ audit, reduced }: AuditChainSurfaceProps) {
+  const [chain, setChain] = useState<AuditChainState>({ state: "loading" });
+  const [paused, setPaused] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
+
+  useEffect(() => {
+    if (paused) return;
+    const controller = new AbortController();
+    const load = async () => {
+      setChain({ state: "loading" });
+      try {
+        const data = await fetchAuditChain(AUDIT_CHAIN_LIMIT, controller.signal);
+        setChain({ state: "ok", data });
+      } catch (err) {
+        if (controller.signal.aborted) return;
+        setChain({ state: "error", message: fetchErrorMessage(err) });
+      }
+    };
+    void load();
+    const id = setInterval(() => void load(), REFRESH_INTERVAL_MS);
+    return () => {
+      controller.abort();
+      clearInterval(id);
+    };
+  }, [paused, refreshKey]);
+
+  const eventCount = chain.state === "ok" ? chain.data.total_events : audit.event_count;
+  const checkedAt = chain.state === "ok" ? chain.data.checked_at : audit.checked_at;
+  const intact = chain.state === "ok" ? chain.data.intact : audit.intact;
+
+  const togglePaused = () => setPaused((p) => !p);
+  const refresh = () => setRefreshKey((k) => k + 1);
+
+  const delay = reduced ? "0ms" : "60ms";
 
   return (
     <section
@@ -928,43 +987,19 @@ function HashChain({ intact, eventCount, checkedAt }: { intact: boolean; eventCo
           />
           <span className="ops-audit-count-label">events</span>
         </div>
-        <time className="ops-audit-checked" dateTime={checkedAt}>
-          {fmtRel(checkedAt)}
-        </time>
-      </div>
-
-      <div className="ops-audit-chain" aria-hidden="true">
-        <div className={`ops-audit-chain-line ${intact ? "" : "ops-audit-chain-line-broken"}`} />
-        {!reduced && intact && <div className="ops-audit-chain-sweep" />}
-        <div className="ops-audit-blocks">
-          {blocks.map((block, i) => (
-            <div
-              key={block.id}
-              className={`ops-audit-block ${block.fallen ? "ops-audit-block-fallen" : ""} ${reduced ? "" : "ops-audit-block-enter"}`}
-              style={{ "--block-index": i } as React.CSSProperties}
-            >
-              {i > 0 && (
-                <span className="ops-audit-link-mark" aria-hidden="true">
-                  <svg viewBox="0 0 16 6" aria-hidden="true">
-                    <line
-                      x1="0"
-                      y1="3"
-                      x2="16"
-                      y2="3"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                    />
-                  </svg>
-                </span>
-              )}
-              <span className="ops-audit-fragment">{block.fragment}</span>
-            </div>
-          ))}
-          {remainder > 0 && (
-            <span className="ops-audit-more">+{remainder.toLocaleString()}</span>
-          )}
+        <div className="ops-audit-hero-meta">
+          <time className="ops-audit-checked" dateTime={checkedAt}>
+            {fmtRel(checkedAt)}
+          </time>
+          <button
+            type="button"
+            className="ops-audit-pause"
+            onClick={togglePaused}
+            aria-pressed={paused}
+          >
+            {paused ? <Play size={14} aria-hidden="true" /> : <Pause size={14} aria-hidden="true" />}
+            <span>{paused ? "Resume updates" : "Pause updates"}</span>
+          </button>
         </div>
       </div>
 
@@ -974,6 +1009,105 @@ function HashChain({ intact, eventCount, checkedAt }: { intact: boolean; eventCo
           <span>Audit ledger integrity check failed. Escalate immediately.</span>
         )}
       </div>
+
+      <p className="ops-audit-explainer">
+        Every event is hashed together with the previous event&apos;s hash. That means
+        altering or removing any past event breaks every link that comes after it.
+        Each row below shows one link: its own hash, the previous hash it claims,
+        and whether the claim checks out.
+      </p>
+
+      {chain.state === "loading" && (
+        <div className="ops-audit-loading">
+          <Skeleton />
+        </div>
+      )}
+
+      {chain.state === "error" && (
+        <div className="ops-audit-empty">
+          <span>{chain.message}</span>
+          <button type="button" className="ops-audit-retry" onClick={refresh}>
+            <RefreshCw size={14} aria-hidden="true" />
+            <span>Retry</span>
+          </button>
+        </div>
+      )}
+
+      {chain.state === "ok" && chain.data.links.length === 0 && (
+        <div className="ops-audit-empty">
+          The audit ledger cannot be read right now.
+        </div>
+      )}
+
+      {chain.state === "ok" && chain.data.links.length > 0 && (
+        <div className="ops-audit-series-list">
+          {groupAuditLinks(chain.data.links).map((group) => (
+            <section
+              key={`${group.claimRef}-${group.traceId}-${group.links[0]?.event_id ?? "group"}`}
+              className={`ops-audit-series ${reduced ? "" : "ops-audit-series-enter"}`}
+              style={{ "--row-delay": delay } as React.CSSProperties}
+            >
+              <header className="ops-audit-series-header">
+                <span className="ops-audit-series-claim" title={group.claimRef}>
+                  Claim <code>{truncateHash(group.claimRef)}</code>
+                </span>
+                <span className="ops-audit-series-trace" title={group.traceId}>
+                  Trace <code>{truncateHash(group.traceId)}</code>
+                </span>
+                <span className="ops-audit-series-count">
+                  {group.links.length} event{group.links.length === 1 ? "" : "s"}
+                </span>
+              </header>
+              <ol className="ops-audit-link-list">
+                {group.links.map((link, linkIndex) => (
+                  <li
+                    key={link.event_id}
+                    className={`ops-audit-link ${link.linked ? "" : "ops-audit-link-broken"}`}
+                    style={{ "--link-index": linkIndex } as React.CSSProperties}
+                  >
+                    <div className="ops-audit-link-chain" aria-hidden="true">
+                      <span className="ops-audit-link-node" />
+                      {linkIndex < group.links.length - 1 && (
+                        <span className="ops-audit-link-connector" />
+                      )}
+                    </div>
+                    <div className="ops-audit-link-sequence">#{link.sequence}</div>
+                    <div className="ops-audit-link-body">
+                      <div className="ops-audit-link-kind">{auditKindLabel(link.kind)}</div>
+                      <time className="ops-audit-link-time" dateTime={link.at}>
+                        {fmtRel(link.at)}
+                      </time>
+                    </div>
+                    <div className="ops-audit-link-hashes">
+                      <span
+                        className="ops-audit-hash ops-audit-hash-prev"
+                        title={`Previous hash: ${link.prev_hash}`}
+                      >
+                        <span className="ops-audit-hash-label">previous</span>
+                        <code className="ops-audit-hash-value">{truncateHash(link.prev_hash)}</code>
+                      </span>
+                      <span
+                        className="ops-audit-hash ops-audit-hash-self"
+                        title={`This link: ${link.chain_hash}`}
+                      >
+                        <span className="ops-audit-hash-label">this link</span>
+                        <code className="ops-audit-hash-value">{truncateHash(link.chain_hash)}</code>
+                      </span>
+                    </div>
+                    <div className="ops-audit-link-status" role="status" aria-label={link.linked ? "Link verifies" : "Link broken"}>
+                      {link.linked ? (
+                        <Check size={16} aria-hidden="true" />
+                      ) : (
+                        <AlertTriangle size={16} aria-hidden="true" />
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ol>
+            </section>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -1320,11 +1454,7 @@ export function OpsConsole({ variant = "page", section }: OpsConsoleProps) {
             )}
 
             {showAudit && snap.data.audit && (
-              <HashChain
-                intact={snap.data.audit.intact}
-                eventCount={snap.data.audit.event_count}
-                checkedAt={snap.data.audit.checked_at}
-              />
+              <AuditChainSurface audit={snap.data.audit} reduced={reduced} />
             )}
 
             {showActivity && snap.data.activity && (
@@ -1873,6 +2003,67 @@ async function fetchTraceDetail(traceId: string, signal?: AbortSignal): Promise<
     throw new Error(detail);
   }
   return (await response.json()) as OpsTraceDetailResponse;
+}
+
+type AuditChainLink = {
+  sequence: number;
+  event_id: string;
+  at: string;
+  kind: string;
+  prev_hash: string;
+  chain_hash: string;
+  claim_ref: string;
+  trace_id: string;
+  linked: boolean;
+};
+
+type AuditChainResponse = {
+  intact: boolean;
+  checked_at: string;
+  total_events: number;
+  links: AuditChainLink[];
+};
+
+async function fetchAuditChain(limit: number, signal?: AbortSignal): Promise<AuditChainResponse> {
+  const response = await fetch(`/v1/operations/audit/chain?limit=${limit}`, {
+    cache: "no-store",
+    signal,
+  });
+  if (!response.ok) {
+    let detail = `${response.status} ${response.statusText}`;
+    try {
+      const payload = (await response.json()) as { detail?: string; message?: string };
+      detail = payload.detail ?? payload.message ?? detail;
+    } catch {
+      // keep the HTTP detail if the body is not JSON
+    }
+    throw new Error(detail);
+  }
+  return (await response.json()) as AuditChainResponse;
+}
+
+const AUDIT_KIND_LABEL: Record<string, string> = {
+  claim_received: "Claim received",
+  normalized: "Claim was normalised",
+  validated: "Claim was validated",
+  finding_created: "A finding was raised",
+  "finding.suppressed": "A finding was suppressed",
+  escalated: "Escalated to a human",
+  review_decided: "A reviewer decided",
+  override_applied: "An override was applied",
+  rule_published: "Rule catalogue updated",
+  benchmark_run: "Benchmark run completed",
+  llm_called: "A model was consulted",
+  handoff: "Handed off",
+};
+
+function auditKindLabel(kind: string): string {
+  return AUDIT_KIND_LABEL[kind] ?? kind;
+}
+
+function truncateHash(hash: string): string {
+  if (hash.length <= 18) return hash;
+  return `${hash.slice(0, 8)}…${hash.slice(-8)}`;
 }
 
 function TraceCategoryDetail({ summary, source, reduced, onBack }: TraceCategoryDetailProps) {

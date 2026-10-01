@@ -69,7 +69,7 @@ Current page set (one section per page, all dark):
 | Operations | platform verdict, components, source freshness, version strip |
 | Metrics | category cards by signal family; drill to series; 5m/15m/1h |
 | Traces | category cards by request family; drill to trace timeline |
-| Audit Integrity | chain verification seal + event count |
+| Audit Integrity | hash-chain verification, grouped event series, per-link hashes and linkage status |
 | Intake Jobs | job counts by status |
 | Versions | rule / model / prompt versions |
 | Configuration | tenant-scoped intake toggle |
@@ -112,6 +112,19 @@ children nested by depth, each bar positioned by start time and sized by
 duration, so a reader can see exactly where the time went (e.g. a database call
 inside a rule-evaluation span). Empty categories stay visible and read
 "no traffic" so the manager can see what parts of the API surface are idle.
+
+**Audit Integrity:** a tamper-evidence view built on the hash-chain endpoint.
+The page shows the verification verdict ("Audit chain intact" / "Audit chain
+integrity failure"), the event count, and a plain explanation of what a hash
+chain means: each event's hash is computed over the previous event's hash, so
+altering or removing any past event breaks every link after it. Consecutive
+events that share a `claim_ref` and `trace_id` are grouped into a series, making
+a single claim's lifecycle legible. Each link displays its sequence number,
+translated `kind`, timestamp, truncated previous and current hashes, and a
+visible linkage status. A broken link is impossible to miss. If the endpoint
+returns no links and zero total events, the page says the ledger cannot be read
+right now rather than claiming it is empty and fine. Live updates are fetched
+periodically and can be paused, just like Traces.
 
 ## 6. Motion
 
