@@ -257,6 +257,8 @@ export function buildReviewWorkspace(
             createdAt: details.run.created_at,
             supersedesRunId: details.run.supersedes_run_id,
           },
+          totalChecks: details.results.length,
+          outcomes: details.results.map((record) => ({ ruleId: record.rule_id, status: record.status })),
           findings: details.results
             .filter((record) => record.requires_human_review || record.status === "NOT_IMPLEMENTED")
             .map((record) => {

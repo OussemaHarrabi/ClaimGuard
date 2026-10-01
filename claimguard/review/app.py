@@ -21,6 +21,35 @@ Eight honest operations, and nothing that decides anything about a claim:
 
 ``GET /v1/health`` reports schema readiness and the rule catalogue it loaded.
 
+BESIDE THE EIGHT: THE INTERACTIVE ASSISTANT
+-------------------------------------------
+Four routes let a reviewer ask *why* a stored finding is flagged and hold a
+conversation about it:
+
+*   ``GET  /v1/ai/status`` — whether the assistant can answer, with what model
+    and prompt version, or why it cannot;
+*   ``POST /v1/runs/{run_id}/findings/{rule_id}/explain`` — open (or resume)
+    this reviewer's thread on that finding and answer the opening question;
+*   ``POST /v1/threads/{thread_id}/messages`` — ask a follow-up in the thread;
+*   ``GET  /v1/threads/{thread_id}`` — the thread and every turn in it.
+
+They are additive. The assistant READS a stored run — the finding, the original
+envelope the evidence pointers resolve against, the rule manifest and the
+claim's policy profile, all through the store and catalogue this module already
+serves — and writes its own conversation to ``claimguard.assistant_turns``. It
+never writes to ``rule_results``, ``run_explanations``, ``audit_events`` or the
+15-key record, so no answer can change a status, a severity, an evidence pointer
+or a routing decision, and the graded run stays exactly as the engine produced
+it. Every turn records how its answer was produced (accepted / repaired /
+fallback / refused): a deployment with no model configured still answers, from
+the deterministic layer, and says so.
+
+The assistant's own package (``claimguard.ai``, installed by the optional
+``agent`` extra) is imported lazily, on the first assistant request, so the
+reviewer surface starts and keeps working without it: ``GET /v1/ai/status``
+reports the feature as off, and the three conversation routes answer 503 naming
+the extra to install rather than failing at import time.
+
 BOUNDARIES THE SURFACE KEEPS
 ----------------------------
 *   **The engine decides, the API reports.** Statuses come from
@@ -65,10 +94,10 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
-from typing import Annotated, Any, Final, cast
+from typing import Annotated, Any, Final, Literal, TypeVar, cast
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -109,6 +138,12 @@ from claimguard.review.explanations import (
     explanation_provider,
 )
 from claimguard.review.models import (
+    MAX_TURNS_PER_THREAD,
+    AssistantConversation,
+    AssistantOpening,
+    AssistantQuestion,
+    AssistantStatus,
+    AssistantThreadRef,
     AuditStamp,
     DecisionHistory,
     DecisionRequest,
@@ -164,6 +199,26 @@ _AUDIT_SPAN: Final = "claim.audit"
 #: Policy-safe route templates (placeholders, never a concrete id) for span tags.
 _SUBMIT_ROUTE: Final = "/v1/claims"
 _RECHECK_ROUTE: Final = "/v1/claims/{claim_id}/recheck"
+
+#: The status / 503 body when the assistant's dependencies are absent. Same
+#: shape as the catalogue failure above: name what is missing, name the command
+#: that fixes it, and say what still works. The assistant is optional by design,
+#: so its absence is a deployment fact to report, never a 500.
+ASSISTANT_UNAVAILABLE_STATUS: Final = status.HTTP_503_SERVICE_UNAVAILABLE
+ASSISTANT_MISSING_DETAIL: Final = (
+    "the interactive assistant is not installed in this deployment: the optional 'agent' "
+    "extra provides it (uv sync --extra agent). The deterministic check results and their "
+    "explanations are unaffected."
+)
+
+#: How a reviewer's own turn is recorded. Verification describes an *answer*: a
+#: reviewer's message is stored exactly as typed, so nothing was refused,
+#: re-drafted or replaced for it, and 'accepted' is the honest value.
+REVIEWER_TURN_VERIFICATION: Final = "accepted"
+
+#: What an assistant-store operation returns; the store's own shapes are only
+#: reachable through the lazily-imported package, so the wrapper stays generic.
+_T = TypeVar("_T")
 
 
 def resolve_rules_dir() -> Path:
@@ -248,6 +303,7 @@ def create_app(
     explain_provider: ExplanationProvider | None = None,
     signer: SessionSigner | None = None,
     directory: ClinicDirectory | None = None,
+    assistant_store: Any | None = None,
 ) -> FastAPI:
     """Build the review API.
 
@@ -257,6 +313,11 @@ def create_app(
     ``claimguard.config``, for the DSN). ``explain_provider`` defaults to the
     provider the environment configures — the deterministic template when no
     model is configured.
+
+    ``assistant_store`` is the same seam for the interactive assistant. Left
+    unset, the assistant's own store is built on first use from the shared
+    engine; a deployment without the optional ``agent`` extra therefore starts
+    normally and reports the assistant as unavailable.
 
     The handlers themselves are module-level functions that read their
     collaborators from ``request.app.state``, rather than closures registered as
@@ -284,6 +345,10 @@ def create_app(
         if directory is not None
         else (ClinicDirectory(app.state.store.engine) if app.state.signer is not None else None)
     )
+    # Left as given: when it is unset, ``_assistant_store`` builds it from the
+    # shared engine on the first assistant request, so nothing in the optional
+    # ``agent`` package is imported for a deployment that never asks.
+    app.state.assistant = assistant_store
 
     async def require_clinic_session(request: Request, call_next: Any) -> Response:
         path = request.url.path
@@ -402,6 +467,31 @@ def create_app(
         methods=["POST"],
         response_model=RunResponse,
         status_code=status.HTTP_201_CREATED,
+    )
+    # The interactive assistant. Registered without a status override so both
+    # POSTs answer 200 with the conversation read back after the turn was
+    # stored: the interface renders that body exactly as it renders
+    # ``GET /v1/threads/{thread_id}``, so a reply and a refresh are one code
+    # path in the client. Nothing here is a resource the caller asked to
+    # create: the thread already existed (or is opened by the first Explain).
+    app.add_api_route("/v1/ai/status", ai_status, methods=["GET"], response_model=AssistantStatus)
+    app.add_api_route(
+        "/v1/runs/{run_id}/findings/{rule_id}/explain",
+        explain_finding,
+        methods=["POST"],
+        response_model=AssistantConversation,
+    )
+    app.add_api_route(
+        "/v1/threads/{thread_id}/messages",
+        post_thread_message,
+        methods=["POST"],
+        response_model=AssistantConversation,
+    )
+    app.add_api_route(
+        "/v1/threads/{thread_id}",
+        get_thread,
+        methods=["GET"],
+        response_model=AssistantConversation,
     )
     app.include_router(review_ui.router)
     app.include_router(operations_router)
@@ -858,7 +948,13 @@ def resolve_escalation(
 class IntakePayload(BaseModel):
     model_config = ConfigDict(extra="forbid")
     filename: str
-    content: str
+    content: str = ""
+    # "auto" lets the service classify the payload itself (JSON envelope, FHIR
+    # bundle or CSV package) and record a specific reason when it cannot, rather
+    # than making the caller guess a format the detector already knows.
+    source_format: Literal["envelope_json", "csv_split", "fhir_bundle", "auto"] = "envelope_json"
+    files: dict[str, str] | None = None
+    sidecar: dict[str, Any] | None = None
 
 
 def list_intake_jobs(request: Request) -> list[dict[str, Any]]:
@@ -874,7 +970,13 @@ def create_intake_job(request: Request, payload: IntakePayload) -> dict[str, Any
     principal, work = _workspaces(request, Action.CREATE_CLAIM)
     try:
         created = work.create_intake_job(
-            principal.tenant_id, principal.user_id, payload.filename, payload.content
+            principal.tenant_id,
+            principal.user_id,
+            payload.filename,
+            payload.content,
+            source_format=payload.source_format,
+            files=payload.files,
+            sidecar=payload.sidecar,
         )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1049,9 +1151,375 @@ def recheck(request: Request, claim_id: str, payload: RecheckRequest) -> RunResp
         return _run_response(recorded)
 
 
+def ai_status(request: Request) -> AssistantStatus:
+    """Whether the assistant can answer, with what, and why not when it cannot.
+
+    Read-only and model-free: a reviewer is entitled to know whether the
+    explanation they are about to read came from a model or from the
+    deterministic layer *before* asking anything. Any role that may read a claim
+    may read this, and a deployment without the optional ``agent`` extra reports
+    itself as off rather than answering 503: "the assistant is not installed" is
+    exactly what this endpoint exists to say.
+    """
+    principal = cast(Principal, request.state.principal)
+    try:
+        authorize(principal, Action.READ_CLAIM, tenant_id=principal.tenant_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail="access denied") from exc
+    return _assistant_status()
+
+
+def explain_finding(
+    request: Request, run_id: str, rule_id: str, payload: AssistantOpening | None = None
+) -> AssistantConversation:
+    """Open (or resume) the reviewer's thread on one finding of one run.
+
+    ``payload.question`` is optional, and so is the body itself: ``{}``, ``{"question": "…"}`` and
+    no body at all are all legal, and the first two mean "ask the interface's own opening question -
+    why is this finding flagged". The permissive model is deliberate; see
+    :class:`claimguard.ai.schemas.AssistantOpening` for why a required field here was a bug.
+    """
+    principal = cast(Principal, request.state.principal)
+    # The same gate the run's own results pass: the assistant explains a finding
+    # the caller may already read, and never one they may not.
+    review_store = _claim_store(request, run_id, Action.ASK_ASSISTANT)
+    run = review_store.get_run(run_id)
+    if run is None:  # pragma: no cover - _claim_store just proved otherwise
+        raise RunNotFoundError(f"unknown run: {run_id}")
+    envelope = review_store.get_claim_envelope(run_id)
+    if envelope is None:
+        raise RunNotFoundError(f"unknown run: {run_id}")
+    finding = _finding_of(review_store, run_id, rule_id)
+    question = payload.question if payload is not None else None
+
+    def run_turn(assistants: Any) -> AssistantConversation:
+        thread = cast(
+            AssistantThreadRef,
+            assistants.open_thread(
+                tenant_id=principal.tenant_id,
+                run_id=run_id,
+                claim_id=run.claim_id,
+                rule_id=rule_id,
+                actor=principal.user_id,
+            ),
+        )
+        _require_room(assistants, thread, tenant_id=principal.tenant_id, planned=1)
+        outcome = _answer_question(
+            request,
+            thread=thread,
+            finding=finding,
+            envelope=envelope,
+            question=question,
+            tenant_id=principal.tenant_id,
+        )
+        assistants.append_turn(
+            thread.thread_id,
+            tenant_id=principal.tenant_id,
+            role="assistant",
+            question=question,
+            answer=outcome.answer,
+            verification=outcome.verification,
+            reasons=list(outcome.reasons),
+            model_version=outcome.model_version,
+            prompt_version=outcome.prompt_version,
+            receipt=outcome.receipt,
+            latency_ms=outcome.latency_ms,
+        )
+        return cast(
+            AssistantConversation,
+            assistants.conversation(thread.thread_id, tenant_id=principal.tenant_id),
+        )
+
+    return _assistant_operation(request, run_turn)
+
+
+def post_thread_message(
+    request: Request, thread_id: str, payload: AssistantQuestion
+) -> AssistantConversation:
+    """Ask a follow-up in one of the caller's own threads.
+
+    The finding the thread is about — never one named in the request — is what
+    gets explained, so a message cannot pivot the conversation onto a record the
+    caller could not have opened.
+    """
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.ASK_ASSISTANT)
+
+    def take_turn(assistants: Any) -> AssistantConversation:
+        thread = _owned_thread(
+            assistants, thread_id, tenant_id=principal.tenant_id, user_id=principal.user_id
+        )
+        # Two rows: the reviewer's message, then the answer to it.
+        _require_room(assistants, thread, tenant_id=principal.tenant_id, planned=2)
+        review_store = _claim_store(request, thread.run_id, Action.ASK_ASSISTANT)
+        envelope = review_store.get_claim_envelope(thread.run_id)
+        if envelope is None:
+            raise RunNotFoundError(f"unknown run: {thread.run_id}")
+        finding = _finding_of(review_store, thread.run_id, thread.rule_id)
+        outcome = _answer_question(
+            request,
+            thread=thread,
+            finding=finding,
+            envelope=envelope,
+            question=payload.question,
+            tenant_id=principal.tenant_id,
+        )
+        assistants.append_turn(
+            thread_id,
+            tenant_id=principal.tenant_id,
+            role="reviewer",
+            question=payload.question,
+            answer=None,
+            verification=REVIEWER_TURN_VERIFICATION,
+            reasons=[],
+            model_version=outcome.model_version,
+            prompt_version=outcome.prompt_version,
+            receipt=None,
+            latency_ms=None,
+        )
+        assistants.append_turn(
+            thread_id,
+            tenant_id=principal.tenant_id,
+            role="assistant",
+            question=payload.question,
+            answer=outcome.answer,
+            verification=outcome.verification,
+            reasons=list(outcome.reasons),
+            model_version=outcome.model_version,
+            prompt_version=outcome.prompt_version,
+            receipt=outcome.receipt,
+            latency_ms=outcome.latency_ms,
+        )
+        return cast(
+            AssistantConversation,
+            assistants.conversation(thread_id, tenant_id=principal.tenant_id),
+        )
+
+    return _assistant_operation(request, take_turn)
+
+
+def get_thread(request: Request, thread_id: str) -> AssistantConversation:
+    """One of the caller's own conversations, and every turn in it."""
+    principal = cast(Principal, request.state.principal)
+    _migrated_store(request, Action.ASK_ASSISTANT)
+
+    def read(assistants: Any) -> AssistantConversation:
+        thread = _owned_thread(
+            assistants, thread_id, tenant_id=principal.tenant_id, user_id=principal.user_id
+        )
+        return cast(
+            AssistantConversation,
+            assistants.conversation(thread.thread_id, tenant_id=principal.tenant_id),
+        )
+
+    return _assistant_operation(request, read)
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _assistant_status() -> AssistantStatus:
+    """The assistant's own reported status, or an honest "not installed".
+
+    The status helper lives in the optional package too, and it is the one call
+    that must survive its absence: a reviewer (or an operator) asking whether the
+    feature is on deserves the answer "off, install the extra", not a 503 that
+    reads like a broken deployment.
+    """
+    try:
+        from claimguard.ai.graph import assistant_status
+    except ImportError:
+        return AssistantStatus(
+            enabled=False,
+            mode="off",
+            model="none",
+            prompt_version="none",
+            detail=ASSISTANT_MISSING_DETAIL,
+        )
+    return assistant_status()
+
+
+def _assistant_store(request: Request) -> Any:
+    """The app's assistant store, built from the shared engine on first use.
+
+    Lazy for the same reason the rule catalogue is: the API must start — and the
+    whole deterministic reviewer surface must keep working — when the optional
+    ``agent`` extra is not installed. The import happens here, on the first
+    assistant request, and its absence is a 503 naming the extra.
+    """
+    existing = request.app.state.assistant
+    if existing is not None:
+        return existing
+    try:
+        from claimguard.ai.store import AssistantStore
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=ASSISTANT_UNAVAILABLE_STATUS, detail=ASSISTANT_MISSING_DETAIL
+        ) from exc
+    store = AssistantStore(cast(ReviewStore, request.app.state.store).engine)
+    request.app.state.assistant = store
+    return store
+
+
+def _assistant_operation(request: Request, operation: Callable[[Any], _T]) -> _T:
+    """Run one assistant-store operation, mapping its failures to HTTP.
+
+    The store's errors are the assistant package's own, and that package is
+    imported lazily, so the mapping lives here rather than in exception handlers
+    registered when this module is imported. A thread that does not exist, names
+    another tenant, or was closed by its reviewer is reported exactly as the
+    store reported it — 404 without revealing whether the id is real, or 409
+    with the state that refuses the write.
+    """
+    try:
+        from claimguard.ai.errors import AssistantError
+        from claimguard.ai.store import (
+            AssistantStoreError,
+            ThreadClosed,
+            ThreadNotFound,
+            UnknownFinding,
+            UnknownRun,
+        )
+    except ImportError as exc:
+        # The endpoints are registered either way; a deployment without the
+        # optional extra gets the same honest 503 the status endpoint explains.
+        raise HTTPException(
+            status_code=ASSISTANT_UNAVAILABLE_STATUS, detail=ASSISTANT_MISSING_DETAIL
+        ) from exc
+
+    try:
+        return operation(_assistant_store(request))
+    except ThreadClosed as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except (ThreadNotFound, UnknownRun, UnknownFinding) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AssistantError as exc:
+        # The one failure the assistant raises rather than answers: a stored
+        # finding it cannot explain deterministically. That is a defect on this
+        # side (or a contract drift), never something the caller did.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"the assistant could not use this finding: {exc}",
+        ) from exc
+    except AssistantStoreError as exc:
+        # No other store failure is expected; if one appears it is a real defect
+        # and should read as a server failure rather than as a bad request.
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)
+        ) from exc
+
+
+def _owned_thread(
+    assistants: Any, thread_id: str, *, tenant_id: str, user_id: str
+) -> AssistantThreadRef:
+    """The caller's own thread, or a 404 that says nothing about who owns it.
+
+    A conversation is personal (one reviewer, one finding): a colleague's thread
+    is not a 403 — the caller may pass an id that exists and belongs to someone
+    else as validly as one that never existed, and the two must be
+    indistinguishable from outside.
+    """
+    thread = cast(AssistantThreadRef, assistants.require_thread(thread_id, tenant_id=tenant_id))
+    if thread.created_by != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"unknown thread: {thread_id}"
+        )
+    return thread
+
+
+def _require_room(
+    assistants: Any, thread: AssistantThreadRef, *, tenant_id: str, planned: int
+) -> None:
+    """Refuse a turn that would push the conversation past its limit.
+
+    Checked before the model is asked, so a refused turn costs nothing and the
+    reviewer is told at once rather than after a round trip.
+    """
+    held = assistants.turn_count(thread.thread_id, tenant_id=tenant_id)
+    if held + planned > MAX_TURNS_PER_THREAD:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"this conversation has reached its limit of {MAX_TURNS_PER_THREAD} turns; "
+                "open a new one on the finding to keep asking"
+            ),
+        )
+
+
+def _finding_of(review_store: ReviewStore, run_id: str, rule_id: str) -> ResultRecord:
+    """The run's record for ``rule_id``, or 404 when the run does not carry it."""
+    for record in review_store.get_results(run_id):
+        if record.rule_id == rule_id:
+            return record
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"unknown finding: {rule_id} is not part of run {run_id}",
+    )
+
+
+def _history_of(assistants: Any, thread_id: str, *, tenant_id: str) -> list[dict[str, Any]]:
+    """The conversation so far, in the shape the assistant reads history in."""
+    conversation = cast(
+        AssistantConversation, assistants.conversation(thread_id, tenant_id=tenant_id)
+    )
+    return [
+        {"role": turn.role, "question": turn.question, "answer": turn.answer}
+        for turn in conversation.turns
+    ]
+
+
+def _answer_question(
+    request: Request,
+    *,
+    thread: AssistantThreadRef,
+    finding: ResultRecord,
+    envelope: Mapping[str, Any],
+    question: str | None,
+    tenant_id: str,
+) -> Any:
+    """Ask the assistant package for one answer, over the stored run's own inputs.
+
+    Everything the assistant sees is what the engine already saw: the stored
+    finding, the ORIGINAL envelope (so a citation resolves in the object the
+    caller submitted, not a re-coerced copy), the rule's manifest entry, the
+    claim's policy profile and the turns stored so far. The package is imported
+    here, so this module stays importable without the optional extra.
+    """
+    try:
+        from claimguard.ai.graph import answer_question
+    except ImportError as exc:
+        raise HTTPException(
+            status_code=ASSISTANT_UNAVAILABLE_STATUS, detail=ASSISTANT_MISSING_DETAIL
+        ) from exc
+
+    rule, policy = _catalogue_inputs(request.app, envelope, finding.rule_id)
+    return answer_question(
+        finding=finding.model_dump(mode="json"),
+        envelope=envelope,
+        rule=rule,
+        policy=policy,
+        question=question,
+        history=_history_of(_assistant_store(request), thread.thread_id, tenant_id=tenant_id),
+    )
+
+
+def _catalogue_inputs(
+    app: FastAPI, envelope: Mapping[str, Any], rule_id: str
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The rule manifest entry and the claim's policy profile, as plain mappings.
+
+    Read from the catalogue the app loaded for the run's own explanation layer,
+    so the assistant is told exactly what the engine was told. A policy id the
+    catalogue does not know is passed as an empty profile rather than an invented
+    default: the assistant must be able to say "this claim names a policy I have
+    no profile for", which a fabricated one would hide.
+    """
+    context = _rules_of(app).context()
+    rule = context.rule(rule_id).model_dump(mode="json")
+    policy = context.policy(envelope.get("policy_id"))
+    return rule, (policy.model_dump(mode="json") if policy is not None else {})
 
 
 def _store_of(request: Request) -> ReviewStore:

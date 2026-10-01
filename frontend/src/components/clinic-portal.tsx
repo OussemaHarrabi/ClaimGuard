@@ -3,7 +3,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { Activity, BarChart3, ChevronLeft, ChevronRight, ClipboardList, FileClock, FileText, FolderInput, Gauge, LayoutDashboard, ListChecks, Menu, Settings2, ShieldCheck, ShieldEllipsis, Users, Workflow, X, type LucideIcon } from "lucide-react";
+import { Activity, ArrowUpRight, Building2, BarChart3, ChevronLeft, ChevronRight, ClipboardList, FileClock, FileText, FolderInput, Gauge, LayoutDashboard, ListChecks, Menu, Settings2, ShieldCheck, ShieldEllipsis, Users, Workflow, X, type LucideIcon } from "lucide-react";
 import { Button } from "./ui/button";
 import { Input } from "./ui/input";
 
@@ -13,6 +13,7 @@ import { AssignmentsPage } from "./assignments-page";
 import { OpsConsole } from "./ops-console";
 import { TeamAccessPage } from "./team-access-page";
 import { DepartmentsPage } from "./departments-page";
+import { ClinicDashboard } from "./clinic-dashboard";
 import { ClinicReportPage, ConfigurationPage, DocumentIntakePage, WorkItemsPage } from "./clinic-workflow-pages";
 
 type Destination = { label: string; page: string };
@@ -88,13 +89,24 @@ export function ClinicPortal({ page }: { page: string }) {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   function toggleNavigation() {
-    setCollapsed((wasCollapsed) => !wasCollapsed);
+    const next = !collapsed;
+    setCollapsed(next);
+    try { localStorage.setItem("claimguard-nav-collapsed", String(next)); } catch { /* Navigation works without browser storage. */ }
   }
 
   useEffect(() => {
-    void getSession().then(setSession).catch((cause) => {
+    void getSession().then((current) => {
+      setSession(current);
+      try { setCollapsed(localStorage.getItem("claimguard-nav-collapsed") === "true"); } catch { /* Optional preference. */ }
+    }).catch((cause) => {
       setError(cause instanceof Error ? cause.message : "The clinic session could not be loaded.");
     }).finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    const close = (event: KeyboardEvent) => { if (event.key === "Escape") setMobileOpen(false); };
+    window.addEventListener("keydown", close);
+    return () => window.removeEventListener("keydown", close);
   }, []);
 
   useEffect(() => {
@@ -139,10 +151,11 @@ export function ClinicPortal({ page }: { page: string }) {
   if (loading && !session) return <main className="clinic-entry"><p>Checking clinic access…</p></main>;
 
   if (!session) return (
-    <main className="clinic-entry">
+    <main className="clinic-entry signin-page">
+      <aside className="signin-story"><Link href="/" className="marketing-brand"><ShieldCheck size={25} />ClaimGuard.</Link><div><p className="marketing-kicker">Your team’s review workspace</p><h2>Less uncertainty.<br />A clearer next step.</h2><p>Find the issue. Follow the evidence. Keep every review decision connected.</p></div><small>Claim readiness, together.</small></aside>
       <section className="clinic-login" aria-labelledby="clinic-login-heading">
         <p className="eyebrow">ClaimGuard clinic workspace</p>
-        <h1 id="clinic-login-heading">Sign in</h1>
+        <h1 id="clinic-login-heading">Sign in to your clinic</h1>
         <p>Use the clinic ID and credentials provided by your clinic admin.</p>
         {error ? <p role="alert" className="clinic-error">{error}</p> : null}
         <form onSubmit={(event) => void submit(event)}>
@@ -151,6 +164,7 @@ export function ClinicPortal({ page }: { page: string }) {
           <label>Password<Input required type="password" autoComplete="current-password" value={password} onChange={(event) => setPassword(event.target.value)} /></label>
           <Button className="primary-button" type="submit" disabled={loading}>Sign in</Button>
         </form>
+        <Link className="signin-back" href="/">← Back to ClaimGuard</Link>
       </section>
     </main>
   );
@@ -160,7 +174,7 @@ export function ClinicPortal({ page }: { page: string }) {
   const selected = destinations.find((destination) => destination.page === activePage);
   const cockpit = ["my-queue", "team-queue", "all-claims"].includes(activePage);
   return (
-    <div className="clinic-shell" data-collapsed={collapsed}>
+    <div className={`clinic-shell${session.role === "technical_manager" ? "" : " business-workspace"}`} data-collapsed={collapsed}>
       <header className="clinic-mobile-header">
         <Button type="button" variant="outline" size="icon" className="icon-button" aria-label="Open navigation" onClick={() => setMobileOpen(true)}><Menu size={20} /></Button>
         <span><ShieldCheck size={20} /> ClaimGuard</span>
@@ -173,7 +187,8 @@ export function ClinicPortal({ page }: { page: string }) {
           <Button type="button" variant="ghost" size="icon" className="clinic-collapse-button" aria-label={collapsed ? "Expand navigation" : "Collapse navigation"} onClick={toggleNavigation}>{collapsed ? <ChevronRight size={18} /> : <ChevronLeft size={18} />}</Button>
           <Button type="button" variant="ghost" size="icon" className="clinic-mobile-close" aria-label="Close navigation" onClick={() => setMobileOpen(false)}><X size={18} /></Button>
         </div>
-        <p className="clinic-identity">{session.tenant_id}</p>
+        <p className="clinic-identity"><Building2 size={15} /><span>{session.tenant_id}</span></p>
+        {session.role !== "technical_manager" ? <p className="nav-section-label">{session.role === "clinic_admin" ? "Clinic management" : "Review workspace"}</p> : null}
         <nav aria-label="Workspace">
           {destinations.map((destination) => {
             const Icon = NAV_ICONS[destination.page];
@@ -186,10 +201,11 @@ export function ClinicPortal({ page }: { page: string }) {
         </div>
       </aside>
       <div className={`clinic-main ${session.role === "technical_manager" ? "ops-dark" : ""}`} role={cockpit ? undefined : "main"}>
+        {session.role !== "technical_manager" ? <header className="workspace-topbar"><div className="workspace-breadcrumb"><span>Workspace</span><ChevronRight size={14} /><strong>{selected?.label ?? "Access"}</strong></div><div className="workspace-account"><Link href="/" className="product-home-link">Product home <ArrowUpRight size={14} /></Link><span className="workspace-avatar" aria-hidden="true">{session.role === "clinic_admin" ? "CA" : session.role === "rcm_lead" ? "RL" : "RR"}</span><span><strong>{ROLE_LABEL[session.role]}</strong><small>{session.user_id}</small></span></div></header> : null}
         {error ? <p role="alert" className="clinic-error">{error}</p> : null}
         {!selected ? <section><h1>Access denied</h1><p>This page is not available to your role.</p></section> : null}
         {selected && cockpit ? (
-          <ReviewWorkspaceApp reviewer={session.user_id} scope={["team-queue", "all-claims"].includes(activePage) ? "team" : "mine"} includeAll={activePage === "all-claims"} />
+          <ReviewWorkspaceApp reviewer={session.user_id} queueTitle={selected.label} scope={["team-queue", "all-claims"].includes(activePage) ? "team" : "mine"} includeAll={activePage === "all-claims"} />
         ) : null}
         {selected && activePage === "assignments" ? <AssignmentsPage claimPage={session.role === "clinic_admin" ? "all-claims" : "team-queue"} /> : null}
         {selected && activePage === "operations" ? <OpsConsole variant="embedded" section="overview" /> : null}
@@ -200,11 +216,15 @@ export function ClinicPortal({ page }: { page: string }) {
         {selected && activePage === "roles" ? <OpsConsole variant="embedded" section="roles" /> : null}
         {selected && activePage === "team-access" ? <TeamAccessPage /> : null}
         {selected && activePage === "departments" ? <DepartmentsPage /> : null}
+        {selected && ["overview", "analytics"].includes(activePage) ? <ClinicDashboard analytics={activePage === "analytics"} /> : null}
         {selected && activePage === "document-intake" ? <DocumentIntakePage /> : null}
         {selected && activePage === "requests" ? <WorkItemsPage kind="requests" /> : null}
         {selected && activePage === "escalations" ? <WorkItemsPage kind="escalations" /> : null}
         {selected && activePage === "configuration" ? <ConfigurationPage /> : null}
-        {selected && ["activity", "review-quality", "overview", "analytics", "audit", "intake-operations", "versions"].includes(activePage) ? <ClinicReportPage page={activePage} /> : null}
+        {/* Clinic-side report pages. "audit-integrity" is deliberately absent: the
+            technical manager's Audit Integrity page is rendered by OpsConsole above, and
+            including it here mounted a second page on the same id. */}
+        {selected && ["activity", "review-quality", "audit", "intake-operations", "versions", "redacted-logs"].includes(activePage) ? <ClinicReportPage page={activePage} /> : null}
       </div>
     </div>
   );

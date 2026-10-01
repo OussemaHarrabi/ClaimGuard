@@ -93,6 +93,37 @@ def test_render_value_is_json_exact_and_elides_very_long_values() -> None:
     assert rendered.endswith("...")
 
 
+def test_a_record_that_was_already_explained_is_served_verbatim_not_nested() -> None:
+    """A stored record must not be wrapped inside itself.
+
+    A record that comes back out of the store has been through the explanation layer, which rewrites
+    its ``explanation`` field into the FULL marked sentence. The deterministic builder treats that
+    field as the "Detected:" clause, so re-building from a served record nested the sentence inside
+    itself — observed live when the assistant fell back after a model rate limit, in the reviewer's
+    own answer.
+    """
+    finding = synthetic_finding()
+    first = build_text(finding, SYNTHETIC_RULE)
+    assert first.count("Detected:") == 1
+
+    served_back = {**finding, "explanation": first}
+    second = build_text(served_back, SYNTHETIC_RULE)
+
+    assert second == first
+    assert second.count("Detected:") == 1
+
+
+def test_model_wording_is_never_restated_as_the_detected_fact() -> None:
+    """The deterministic twin may not quote a model back as if the engine had detected it."""
+    finding = {**synthetic_finding(), "explanation": MODEL_PREFIX + "The quantities look wrong."}
+
+    text = build_text(finding, SYNTHETIC_RULE)
+
+    assert MODEL_PREFIX not in text
+    assert "The quantities look wrong." not in text
+    assert text.startswith(DETERMINISTIC_PREFIX)
+
+
 def test_build_text_reports_when_a_record_has_nothing_to_cite() -> None:
     text = build_text(NOT_IMPLEMENTED_RECORD, SYNTHETIC_RULE)
     assert "No evidence pointer is attached to this result." in text

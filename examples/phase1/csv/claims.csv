@@ -1,0 +1,2 @@
+schema_version,claim_id,invoice_number,patient_id,member_id,provider_id,payer_id,policy_id,diagnosis_code,submission_date,currency,total_amount,notes
+1.0.0,PHASE1-CSV-001,INV-PHASE1-CSV-001,PAT-PHASE1-001,MEM-PHASE1-001,EDU-PROV-03,EDU-PAYER,EDU-PLUS,DX-EDU-02,2026-06-06,SAR,330,Synthetic teaching claim. No real patient or payer information.

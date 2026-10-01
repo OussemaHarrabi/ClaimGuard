@@ -1,0 +1,3 @@
+claim_id,line_id,service_code,service_date,modifier,quantity,unit_price,net_amount,authorization_id
+PHASE1-CSV-001,L1,SVC-LAB,2026-05-25,,1,140,140,
+PHASE1-CSV-001,L2,SVC-CONSULT,2026-05-25,,1,190,190,

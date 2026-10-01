@@ -99,7 +99,7 @@ from claimguard.review.models import (
 )
 
 #: The Alembic revision this module's tables come from.
-SCHEMA_REVISION: Final = "0010"
+SCHEMA_REVISION: Final = "0011"
 
 #: ``run_id`` prefix (opaque; deliberately carries no claim identifier).
 RUN_ID_PREFIX: Final = "RUN-"

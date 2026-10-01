@@ -25,7 +25,7 @@ from claimguard.edu.envelope import (
 )
 from pydantic import ValidationError
 
-from tests.edu import base_claim, line
+from tests.edu import base_claim, imaging_claim, line
 
 
 def test_valid_envelope_is_accepted_and_typed() -> None:
@@ -116,6 +116,15 @@ def test_missing_coverage_key_is_rejected() -> None:
     claim = base_claim()
     del claim["coverage"]["end_date"]
     with pytest.raises(TransportError, match="Coverage keys"):
+        validate_transport(claim)
+
+
+def test_attachment_document_type_alias_is_rejected() -> None:
+    """External synthetic data must use the pack's ``type`` key, not an alias."""
+    claim = imaging_claim()
+    attachment = claim["attachments"][0]
+    attachment["document_type"] = attachment.pop("type")
+    with pytest.raises(TransportError, match="Attachment keys"):
         validate_transport(claim)
 
 

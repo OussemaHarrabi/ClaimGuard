@@ -1,10 +1,11 @@
 import type { Metadata } from "next";
 
 import "./globals.css";
+import "./product.css";
 
 export const metadata: Metadata = {
-  title: "ClaimGuard · Review workspace",
-  description: "Evidence-first review for deterministic claim checks.",
+  title: "ClaimGuard · Clarity before every claim",
+  description: "Bring claim checks, evidence, AI guidance, and your review team into one accountable workflow.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

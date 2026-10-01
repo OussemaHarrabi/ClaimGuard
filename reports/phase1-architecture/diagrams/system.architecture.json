@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "ClaimGuard system architecture",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "viewBox": [1240, 740]
+  },
+  "components": [
+    { "id": "clinicUser", "type": "external", "label": "Clinic team", "sublabel": "RCM and admin", "pos": [25, 330], "size": [130, 66] },
+    { "id": "webApp", "type": "frontend", "label": "Next.js workspace", "sublabel": "Role workspace", "pos": [205, 330], "size": [140, 66] },
+    { "id": "apiService", "type": "backend", "label": "FastAPI service", "sublabel": "Tenant workflow", "pos": [395, 330], "size": [150, 66] },
+    { "id": "ruleEngine", "type": "backend", "label": "Rule engine", "sublabel": "R001-R015", "pos": [605, 330], "size": [155, 66] },
+    { "id": "reviewStore", "type": "backend", "label": "Review store", "sublabel": "Versioned review", "pos": [820, 330], "size": [145, 66] },
+    { "id": "database", "type": "database", "label": "PostgreSQL", "sublabel": "Results and audit", "pos": [1015, 330], "size": [150, 66] },
+    { "id": "intakeAdapters", "type": "backend", "label": "Intake adapters", "sublabel": "JSON / CSV / FHIR", "pos": [395, 100], "size": [150, 66] },
+    { "id": "explanationGate", "type": "security", "label": "Explanation gate", "sublabel": "SLM or fallback", "pos": [820, 100], "size": [145, 66] },
+    { "id": "ruleCatalogue", "type": "database", "label": "Rule catalogue", "sublabel": "Versioned policy", "pos": [605, 540], "size": [155, 66] }
+  ],
+  "boundaries": [
+    { "kind": "region", "label": "ClaimGuard application", "wraps": ["webApp", "apiService", "ruleEngine", "reviewStore", "intakeAdapters", "explanationGate", "ruleCatalogue"] }
+  ],
+  "connections": [
+    { "id": "userWeb", "from": "clinicUser", "to": "webApp", "label": "review actions", "variant": "emphasis", "labelAt": [180, 410] },
+    { "id": "webApi", "from": "webApp", "to": "apiService", "label": "scoped API calls", "variant": "emphasis", "labelAt": [370, 410] },
+    { "id": "apiEngine", "from": "apiService", "to": "ruleEngine", "label": "validated claim", "variant": "emphasis", "labelAt": [575, 410] },
+    { "id": "engineStore", "from": "ruleEngine", "to": "reviewStore", "label": "15 rule results", "variant": "emphasis", "labelAt": [790, 410] },
+    { "id": "storeDb", "from": "reviewStore", "to": "database", "label": "atomic writes", "variant": "emphasis", "labelAt": [990, 410] },
+    { "id": "apiIntake", "from": "apiService", "to": "intakeAdapters", "label": "source package", "fromSide": "top", "toSide": "bottom" },
+    { "id": "intakeEngine", "from": "intakeAdapters", "to": "ruleEngine", "label": "17-key envelope", "fromSide": "right", "toSide": "top" },
+    { "id": "catalogueEngine", "from": "ruleCatalogue", "to": "ruleEngine", "label": "rule context", "fromSide": "top", "toSide": "bottom" },
+    { "id": "engineExplain", "from": "ruleEngine", "to": "explanationGate", "label": "flagged findings", "fromSide": "top", "toSide": "left", "variant": "security" },
+    { "id": "explainStore", "from": "explanationGate", "to": "reviewStore", "label": "verified guidance", "fromSide": "bottom", "toSide": "top", "variant": "security", "labelAt": [893, 185] }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Authoritative path", "items": ["The deterministic engine alone decides status and severity.", "The clinic workspace reads and changes state through tenant-scoped API calls."] },
+    { "dot": "emerald", "title": "Guarded assistance", "items": ["Optional model wording is checked against evidence.", "Fallback remains deterministic when model output is absent or rejected."] }
+  ]
+}

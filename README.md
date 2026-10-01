@@ -33,6 +33,13 @@ uncertain cases to a human. **Review, don't adjudicate.**
 
 ## Quickstart
 
+For the current submission decision and remaining deliverables, see the
+[Phase-1 readiness assessment](docs/verification/PHASE-1-SUBMISSION-READINESS.md).
+To reproduce all three synthetic intake formats, a failed rule, correction and
+audit replay, follow the [hands-on Phase-1 rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md).
+The frontend opens on a public product landing page at `/`; use **Open workspace**
+or `/workspace/home` to sign in and reach the appropriate clinic role's home.
+
 ```bash
 uv sync --all-extras                                   # install (Python 3.11–3.13)
 docker compose up -d db && uv run alembic upgrade head # the review schema
@@ -47,14 +54,45 @@ Two ways to point the engine at a rule catalogue: the mentor pack on disk
 uv run claimguard evaluate --split all                 # engine + the mentor's own scorer
 uv run claimguard report --split development \
     --output docs/verification/EDU-EVALUATION-REPORT.md
-uv run claimguard serve                                # API at /v1; legacy fallback at /review
-cd frontend && npm ci && npm run dev                   # primary reviewer workspace on :3000
-#   The cockpit proxies /v1 to CLAIMGUARD_API_ORIGIN (default http://127.0.0.1:8000).
-#   Set it at runtime - `CLAIMGUARD_API_ORIGIN=http://127.0.0.1:8030 npm run dev` -
-#   if your API is on another port. No rebuild is needed, in any mode.
 uv run python scripts/sample_run.py                    # end-to-end demo transcript, no network
 uv run pytest tests/ -q                                # full Python verification suite
 ```
+
+### Running the product (the reviewer workspace)
+
+The interface signs reviewers in, so **two more steps are required before the UI is
+usable**: a session key, and one clinic account. Both are local secrets and neither is
+stored in this repository.
+
+```bash
+# 1. A session signing key. Any random value of at least 32 characters.
+#    Without it every route except /v1/health and the sign-in endpoint answers 503.
+export CLAIMGUARD_SESSION_KEY="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')"
+
+# 2. The first clinic administrator. Prompts for a password (12+ characters);
+#    no default account ships. Roles beyond this one are created in the UI.
+uv run python -m claimguard.clinic.provision \
+    --tenant-id clinic-demo --clinic-name "Demo Clinic" --email admin@example.test
+
+# 3. Start the API, then the interface (two terminals).
+uv run claimguard serve                                # API at /v1, docs at /docs
+cd frontend && npm ci && npm run dev                   # reviewer workspace on :3000
+#   The cockpit proxies /v1 to CLAIMGUARD_API_ORIGIN (default http://127.0.0.1:8000).
+#   Set it at runtime - `CLAIMGUARD_API_ORIGIN=http://127.0.0.1:8030 npm run dev` -
+#   if your API is on another port. No rebuild is needed, in any mode.
+```
+
+Open <http://127.0.0.1:3000>, choose **Open workspace**, and sign in with the account from
+step 2. `docker compose up -d --build` runs the same stack in containers — the web
+service is on `:3001` and reaches the API over the compose network. The step-by-step
+walkthrough, including the three intake formats a claim can arrive in and how to check
+the audit trail, is [the Phase-1 rehearsal](docs/verification/PHASE1-HANDS-ON-REHEARSAL.md).
+
+**The AI assistant is off by default.** With no model configured the assistant still
+answers every question from the deterministic explanation layer and says so on each
+answer; set `CLAIMGUARD_AI_MODE` (see `.env.example`) to enable a model. A model never
+changes a status, a severity or an evidence pointer — it drafts wording that the same
+verifier the graded explanation layer uses either accepts or refuses.
 
 ---
 
@@ -106,6 +144,8 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | 18 | [`docs/18-SLM-Benchmark-Methodology.md`](docs/18-SLM-Benchmark-Methodology.md) | Colab protocol, preserved Gemma 4/Phi-4 Mini/Qwen3 run and secured-contract v2 rerun plan; no checkpoint is deployable yet | AI/ML + jury |
 | 19 | [`docs/19-Assistance-Security-Envelope.md`](docs/19-Assistance-Security-Envelope.md) | AegisGraph-inspired SLM authority graph, correction contract, verifier decisions and receipts | Security + jury |
 | 20 | [`docs/20-Implementation-Completion-Report.md`](docs/20-Implementation-Completion-Report.md) | Complete release inventory, architecture, verification, limitations, remaining work and operational handoff | **Whole team + jury** |
+| 21 | [`docs/21-Clinic-Platform-Foundation.md`](docs/21-Clinic-Platform-Foundation.md) | The clinic platform: tenants, sessions, four roles, workspace surfaces | Reviewer |
+| 22 | [`docs/22-AI-Assistant-Design.md`](docs/22-AI-Assistant-Design.md) | **The interactive assistant**: the graph, the data flow, the data model, what may leave the machine, and why the autonomy is bounded | Reviewer + jury |
 | — | [`docs/verification/EDU-EVALUATION-REPORT.md`](docs/verification/EDU-EVALUATION-REPORT.md) | Generated evaluation report (single source for every metric) | Jury |
 | — | [`docs/verification/EDU-PACK-CONFORMANCE.md`](docs/verification/EDU-PACK-CONFORMANCE.md) | How conformance is verified: oracle + independent second opinion | Reviewer |
 | — | [`docs/verification/REPRODUCIBLE-SAMPLE-RUN.md`](docs/verification/REPRODUCIBLE-SAMPLE-RUN.md) | Captured end-to-end transcript | Reviewer |
@@ -114,6 +154,7 @@ why `make edu-conformance` is a mandatory pre-submission step.
 | — | [`docs/verification/FHIR-MAPPING-EXAMPLE.md`](docs/verification/FHIR-MAPPING-EXAMPLE.md) | One real bundle projected, and what FHIR cannot carry | Reviewer |
 | — | [`docs/verification/AI-ABLATION.md`](docs/verification/AI-ABLATION.md) | What the assistance layer contributes, and what it costs when the model fails | Reviewer |
 | — | [`docs/verification/ADVERSARIAL-CASES.md`](docs/verification/ADVERSARIAL-CASES.md) | 87 boundary cases against the rulebook's exact wording, and what they found | Reviewer |
+| — | [`docs/verification/DETECTION-METRICS.md`](docs/verification/DETECTION-METRICS.md) | **Macro F1 across rule categories, false-positive rate and latency** — the figures the challenge names, on all three splits (`scripts/detection_metrics.py` regenerates it) | Reviewer |
 | — | [`TEAM-ROADMAP.md`](TEAM-ROADMAP.md) | How we work: methodology, ground rules, milestones | **Whole team — start here** |
 | — | [`TEAM-AI-LABS-2026-09-27.md`](TEAM-AI-LABS-2026-09-27.md) | Current AI labs: reviewer questions, secured SLM comparison and document understanding | **B1, B2, B3** |
 | — | [`TEAM-TASKS.md`](TEAM-TASKS.md) | Earlier Sprint 1 lab plan, retained as background | Team |

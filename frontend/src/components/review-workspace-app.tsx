@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { Braces, CircleAlert, X } from "lucide-react";
 import { Input } from "./ui/input";
-import { editableEvidencePaths, readPointer, updatePointer } from "../lib/claim-editor";
+import { buildCorrectionGroups, plainIssue, plainRecommendation, readPointer, updatePointer } from "../lib/claim-editor";
 
 import { ReviewCockpit, type ReviewWorkspace } from "./review-cockpit";
 import { demoClaim, demoWorkspace } from "../lib/demo-workspace";
@@ -21,7 +21,7 @@ import {
 
 const DEMO_MODE = process.env.NEXT_PUBLIC_DEMO_MODE === "true";
 
-export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { reviewer: string; scope: "mine" | "team"; includeAll?: boolean }) {
+export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false, queueTitle }: { reviewer: string; scope: "mine" | "team"; includeAll?: boolean; queueTitle?: string }) {
   const [workspace, setWorkspace] = useState<ReviewWorkspace>(emptyWorkspace);
   const [queue, setQueue] = useState<QueueResponse | null>(null);
   const [busy, setBusy] = useState(true);
@@ -152,8 +152,8 @@ export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { re
     try { parsedCorrection = JSON.parse(correction.text) as Record<string, unknown>; }
     catch { /* The advanced editor can repair invalid JSON. */ }
   }
-  const correctionFields = correction && parsedCorrection
-    ? editableEvidencePaths(workspace.selected?.findings ?? [], parsedCorrection)
+  const correctionGroups = correction && parsedCorrection
+    ? buildCorrectionGroups(workspace.selected?.findings ?? [], parsedCorrection)
     : [];
 
   function editEvidence(path: string, value: string) {
@@ -170,6 +170,7 @@ export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { re
     <>
       <div className={`environment-badge${demo ? " demo" : ""}`}>{statusLabel}</div>
       <ReviewCockpit
+        queueTitle={queueTitle}
         workspace={workspace}
         busy={busy}
         error={error}
@@ -191,7 +192,7 @@ export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { re
           >
             <header>
               <div>
-                <p className="eyebrow">New immutable version</p>
+                <p className="eyebrow">Correct with source evidence</p>
                 <h2 id="correction-title">Correct {correction.claimId}</h2>
               </div>
               <button className="icon-button" type="button" aria-label="Close correction editor" onClick={() => setCorrection(null)}>
@@ -203,13 +204,17 @@ export function ReviewWorkspaceApp({ reviewer, scope, includeAll = false }: { re
             </p>
             <form onSubmit={submitCorrection}>
               <section className="guided-fields" aria-labelledby="guided-fields-title">
-                <h3 id="guided-fields-title">Step 1: verify the flagged values</h3>
-                <p>These fields come from non-passing checks. Compare each value with the clinic documents. Change only a documented error. If a fact is missing, close this form and request information instead.</p>
-                {correctionFields.length ? <div className="guided-field-grid">{correctionFields.map((path) => {
-                  const current = readPointer(parsedCorrection, path);
-                  const numeric = typeof current === "number" || (current === null && /(?:amount|price|quantity|total)$/i.test(path));
-                  return <label key={path}><span>{path.slice(1).replaceAll("/", " → ").replaceAll("_", " ")}</span><Input type={numeric ? "number" : "text"} step={numeric ? "any" : undefined} value={current === null ? "" : String(current)} onChange={(event) => editEvidence(path, event.target.value)} /></label>;
-                })}</div> : <p>No scalar evidence fields are available. Use the advanced editor below.</p>}
+                <h3 id="guided-fields-title">Step 1: resolve each flagged check</h3>
+                <p>Read the issue and suggested next step, then compare the values with the clinic source documents. Edit only facts you can verify. If the evidence is missing, close this form and request information on the finding.</p>
+                {correctionGroups.length ? <div className="correction-groups">{correctionGroups.map((group) => <section className="correction-group" key={group.ruleId} aria-label={`Correction for ${group.ruleId}`}>
+                  <div className="correction-group-heading"><span className="rule-id">{group.ruleId}</span><strong>{plainIssue(group.explanation)}</strong></div>
+                  <p><span>Suggested next step</span>{plainRecommendation(group.recommendation)}</p>
+                  {group.fields.length ? <div className="guided-field-grid">{group.fields.map(({ path, label }) => {
+                    const current = readPointer(parsedCorrection, path);
+                    const numeric = typeof current === "number" || (current === null && /(?:amount|price|quantity|total)$/i.test(path));
+                    return <label key={path}><span>{label}</span><Input type={numeric ? "number" : "text"} step={numeric ? "any" : undefined} value={current === null ? "" : String(current)} onChange={(event) => editEvidence(path, event.target.value)} /></label>;
+                  })}</div> : <small>No directly editable field for this check. Request information or inspect the advanced JSON only if you have source evidence.</small>}
+                </section>)}</div> : <p>No failing checks are available for guided correction. Review the source or use the advanced editor below.</p>}
               </section>
               <p className="correction-submit-help">Step 2: create a new claim version. ClaimGuard will rerun all deterministic checks; the original version remains in the audit history.</p>
               <details className="advanced-json" open={!parsedCorrection}>

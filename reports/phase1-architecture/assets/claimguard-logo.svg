@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="900" height="220" viewBox="0 0 900 220" role="img" aria-labelledby="title description">
+  <title id="title">ClaimGuard</title>
+  <desc id="description">A shield formed around a verified claim line, followed by the ClaimGuard wordmark.</desc>
+  <defs>
+    <linearGradient id="shield" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#153B60"/>
+      <stop offset="1" stop-color="#0E2744"/>
+    </linearGradient>
+    <linearGradient id="accent" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#43D5CC"/>
+      <stop offset="1" stop-color="#0EA7B1"/>
+    </linearGradient>
+  </defs>
+  <path d="M108 16c31 22 61 28 88 32v54c0 52-35 85-88 104-53-19-88-52-88-104V48c27-4 57-10 88-32Z" fill="url(#shield)"/>
+  <path d="M108 37c24 16 47 23 67 27v39c0 38-25 64-67 81-42-17-67-43-67-81V64c20-4 43-11 67-27Z" fill="none" stroke="#7EDBD6" stroke-width="4" opacity=".75"/>
+  <path d="M67 94h66M67 114h35" fill="none" stroke="#D8F5F3" stroke-width="7" stroke-linecap="round" opacity=".9"/>
+  <path d="m88 137 17 17 43-48" fill="none" stroke="url(#accent)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="235" y="132" fill="#102B49" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="84" font-weight="750" letter-spacing="-3">Claim<tspan fill="#099EAA">Guard</tspan></text>
+  <text x="241" y="172" fill="#597189" font-family="Inter, Segoe UI, Arial, sans-serif" font-size="25" font-weight="600" letter-spacing="5">EVIDENCE BEFORE SUBMISSION</text>
+</svg>

@@ -1,7 +1,7 @@
 # 12 — Privacy and security note
 
 > **Status:** Phase-1 submission document · written 2026-09-23 · every control below is named with
-> the file that implements it, and every claim about behaviour is backed by a command in §9.
+> the file that implements it, and every claim about behaviour is backed by a command in §10.
 > **Scope:** this describes a **teaching prototype** operating on **synthetic** data. It is not a
 > compliance assessment, and nothing here should be read as one.
 > **Pack requirement:** `ClaimGuardAI_Student_Starter_Pack/ClaimGuardAI_Student_Starter_Pack/docs/10_Privacy_Security_and_Audit.md`
@@ -116,7 +116,7 @@ other than `unreviewed` and any `method` other than `deterministic`
 | Verification | `claimguard/audit/chain.py::verify_chain` walks a chain in `(at, event_id)` order and returns the first broken link |
 | Reviewer free text | The decision's free-text `reason` is deliberately **not** copied into the immutable ledger; it stays in `claimguard.review_decisions`. The ledger holds the tamper-evident index of *what was done with which versions* (`claimguard/review/audit_events.py`) |
 
-Measured (live database, §9.1(b)): `UPDATE rule_results`, `UPDATE review_decisions` and
+Measured (live database, §10.1(b)): `UPDATE rule_results`, `UPDATE review_decisions` and
 `DELETE review_decisions` were all refused by the database with `RaiseException`.
 
 ### 4.1 The honest limits of a hash chain
@@ -154,14 +154,73 @@ immutable.**
 
 ---
 
-## 5. What is *not* implemented — stated plainly
+## 5. Threat model
+
+### 5.1 What is being protected
+
+| Asset | Where it lives | Why an attacker would want it |
+|---|---|---|
+| The submitted claim packages | `claimguard.rule_runs` (the stored envelope) and `rule_results` | The most sensitive content in the system, even synthetic: patient/member identifiers, coverage periods, billed services and amounts |
+| Reviewer decisions and their reasons | `claimguard.review_decisions` | They are the record of human judgement; forging one changes what a payer-facing process would do |
+| The assistant's conversations | `claimguard.assistant_turns` | Questions reveal what a reviewer found confusing; answers may quote claim values |
+| The audit ledger | `claimguard.audit_events` | Its whole value is that it cannot be quietly edited |
+| Clinic accounts and sessions | `claimguard.users`, `clinic_memberships`, the session cookie | Account takeover is the shortest path to every claim in a tenant |
+| The model credential | Environment only | Billable, and usable outside this product |
+
+### 5.2 Who can act, and on what
+
+| Actor | Reaches | Cannot |
+|---|---|---|
+| Anonymous caller | `/v1/health`, the sign-in endpoint, the public landing page | Anything else — every other route answers **401** without a session, and **503** when the deployment has no session key configured (fail-closed) |
+| Signed-in **reviewer** (`rcm_reviewer`) | Claims visible to them, decisions, corrections, the assistant | Assign work, read analytics or the audit report, change configuration |
+| **Lead** (`rcm_lead`) | The reviewer set **plus** assignment, analytics, audit | Administer the clinic |
+| **Clinic admin** (`clinic_admin`) | Everything inside their tenant | Act in another tenant |
+| **Technical manager** | Operations and configuration only | **Read claim content at all** — the role is deliberately granted `READ_OPERATIONS`/`MANAGE_OPERATIONS` and not `READ_CLAIM` |
+| The model provider (external) | The text of one request, when a model is enabled | Anything else; it never holds a session, and the prompt contains no credentials |
+| A database owner | Everything, including the audit chain | Nothing is enforced against them. See §4.1 |
+
+The permission matrix is code, not policy:
+`claimguard/clinic/access.py` (`PERMISSIONS`, `authorize()`), enforced per route.
+
+### 5.3 Trust boundaries
+
+```mermaid
+flowchart LR
+    B[Reviewer's browser] -->|session cookie| A[Review API]
+    A -->|SQL| D[(PostgreSQL)]
+    A -.->|only when the assistant is enabled:<br/>finding + cited evidence values| M[Model provider]
+    A --> L[(Append-only<br/>audit ledger)]
+    style M stroke-dasharray: 5 5
+```
+
+The browser is untrusted input, the model provider is an untrusted *output* source, and the database
+is trusted-but-rewritable. Every arrow leaving the boundary is either authenticated (the browser) or
+minimised and verified (the model).
+
+### 5.4 Threats, controls, and what remains
+
+| # | Threat | Control | Where | Residual risk |
+|---|---|---|---|---|
+| T1 | An unauthenticated caller reads claims | Session middleware on **every** route except health and sign-in; no key configured ⇒ 503, no session ⇒ 401 | `claimguard/review/app.py` (middleware) | None in-process; TLS is absent locally (§6) |
+| T2 | One tenant reads another tenant's claims | `tenant_id` on every run/result/decision/thread row, and `authorize()` fails closed on a tenant mismatch | `claimguard/clinic/access.py`, migrations 0006/0009/0010 | A compromised database owner (§4.1) |
+| T3 | A reviewer records a decision as somebody else | The decision's `actor` must equal the signed-in principal, else **403** | `claimguard/review/app.py` (`record_decision`, `recheck_claim`) | None observed; the actor is no longer a self-declared string |
+| T4 | A claim's notes carry a prompt injection | Notes and attachment text are never used to build an answer; any model draft is re-verified against the ORIGINAL claim, with direct and Base64-transformed injection detected | `claimguard/edu/explain/verifier.py` (`instruction_like`) | A novel injection phrasing remains possible; the verifier fails closed, so the cost is a refused answer, not a wrong one |
+| T5 | The model gives clinical or adjudication advice | Prohibited-assertion patterns reject "this should be paid", "the patient needs…" and similar; the refusal is recorded and the deterministic text is served instead | `claimguard/edu/explain/verifier.py` (`PROHIBITED_PATTERNS`) | Same as T4 |
+| T6 | The model provider receives more than it needs | The prompt carries the finding, the **values of the evidence it cites**, the rule's own text and the reviewer's question — not the whole claim envelope, never identifiers beyond those already cited, never credentials | `claimguard/ai/graph.py` (gather), prompt in `claimguard/ai/prompts.py` | The cited values *are* claim data and do leave the machine while a cloud model is enabled. This is the one control that a deployment choice, not code, decides: with `CLAIMGUARD_AI_MODE=off` nothing leaves |
+| T7 | The credential leaks | Environment only, never committed, never logged; provider settings redact on `describe()` | `.env.example`, `claimguard/ai/config.py` | Rotation is manual; there is no vault (§6) |
+| T8 | The audit ledger is edited | Append-only by trigger + SHA-256 chain; `UPDATE` refused; verification tooling ships | migration 0001, `claimguard/audit/chain.py`, `scripts/audit_replay.py` | Tamper-*evident*, not immutable (§4.1) |
+| T9 | Malformed input produces an invented result | Transport contract refuses it (422 at the API, quarantine + exit 2 in the CLI); intake records a rejected job with a specific reason | `claimguard/edu/envelope.py`, `claimguard/clinic/workspaces.py` | None observed: nothing is invented to fill a gap |
+| T10 | Another site uses the reviewer's live session | `SameSite=Strict` cookie **plus** an `Origin`/`Sec-Fetch-Site` check on every mutating verb | `claimguard/review/app.py` (middleware) | None observed |
+| T11 | Automated abuse (credential stuffing, scraping) | **Nothing.** No rate limiting, no lockout, no CAPTCHA | — | Accepted for a synthetic-data prototype; must be added before any real deployment |
+
+## 6. What is *not* implemented — stated plainly
 
 | Control | Status | Evidence |
 |---|---|---|
-| Authentication | **Not implemented.** No authentication scheme exists in the reviewer surface; a decision's `actor` is a self-declared string | `grep -nE "Authorization\|api_key\|Bearer" claimguard/review/*.py` → no matches; `claimguard/review/models.py::DecisionRequest` accepts `actor` as free text. The pack makes the same disclosure: *"The supplied static interface uses self-declared reviewer names and does not authenticate users."* |
-| Authorisation / RBAC | **Not implemented** as an application control. One database role with least-privilege grants is *defined* (`claimguard_app`), but there is no per-user role, no endpoint permission check and no tenant isolation | `claimguard/db/migrations/versions/0001_initial_schema.sql` §15, `0002` grants block |
-| Encryption at rest | **Not implemented.** The schema comment in `0001` describes the intent (`raw_json … encrypted at rest by the app layer`); no encryption code exists in the repository, and PostgreSQL storage is not encrypted | `grep -riE "encrypt" claimguard/` → only that comment |
-| Encryption in transit (TLS) | **Not implemented** in the local stack. The API is served over plain HTTP; PostgreSQL connections are not TLS-terminated | `docker-compose.yml`, §9.3 |
+| Authentication | **Implemented** since 2026-09-29 (this row previously said the opposite; that was true when written and is not any more). A signed HMAC-SHA256 session cookie (8 h, `SameSite=Strict`, `HttpOnly`) is required by middleware on every route except `/v1/health` and sign-in; scrypt-v1 password hashes; the role is re-read from live membership on every request | `claimguard/review/app.py` (session middleware), `claimguard/clinic/session.py`, `claimguard/clinic/passwords.py`, migration `0007_local_credentials.sql` |
+| Authorisation / RBAC | **Implemented.** Four roles × eleven actions (`PERMISSIONS`), a fail-closed `authorize()` that also refuses cross-tenant access, and a decision whose `actor` must equal the signed-in principal (else 403). A technical-manager role deliberately holds *no* claim-reading permission. The database role `claimguard_app` remains as an additional, narrower layer | `claimguard/clinic/access.py`, `claimguard/review/app.py` (`record_decision`, `recheck_claim`, per-route `authorize`) |
+| Encryption at rest | **Still not implemented** (re-checked 2026-10-01). The schema comment in `0001` describes the intent (`raw_json … encrypted at rest by the app layer`); no encryption code exists in the repository, and PostgreSQL storage is not encrypted | `grep -riE "encrypt" claimguard/` → only that comment |
+| Encryption in transit (TLS) | **Still not implemented** in the local stack (re-checked 2026-10-01). The API is served over plain HTTP; PostgreSQL connections are not TLS-terminated | `docker-compose.yml` |
 | Secrets management | Environment variables only; no vault, no rotation, no per-request key scoping. The API key is never placed in a prompt or a log line | `claimguard/edu/explain/provider.py` (`ModelSettings`, `build_request`) |
 | Rate limiting / abuse controls | **Not implemented** | No middleware in `claimguard/review/app.py` |
 | PII detection / redaction | **Not implemented** (no Presidio or equivalent in the code path) | `grep -riE "presidio" claimguard/` → no matches |
@@ -170,23 +229,23 @@ immutable.**
 
 ---
 
-## 6. Malformed-input and failure behaviour
+## 7. Malformed-input and failure behaviour
 
 | Failure | Behaviour | Verified by |
 |---|---|---|
-| Malformed JSON line, or an envelope that fails the transport contract | The line is **quarantined**: a structured `ingestion_error` record goes to stderr *and* to a sidecar file next to `--output`; the claim is excluded from evaluation; the process exits **2**. It is never repaired, never silently dropped, never emitted as a pass | Measured §9.1(a); `tests/edu/test_emit_contract.py::test_cli_quarantines_defective_lines_and_never_invents_a_passed_claim`; `tests/edu/test_envelope.py::test_malformed_and_incomplete_lines_are_quarantined_not_dropped` |
+| Malformed JSON line, or an envelope that fails the transport contract | The line is **quarantined**: a structured `ingestion_error` record goes to stderr *and* to a sidecar file next to `--output`; the claim is excluded from evaluation; the process exits **2**. It is never repaired, never silently dropped, never emitted as a pass | Measured §10.1(a); `tests/edu/test_emit_contract.py::test_cli_quarantines_defective_lines_and_never_invents_a_passed_claim`; `tests/edu/test_envelope.py::test_malformed_and_incomplete_lines_are_quarantined_not_dropped` |
 | A defective envelope submitted to the API | HTTP **422** carrying the engine's own message | Measured in `tests/review/test_review_api.py::test_a_malformed_envelope_is_rejected_with_the_engines_message` |
 | Unknown policy / missing necessary evidence | `UNABLE_TO_ASSESS` (or `NOT_APPLICABLE` when the rule's scope excludes the claim) — never an invented PASS. An unknown `policy_id` resolves to `None`; no default policy is invented | `claimguard/edu/policy.py`, `claimguard/edu/rules/**` |
 | Missing migration | HTTP **503** with the command that fixes it (`SchemaNotMigratedError`) | `claimguard/review/store.py::ensure_schema`, `claimguard/review/app.py::_error_status` |
 | Model absent, slow, malformed or rejected | The deterministic explanation is used and the fallback is marked; **no status changes** | `tests/edu_explain/test_verifier_guards.py`, `tests/edu_explain/test_status_invariance.py` |
 | Unreachable database | `GET /v1/health` reports `status: "degraded"` with the failure named, instead of raising | `claimguard/review/app.py::health` (observed during this document's work: a probe that passed the wrong object reported `"database": "unreachable: AttributeError"`) |
-| Reviewer decision with a blank `actor` or `reason` | HTTP **422** (`must not be blank`) | Measured §9.1(b); `tests/review/test_review_api.py::test_a_decision_without_an_actor_or_reason_is_rejected` |
+| Reviewer decision with a blank `actor` or `reason` | HTTP **422** (`must not be blank`) | Measured §10.1(b); `tests/review/test_review_api.py::test_a_decision_without_an_actor_or_reason_is_rejected` |
 | Decision on a superseded run, or an illegal transition | HTTP **409** | `claimguard/review/store.py::record_decision` |
 | A "recheck" with nothing corrected | HTTP **409** (`NoCorrectionError`) — a button click cannot turn a FAIL into a PASS | `claimguard/review/store.py::record_recheck` |
 
 ---
 
-## 7. Human review, and why a decision is not an adjudication
+## 8. Human review, and why a decision is not an adjudication
 
 * The four allowed actions are `confirm_issue`, `dismiss_with_reason`, `request_information`,
   `mark_corrected_for_recheck` (`claimguard/review/models.py::ReviewAction`). There is no approve,
@@ -201,7 +260,7 @@ immutable.**
 
 ---
 
-## 8. Secrets
+## 9. Secrets
 
 * No API key, token or password is present in the repository: `.env` is gitignored, `.env.example`
   carries empty placeholders, and CI runs gitleaks over the full history.
@@ -212,12 +271,12 @@ immutable.**
 
 ---
 
-## 9. Verification performed for this document
+## 10. Verification performed for this document
 
-### 9.1 Commands and observed output
+### 10.1 Commands and observed output
 
 **(a) Malformed input is quarantined, not repaired** — see `docs/11-Architecture-and-Dataflow.md`
-§9.1(a) for the full transcript (exit 2, two structured `ingestion_error` records, an empty
+§10.1(a) for the full transcript (exit 2, two structured `ingestion_error` records, an empty
 prediction file).
 
 **(b) The database refuses to rewrite history** (live PostgreSQL 16, schema revision `0002`):
@@ -244,7 +303,7 @@ uv run pytest tests/edu_explain tests/edu/test_emit_contract.py tests/edu/test_r
 **(e) Every path cited in this document exists** — see the path-verification transcript in
 `docs/11-Architecture-and-Dataflow.md` §9.2 (one script covers all four documents).
 
-### 9.2 What I could not verify
+### 10.2 What I could not verify
 
 * **No penetration test, no threat-model review and no external security audit** was performed.
 * The **`claimguard_app` least-privilege role** is defined in the migrations but I did not verify

@@ -35,7 +35,7 @@ from claimguard.review.explanations import (
     MODEL_VERSION_PREFIX,
 )
 from claimguard.review.models import ReviewAction
-from claimguard.review.store import ReviewStore
+from claimguard.review.store import SCHEMA_REVISION, ReviewStore
 
 from tests.edu import RULES_DIR, rules_context
 from tests.review.conftest import (
@@ -74,7 +74,7 @@ async def test_health_reports_the_schema_and_the_rule_catalogue(
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "ok"
-    assert body["schema_revision"] == "0010"
+    assert body["schema_revision"] == SCHEMA_REVISION
     assert body["database"] == "ready"
     assert body["rules_ready"] is True
     assert body["engine_rule_version"] == RULE_VERSION

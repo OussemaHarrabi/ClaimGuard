@@ -1,0 +1,2 @@
+claim_id,coverage_id,status,beneficiary_patient_id,member_id,start_date,end_date
+PHASE1-CSV-001,COV-PHASE1-CSV-001,active,PAT-PHASE1-001,MEM-PHASE1-001,2026-01-01,2026-05-01

@@ -10,12 +10,13 @@ import {
   RefreshCw,
   Search,
   ShieldCheck,
-  Sparkles,
 } from "lucide-react";
 import { Button } from "./ui/button";
 import { Badge } from "./ui/badge";
 import { Input } from "./ui/input";
 import { Textarea } from "./ui/textarea";
+import { AssistantPanel } from "./assistant-panel";
+import { fieldLabel, plainIssue, plainRecommendation } from "../lib/claim-editor";
 
 export type Evidence = {
   readonly path: string;
@@ -87,6 +88,8 @@ export type ReviewWorkspace = {
     readonly run: Run;
     readonly findings: readonly Finding[];
     readonly decisions: readonly Decision[];
+    readonly totalChecks?: number;
+    readonly outcomes?: readonly { ruleId: string; status: string }[];
   } | null;
 };
 
@@ -115,9 +118,7 @@ const RULE_TITLES: Record<string, string> = {
 };
 
 function reviewerExplanation(finding: Finding): string {
-  const detected = finding.explanation.match(/Detected:\s*(.*?)\.\s*Evidence\s*\(/s)?.[1];
-  if (detected) return `Issue: ${detected.charAt(0).toUpperCase()}${detected.slice(1)}.`;
-  return finding.explanation.replace(/^\[deterministic\]\s*/, "");
+  return `Issue: ${plainIssue(finding.explanation)}`;
 }
 
 const ALLOWED_ACTIONS_BY_STATUS: Readonly<Record<string, readonly ReviewAction[]>> = {
@@ -130,6 +131,7 @@ const ALLOWED_ACTIONS_BY_STATUS: Readonly<Record<string, readonly ReviewAction[]
 };
 
 type ReviewCockpitProps = {
+  readonly queueTitle?: string;
   readonly workspace: ReviewWorkspace;
   readonly busy: boolean;
   readonly error: string | null;
@@ -147,8 +149,8 @@ function titleCase(value: string) {
 }
 
 function evidenceLabel(path: string) {
-  const readable = path.replace(/^\//, "").replaceAll("/", " ").replaceAll("_", " ");
-  return readable || "claim evidence";
+  try { return fieldLabel(path); }
+  catch { return path.replace(/^\//, "").replaceAll("/", " ").replaceAll("_", " ") || "claim evidence"; }
 }
 
 function evidenceValue(value: unknown) {
@@ -183,7 +185,49 @@ function decisionDisabled(
   return !note.trim() || busy || !allowed.includes(action);
 }
 
+function FindingGuidance({ finding, run }: { finding: Finding; run: Run }) {
+  const verifierDetail = [
+    ...finding.provenance.rejectionReasons,
+    finding.provenance.declinedReason,
+  ].filter((reason): reason is string => Boolean(reason));
+  const recommendationKind = finding.provenance.fallbackUsed
+    ? "Safe fallback recommendation"
+    : finding.provenance.source === "model"
+      ? "SLM correction recommendation"
+      : "Rule-based next step";
+  return <aside className="explanation-block" data-testid={`explanation-${finding.ruleId}`} aria-label={`Explanation and next step for ${finding.ruleId}`}>
+    <div className="provenance-line">
+      <span className={`provenance ${finding.provenance.fallbackUsed ? "fallback" : "assisted"}`}>
+        {finding.provenance.fallbackUsed ? "Deterministic fallback" : finding.provenance.source === "model" ? "Model-assisted wording" : "Deterministic wording"}
+      </span>
+      <span>{finding.ruleId}</span>
+    </div>
+    <p>{reviewerExplanation(finding)}</p>
+    <section className="correction-recommendation" aria-label={`${recommendationKind} for ${finding.ruleId}`}>
+      <span>{recommendationKind}</span>
+      <p>{plainRecommendation(finding.correctionRecommendation)}</p>
+      <small>Verify against source documents. No claim field is changed automatically.</small>
+    </section>
+    {/* The conversation belongs with the deterministic explanation it is about: same finding,
+        same run, and the same resumed thread when the reviewer comes back to it. */}
+    <AssistantPanel runId={run.runId} ruleId={finding.ruleId} evidence={finding.evidence} />
+    <details className="technical-provenance"><summary>Technical provenance for {finding.ruleId}</summary>
+      <dl className="provenance-details" aria-label={`Provenance for ${finding.ruleId}`}>
+        <div><dt>Provider</dt><dd>{finding.provenance.provider}</dd></div>
+        <div><dt>Run model</dt><dd>{run.modelVersion}</dd></div>
+        <div><dt>Prompt</dt><dd>{run.promptVersion}</dd></div>
+        <div><dt>Wording</dt><dd>{finding.provenance.rewritten ? "Rewritten" : "Engine original"}</dd></div>
+        <div><dt>Security</dt><dd>{titleCase(finding.provenance.securityDecision)}</dd></div>
+        <div><dt>Receipt</dt><dd title={finding.provenance.receiptSha256 ?? "Not recorded"}>{finding.provenance.receiptSha256 ? `Receipt ${finding.provenance.receiptSha256.slice(0, 8)}` : "Not recorded"}</dd></div>
+      </dl>
+    </details>
+    <div className="citation-row">{finding.evidence.map((entry, index) => <span className="citation" key={entry.path}>E{index + 1} · {evidenceLabel(entry.path)}</span>)}</div>
+    {verifierDetail.length ? <div className="verifier-warning"><AlertTriangle size={16} aria-hidden="true" /><span>Draft guidance not used: {verifierDetail.join(", ")}.</span></div> : null}
+  </aside>;
+}
+
 export function ReviewCockpit({
+  queueTitle = "Claims queue",
   workspace,
   busy,
   error,
@@ -195,8 +239,10 @@ export function ReviewCockpit({
   const selected = workspace.selected;
   const [reviewNotes, setReviewNotes] = useState<Record<string, string>>({});
   const [claimQuery, setClaimQuery] = useState("");
+  const [queueFilter, setQueueFilter] = useState("all");
   const visibleClaims = workspace.claims.filter((claim) =>
-    claim.claimId.toLocaleLowerCase().includes(claimQuery.trim().toLocaleLowerCase()),
+    claim.claimId.toLocaleLowerCase().includes(claimQuery.trim().toLocaleLowerCase()) &&
+    (queueFilter === "all" || (queueFilter === "open" ? claim.unresolved > 0 : claim.unresolved === 0)),
   );
   const selectedClaim = workspace.claims.find((claim) => claim.runId === selected?.run.runId);
   const selectedUnresolved =
@@ -227,7 +273,7 @@ export function ReviewCockpit({
           <div className="panel-heading queue-heading">
             <div>
               <p className="eyebrow">Review workspace</p>
-              <h1 id="queue-title">Claims queue</h1>
+              <h1 id="queue-title">{queueTitle}</h1>
             </div>
             <Button
               className="icon-button"
@@ -254,6 +300,8 @@ export function ReviewCockpit({
               />
             </span>
           </label>
+
+          <div className="queue-filters" aria-label="Filter claims by review state">{[["all", "All"], ["open", "Needs review"], ["complete", "Reviewed"]].map(([value, label]) => <button type="button" key={value} aria-pressed={queueFilter === value} onClick={() => setQueueFilter(value)}>{label}</button>)}</div>
 
           <div className="queue-summary" aria-label="Queue summary">
             <span>
@@ -296,7 +344,7 @@ export function ReviewCockpit({
               );
             })}
             {!visibleClaims.length ? (
-              <p className="queue-empty">No claim IDs match “{claimQuery.trim()}”.</p>
+              <p className="queue-empty">{busy ? "Loading your claims…" : !workspace.claims.length ? "Your queue is clear. Assigned claims will appear here when they are ready for review." : "No claims match these filters. Try another claim ID or choose All."}</p>
             ) : null}
           </div>
         </section>
@@ -345,17 +393,21 @@ export function ReviewCockpit({
                 </section>
               ) : null}
 
-              <div className="section-heading">
+              <div className="section-heading paired-review-heading">
                 <div>
-                  <p className="eyebrow">Engine output</p>
+                  <p className="eyebrow">Check the source values</p>
                   <h2 id="findings-title">Deterministic findings</h2>
                 </div>
-                <span className="finding-count">{selected.findings.length} checks</span>
+                <div><p className="eyebrow">Human-readable guidance</p><h2 id="explanation-title">Explanation &amp; next step</h2></div>
+                <span className="finding-count">{selected.totalChecks ?? selected.findings.length} rules run · {selected.findings.length} need review</span>
               </div>
+              <p className="status-boundary"><ShieldCheck size={17} aria-hidden="true" />AI wording cannot change this claim status. The deterministic engine remains authoritative.</p>
+
+              {selected.outcomes ? <details className="all-rule-outcomes"><summary>View all {selected.outcomes.length} rule outcomes</summary><ol>{selected.outcomes.map((outcome) => <li key={outcome.ruleId}><span>{outcome.ruleId}</span><strong>{titleCase(outcome.status)}</strong></li>)}</ol></details> : null}
 
               <div className="finding-stack">
                 {selected.findings.map((finding, index) => (
-                  <article className="finding-row" key={finding.ruleId}>
+                  <article className="finding-row" data-testid={`finding-${finding.ruleId}`} key={finding.ruleId}>
                     <div className={`finding-index ${statusTone(finding.status)}`} aria-hidden="true">
                       {index + 1}
                     </div>
@@ -479,9 +531,15 @@ export function ReviewCockpit({
                         <span>{titleCase(finding.reviewStatus)}</span>
                       </div>
                     </div>
+                    <FindingGuidance finding={finding} run={selected.run} />
                   </article>
                 ))}
               </div>
+
+              <section className="audit-preview" id="audit" aria-labelledby="audit-title">
+                <div className="audit-heading"><h3 id="audit-title">Recent audit activity</h3><History size={16} aria-hidden="true" /></div>
+                {selected.decisions.length ? <ol>{selected.decisions.slice(-3).map((decision) => <li key={decision.decisionId}><span>{decision.actor}</span><strong>{titleCase(decision.action)}</strong><time dateTime={decision.createdAt}>{relativeActivity(decision.createdAt)}</time></li>)}</ol> : <p>No reviewer decisions recorded for this version.</p>}
+              </section>
 
             </>
           ) : (
@@ -493,137 +551,6 @@ export function ReviewCockpit({
           )}
         </section>
 
-        <aside className="explanation-panel" aria-labelledby="explanation-title">
-          <div className="section-heading explanation-heading">
-            <div>
-              <p className="eyebrow">Human-readable guidance</p>
-              <h2 id="explanation-title">Explanation &amp; next step</h2>
-            </div>
-            <span className="ai-mark" aria-hidden="true">
-              <Sparkles size={17} />
-            </span>
-          </div>
-
-          {selected ? (
-            <>
-              <p className="status-boundary">
-                <ShieldCheck size={17} aria-hidden="true" />
-                AI wording cannot change this claim status. The deterministic engine remains authoritative.
-              </p>
-
-              <div className="explanation-list">
-                {selected.findings.map((finding) => {
-                  const verifierDetail = [
-                    ...finding.provenance.rejectionReasons,
-                    finding.provenance.declinedReason,
-                  ].filter((reason): reason is string => Boolean(reason));
-                  const recommendationKind = finding.provenance.fallbackUsed
-                    ? "Safe fallback recommendation"
-                    : finding.provenance.source === "model"
-                      ? "SLM correction recommendation"
-                      : "Rule-based next step";
-                  return (
-                    <article
-                    className="explanation-block"
-                    data-testid={`explanation-${finding.ruleId}`}
-                    key={finding.ruleId}
-                  >
-                    <div className="provenance-line">
-                      <span className={`provenance ${finding.provenance.fallbackUsed ? "fallback" : "assisted"}`}>
-                        {finding.provenance.fallbackUsed
-                          ? "Deterministic fallback"
-                          : finding.provenance.source === "model"
-                            ? "Model-assisted wording"
-                            : "Deterministic wording"}
-                      </span>
-                      <span>{finding.ruleId}</span>
-                    </div>
-                    <p>{reviewerExplanation(finding)}</p>
-                    <section
-                      className="correction-recommendation"
-                      aria-label={`${recommendationKind} for ${finding.ruleId}`}
-                    >
-                      <span>{recommendationKind}</span>
-                      <p>{finding.correctionRecommendation}</p>
-                      <small>Human review required · no claim field is changed automatically.</small>
-                    </section>
-                    <details className="technical-provenance"><summary>Technical provenance for {finding.ruleId}</summary>
-                    <dl className="provenance-details" aria-label={`Provenance for ${finding.ruleId}`}>
-                      <div>
-                        <dt>Provider</dt>
-                        <dd>{finding.provenance.provider}</dd>
-                      </div>
-                      <div>
-                        <dt>Run model</dt>
-                        <dd>{selected.run.modelVersion}</dd>
-                      </div>
-                      <div>
-                        <dt>Prompt</dt>
-                        <dd>{selected.run.promptVersion}</dd>
-                      </div>
-                      <div>
-                        <dt>Wording</dt>
-                        <dd>{finding.provenance.rewritten ? "Rewritten" : "Engine original"}</dd>
-                      </div>
-                      <div>
-                        <dt>Security</dt>
-                        <dd>{titleCase(finding.provenance.securityDecision)}</dd>
-                      </div>
-                      <div>
-                        <dt>Receipt</dt>
-                        <dd title={finding.provenance.receiptSha256 ?? "Not recorded"}>
-                          {finding.provenance.receiptSha256
-                            ? `Receipt ${finding.provenance.receiptSha256.slice(0, 8)}`
-                            : "Not recorded"}
-                        </dd>
-                      </div>
-                    </dl>
-                    </details>
-                    <div className="citation-row">
-                      {finding.evidence.map((entry, index) => (
-                        <span className="citation" key={entry.path}>
-                          E{index + 1} · {evidenceLabel(entry.path)}
-                        </span>
-                      ))}
-                    </div>
-                    {verifierDetail.length ? (
-                      <div className="verifier-warning">
-                        <AlertTriangle size={16} aria-hidden="true" />
-                        <span>Model draft rejected: {verifierDetail.join(", ")}.</span>
-                      </div>
-                    ) : null}
-                  </article>
-                  );
-                })}
-              </div>
-
-              <section className="audit-preview" id="audit" aria-labelledby="audit-title">
-                <div className="audit-heading">
-                  <h3 id="audit-title">Recent audit activity</h3>
-                  <History size={16} aria-hidden="true" />
-                </div>
-                {selected.decisions.length ? (
-                  <ol>
-                    {selected.decisions.slice(-3).map((decision) => (
-                      <li key={decision.decisionId}>
-                        <span>{decision.actor}</span>
-                        <strong>{titleCase(decision.action)}</strong>
-                        <time dateTime={decision.createdAt}>{relativeActivity(decision.createdAt)}</time>
-                      </li>
-                    ))}
-                  </ol>
-                ) : (
-                  <p>No reviewer decisions recorded for this version.</p>
-                )}
-              </section>
-            </>
-          ) : (
-            <div className="empty-state compact">
-              <Sparkles size={24} aria-hidden="true" />
-              <p>Explanations appear after a claim is selected.</p>
-            </div>
-          )}
-        </aside>
       </main>
     </div>
   );

@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0.0",
+  "claim_id": "PHASE1-JSON-001",
+  "invoice_number": "INV-PHASE1-JSON-001",
+  "patient_id": "PAT-PHASE1-001",
+  "member_id": "MEM-PHASE1-001",
+  "provider_id": "EDU-PROV-03",
+  "payer_id": "EDU-PAYER",
+  "policy_id": "EDU-PLUS",
+  "diagnosis_code": "DX-EDU-02",
+  "submission_date": "2026-06-06",
+  "currency": "SAR",
+  "total_amount": 330,
+  "coverage": {"coverage_id": "COV-PHASE1-JSON-001", "status": "active", "beneficiary_patient_id": "PAT-PHASE1-001", "member_id": "MEM-PHASE1-001", "start_date": "2026-01-01", "end_date": "2026-05-01"},
+  "lines": [
+    {"line_id": "L1", "service_code": "SVC-LAB", "service_date": "2026-05-25", "modifier": null, "quantity": 1, "unit_price": 140, "net_amount": 140, "authorization_id": null},
+    {"line_id": "L2", "service_code": "SVC-CONSULT", "service_date": "2026-05-25", "modifier": null, "quantity": 1, "unit_price": 190, "net_amount": 190, "authorization_id": null}
+  ],
+  "authorizations": [],
+  "attachments": [],
+  "notes": "Synthetic teaching claim. No real patient or payer information."
+}
