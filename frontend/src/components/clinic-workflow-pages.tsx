@@ -54,6 +54,7 @@ const REPORTS: Record<string, { title: string; eyebrow: string; description: str
   audit: { title: "Audit", eyebrow: "Traceability", description: "Clinic-scoped run provenance and hash-chain references.", endpoint: "/v1/audit" },
   "intake-operations": { title: "Intake Jobs", eyebrow: "Service monitoring", description: "Job counts by status. Document and claim content is excluded.", endpoint: "/v1/intake-jobs/operations" },
   versions: { title: "Versions", eyebrow: "Version inventory", description: "Rule, model, and prompt versions observed in this clinic's runs.", endpoint: "/v1/versions" },
+  "redacted-logs": { title: "Redacted Logs", eyebrow: "Operational events", description: "Intake job status and error codes only; no document or claim contents.", endpoint: "/v1/redacted-logs" },
   "audit-integrity": { title: "Audit Integrity", eyebrow: "Tamper evidence", description: "Verify every event link in the shared immutable ledger, without exposing claim content.", endpoint: "/v1/audit-integrity" },
 };
 

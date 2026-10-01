@@ -36,6 +36,7 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "audit-integrity": ShieldCheck, configuration: Settings2,
   roles: Users,
   "platform-activity": Activity,
+  "redacted-logs": FileText,
 };
 
 const NAVIGATION: Record<ClinicRole, Destination[]> = {
@@ -70,6 +71,7 @@ const NAVIGATION: Record<ClinicRole, Destination[]> = {
     { label: "Traces", page: "traces" },
     { label: "Audit Integrity", page: "audit-integrity" },
     { label: "Intake Jobs", page: "intake-operations" },
+    { label: "Redacted Logs", page: "redacted-logs" },
     { label: "Versions", page: "versions" },
     { label: "Configuration", page: "configuration" },
     { label: "Platform Activity", page: "platform-activity" },
