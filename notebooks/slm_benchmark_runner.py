@@ -22,6 +22,7 @@ from claimguard.benchmark.corpus import fingerprint, generate_cases
 from claimguard.benchmark.experiment import run_explanation, run_followup
 from claimguard.benchmark.provenance import freeze_metadata
 from claimguard.benchmark.scoring import compare_quantization, score_output, summarize
+from claimguard.benchmark.starter import starter_cases, stratified_cases
 from claimguard.edu.explain.fallback import build_explanation
 from claimguard.edu.policy import RuleContext
 
@@ -45,20 +46,20 @@ def append_json(path, value):
 
 def cases_for(args):
     context = RuleContext.from_rules_dir(ROOT / "tests/edu/fixtures/pack_reference")
+    if getattr(args, "starter_pack", None):
+        expected_split = "screen" if args.starter_split == "development" else "release"
+        if args.split != expected_split:
+            raise ValueError(f"Starter {args.starter_split} requires --split {expected_split}")
+        cases = starter_cases(args.starter_pack, args.starter_split, context)
+        ordered = stratified_cases(cases, per_stratum=args.per_stratum)
+        return ordered[: args.limit] if args.limit else ordered
     cases = [
         case
         for case in generate_cases(context, variants=args.variants)
         if case["split"] == args.split
     ]
-    # Round-robin rules/families, rather than a prefix full of PASS findings.
-    ordered = sorted(
-        cases,
-        key=lambda case: (
-            case["case_id"].split("-")[-2],
-            case["finding"]["rule_id"],
-            case["family"],
-        ),
-    )
+    # Round-robin every rule/status stratum, not an R001-dominated prefix.
+    ordered = stratified_cases(cases, per_stratum=len(cases))
     return ordered[: args.limit] if args.limit else ordered
 
 
@@ -98,6 +99,11 @@ def source_manifest(cases, args):
         "limit": args.limit,
         "max_new_tokens": args.max_new_tokens,
         "seed": args.seed,
+        "starter_split": getattr(args, "starter_split", None)
+        if getattr(args, "starter_pack", None)
+        else None,
+        "per_stratum": getattr(args, "per_stratum", 0),
+        "followup_families": getattr(args, "followup_families", 0),
         "decoding": "greedy; thinking disabled via chat template; no JSON grammar masking",
         "python": platform.python_version(),
         "packages": packages,
@@ -277,7 +283,14 @@ def run(args):
                     append_json(path, record)
                     print(f"{config}: {case['case_id']} fallback={record['fallback_used']}")
                 if args.followups:
-                    run_questions(cases, folder, generate, measurements, hardware_hash)
+                    run_questions(
+                        cases,
+                        folder,
+                        generate,
+                        measurements,
+                        hardware_hash,
+                        max_families=getattr(args, "followup_families", 0),
+                    )
                 runtime = json.loads((folder / "runtime.json").read_text())
                 runtime["status"] = "completed"
                 save_json(folder / "runtime.json", runtime)
@@ -312,14 +325,19 @@ QUESTIONS = [
 ]
 
 
-def run_questions(cases, folder, generate, measurements, hardware_hash):
+def run_questions(cases, folder, generate, measurements, hardware_hash, *, max_families=0):
     path = folder / "followups.jsonl"
     done = {row["question_id"] for row in read_jsonl(path)} if path.exists() else set()
     families = {}
     for case in cases:
         if case["finding"]["status"] in ("FAIL", "UNABLE_TO_ASSESS"):
             families.setdefault(case["family"], case)
-    for case in families.values():
+    chosen = list(families.values())
+    if max_families < 0:
+        raise ValueError("followup_families cannot be negative")
+    if max_families:
+        chosen = chosen[:max_families]
+    for case in chosen:
         history = []
         for category, question, refusal_expected in QUESTIONS:
             question_id = f"{case['case_id']}:{category}"
@@ -384,7 +402,13 @@ def report(args):
                             "raw_text": raw_text,
                         }
                     )
-            result = summarize(cases, rows, limited=not manifest or bool(manifest.get("limit")))
+            result = summarize(
+                cases,
+                rows,
+                limited=not manifest
+                or bool(manifest.get("limit"))
+                or bool(manifest.get("per_stratum")),
+            )
             result["fallback_count"] = sum(record["fallback_used"] for record in records)
             question_path = args.output / config / "followups.jsonl"
             questions = read_jsonl(question_path) if question_path.exists() else []
@@ -485,6 +509,24 @@ def parser():
     command.add_argument("--max-new-tokens", type=int, default=700)
     command.add_argument("--seed", type=int, default=42)
     command.add_argument("--followups", action="store_true")
+    command.add_argument(
+        "--followup-families",
+        type=int,
+        default=0,
+        help="Explicit conversation family budget; 0 tests every family",
+    )
+    command.add_argument(
+        "--starter-pack", type=Path, help="Private delivered synthetic pack root; never committed"
+    )
+    command.add_argument(
+        "--starter-split", choices=("development", "validation", "stress"), default="validation"
+    )
+    command.add_argument(
+        "--per-stratum",
+        type=int,
+        default=0,
+        help="Findings per available rule/status stratum; 0 uses every finding",
+    )
     command.add_argument(
         "--reviews", type=Path, help="Two output-bound human review records in JSON"
     )
