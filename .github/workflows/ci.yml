@@ -86,7 +86,7 @@ jobs:
         run: uv run alembic upgrade head
 
       - name: Run tests (LLM/e2e are opt-in markers, excluded here)
-        run: uv run pytest -m "not llm and not e2e" --cov=claimguard --cov-report=xml:coverage.xml --cov-report=term-missing
+        run: uv run pytest tests team/b2-slm-benchmark/test_cases.py -m "not llm and not e2e" --cov=claimguard --cov-report=xml:coverage.xml --cov-report=term-missing
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v7.0.1

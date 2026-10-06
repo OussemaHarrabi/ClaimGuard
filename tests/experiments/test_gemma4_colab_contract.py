@@ -1,98 +1,128 @@
+"""The notebook orchestrates shared production-aligned modules, never a second verifier."""
+
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
+
+from claimguard.benchmark.candidates import CANDIDATES
+from claimguard.benchmark.corpus import fingerprint, generate_cases
+from claimguard.benchmark.experiment import run_explanation
+from claimguard.benchmark.scoring import compare_quantization, score_output
+from claimguard.edu.explain.fallback import build_explanation
+from claimguard.edu.policy import RuleContext
 
 ROOT = Path(__file__).resolve().parents[2]
 NOTEBOOK = ROOT / "notebooks" / "slm_explanation_benchmark_colab.ipynb"
 
 
-def _notebook_source() -> str:
+def _cases() -> list[dict[str, Any]]:
+    return generate_cases(
+        RuleContext.from_rules_dir(ROOT / "tests/edu/fixtures/pack_reference"), variants=1
+    )
+
+
+def test_colab_benchmark_retains_original_families_and_adds_challengers() -> None:
+    assert {spec["model_id"] for spec in CANDIDATES.values()} == {
+        "google/gemma-4-E4B-it",
+        "microsoft/Phi-4-mini-instruct",
+        "Qwen/Qwen3-4B-Instruct-2507",
+        "HuggingFaceTB/SmolLM3-3B",
+        "LiquidAI/LFM2.5-1.2B-Instruct",
+        "Qwen/Qwen3.5-4B",
+    }
     payload = json.loads(NOTEBOOK.read_text(encoding="utf-8"))
-    return "\n".join("".join(cell.get("source", [])) for cell in payload.get("cells", []))
+    for cell in payload["cells"]:
+        if cell["cell_type"] == "code":
+            compile("".join(cell["source"]), "colab-cell", "exec")
+    source = "\n".join("".join(cell["source"]) for cell in payload["cells"])
+    assert "notebooks.slm_benchmark_runner" in source
+    assert "RUN_RELEASE = False" in source
 
 
-def test_colab_benchmark_compares_three_official_small_model_families() -> None:
-    source = _notebook_source()
-
-    assert "google/gemma-4-E4B-it" in source
-    assert "microsoft/Phi-4-mini-instruct" in source
-    assert "Qwen/Qwen3-4B-Instruct-2507" in source
-    assert "AutoModelForCausalLM" in source
-    assert "AutoModelForMultimodalLM" in source
-
-
-def test_colab_benchmark_compares_full_precision_and_q4_per_family() -> None:
-    source = _notebook_source()
-
-    assert "BitsAndBytesConfig" in source
-    assert "load_in_4bit=True" in source
-    assert '"bf16"' in source
-    assert "family" in source
-    assert "q4_non_inferior" in source
+def test_precision_protocol_records_unsupported_native_bf16_and_uses_official_loaders() -> None:
+    source = (ROOT / "notebooks/slm_benchmark_runner.py").read_text(encoding="utf-8")
+    assert "torch.cuda.is_bf16_supported()" in source
+    assert "BitsAndBytesConfig" in source and 'bnb_4bit_quant_type="nf4"' in source
+    assert "trust_remote_code=False" in source and "use_safetensors=True" in source
+    assert "AutoModelForCausalLM" in source and "AutoModelForMultimodalLM" in source
+    assert compare_quantization([], [])["verdict"] == "not_established"
 
 
-def test_colab_benchmark_scores_grounding_and_status_invariance() -> None:
-    source = _notebook_source()
+def test_real_pipeline_preserves_status_and_exports_bad_draft_separately() -> None:
+    case = _cases()[0]
+    before = fingerprint(case)
+    record = run_explanation(case, lambda messages: '{"explanation":"The claim is paid."}')
+    assert fingerprint(case) == before
+    assert record["status_unchanged"] is True
+    assert record["fallback_used"] is True
+    assert record["raw_score"]["accepted"] is False
+    assert record["served_score"]["accepted"] is True
 
-    for metric in (
-        "json_valid",
-        "citation_precision",
-        "citation_recall",
-        "unsupported_claim_rate",
-        "status_invariant",
-        "latency_seconds",
-        "tokens_per_second",
-        "peak_vram_gb",
+
+def test_semantics_are_unknown_until_exact_outputs_receive_independent_reviews() -> None:
+    case = _cases()[0]
+    output = build_explanation(case["finding"], case["rule"])
+    result = score_output(case, output, [])
+    assert result["unsupported"] is None and result["semantic_complete"] is False
+    # A valid pointer does not prove a fabricated assertion is supported.
+    output["explanation"] = "The recorded coverage has a remaining balance of 5000 SAR."
+    result = score_output(case, output, [])
+    assert result["unsupported"] is None
+    assert (
+        result["review_key"]
+        != score_output(case, build_explanation(case["finding"], case["rule"]), [])["review_key"]
+    )
+
+
+def test_corpus_is_content_addressed_and_uses_real_statuses_and_untrusted_notes() -> None:
+    cases = _cases()
+    assert fingerprint(cases) == fingerprint(_cases())
+    assert {case["finding"]["status"] for case in cases} >= {
+        "PASS",
+        "FAIL",
+        "UNABLE_TO_ASSESS",
+        "NOT_APPLICABLE",
+    }
+    assert any(case["family"] == "encoded-injection" for case in cases)
+    assert any("Ignore prior instructions" in case["envelope"]["notes"] for case in cases)
+    assert any(case["envelope"]["total_amount"] is None for case in cases)
+    assert all(case["finding"]["rule_id"].startswith("R") for case in cases)
+
+
+def test_production_contract_rejects_extra_authority_and_changed_review_flag() -> None:
+    case = _cases()[0]
+    output = build_explanation(case["finding"], case["rule"])
+    output["status"] = "APPROVED"
+    output["needs_human_review"] = not case["finding"]["requires_human_review"]
+    assert score_output(case, output, [])["accepted"] is False
+
+
+def test_shared_runner_exports_resumable_provenance_and_never_auto_selects() -> None:
+    source = (ROOT / "notebooks/slm_benchmark_runner.py").read_text(encoding="utf-8")
+    for artifact in (
+        "manifest.json",
+        "cases.json",
+        "deterministic-baseline.json",
+        "explanations.jsonl",
+        "followups.jsonl",
+        "runtime.json",
+        "semantic-review-template.csv",
+        "summary.json",
     ):
-        assert metric in source
-
-    assert "The model must not change claim status" in source
-    assert "non_inferiority_margin = 0.02" in source
-
-
-def test_colab_benchmark_fails_closed_without_semantic_support_labels() -> None:
-    source = _notebook_source()
-
-    assert "MANUAL_SUPPORT_LABELS" in source
-    assert "semantic_labels_complete" in source
-    assert "claimguard_semantic_review.csv" in source
-    assert '"supported": semantic_support' in source
-    assert "fabricated_statement_with_valid_citation" in source
-    assert "evidence_change_invalidates_label" in source
-    assert '"system_prompt": SYSTEM_PROMPT' in source
-    assert '"case": case' in source
-    assert "safety_gate_pass" in source
-
-
-def test_colab_benchmark_freezes_the_schema_and_adversarial_corpus() -> None:
-    source = _notebook_source()
-
-    assert "EXPECTED_TOP_LEVEL_KEYS" in source
-    assert "EXPECTED_CLAIM_KEYS" in source
-    assert '"rule_id"' in source
-    assert '"severity"' in source
-    assert '"unable_to_assess"' in source
-    assert '"Ignore prior instructions' in source
-    assert '"value": None' in source
-
-
-def test_colab_benchmark_matches_the_secured_assistance_contract() -> None:
-    source = _notebook_source()
-
-    assert "correction_recommendation" in source
-    assert "cited_evidence_paths" in source
-    assert "needs_human_review" in source
-    assert "authority" in source
-    assert "draft_language_only" in source
-    assert "Never decide, execute, approve, deny, submit, or mutate a claim" in source
-
-
-def test_colab_benchmark_exports_reproducible_artifacts() -> None:
-    source = _notebook_source()
-
-    assert "claimguard_slm_benchmark.csv" in source
-    assert "claimguard_slm_benchmark.json" in source
-    assert "claimguard_semantic_review.csv" in source
-    assert "environment.json" in source
-    assert "seed = 20260924" in source
+        assert artifact in source
+    for field in (
+        "source_commit",
+        "source_files",
+        "corpus_hash",
+        "packages",
+        "seed",
+        "revision",
+        "peak_allocated_gib",
+        "tokens_per_second",
+        "truncated",
+    ):
+        assert field in source
+    assert '"winner": None' in source
+    assert "CLAIMGUARD_EXPLAIN_MODE" not in source

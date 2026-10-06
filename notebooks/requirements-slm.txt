@@ -1,0 +1,7 @@
+# Verified PyPI releases on 2026-10-06. GPU experiments only; API lockfile unchanged.
+transformers==5.18.0
+accelerate==1.15.0
+bitsandbytes==0.50.2
+huggingface-hub==2.1.1
+sentencepiece==0.2.2
+# Keep Colab's CUDA-compatible torch (>=2.5); capture its exact version in the manifest.
