@@ -44,7 +44,7 @@ def append_json(path, value):
         stream.flush()
 
 
-def cases_for(args):
+def cases_for(args: argparse.Namespace):
     context = RuleContext.from_rules_dir(ROOT / "tests/edu/fixtures/pack_reference")
     if getattr(args, "starter_pack", None):
         expected_split = "screen" if args.starter_split == "development" else "release"
@@ -361,7 +361,7 @@ def run_questions(cases, folder, generate, measurements, hardware_hash, *, max_f
                 history.append({"question": question, "answer": result["served"]})
 
 
-def report(args):
+def report(args: argparse.Namespace) -> None:
     cases = json.loads((args.output / "cases.json").read_text(encoding="utf-8"))
     by_id = {case["case_id"]: case for case in cases}
     reviews = json.loads(args.reviews.read_text(encoding="utf-8")) if args.reviews else []

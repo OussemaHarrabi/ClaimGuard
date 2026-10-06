@@ -2,6 +2,8 @@
 
 import json
 from copy import deepcopy
+from pathlib import Path
+from typing import Any
 
 import pytest
 from claimguard.benchmark.corpus import generate_cases
@@ -10,7 +12,7 @@ from claimguard.edu.policy import RuleContext
 from tests.edu import RULES_DIR
 
 
-def test_small_screen_budget_still_covers_all_rules_and_statuses():
+def test_small_screen_budget_still_covers_all_rules_and_statuses() -> None:
     from notebooks.slm_benchmark_runner import cases_for, parser
 
     cases = cases_for(parser().parse_args(["prepare", "--limit", "60"]))
@@ -25,7 +27,7 @@ def test_small_screen_budget_still_covers_all_rules_and_statuses():
     }
 
 
-def test_sampled_starter_report_does_not_claim_unlimited_run(tmp_path):
+def test_sampled_starter_report_does_not_claim_unlimited_run(tmp_path: Path) -> None:
     from argparse import Namespace
 
     from notebooks.slm_benchmark_runner import report
@@ -38,11 +40,11 @@ def test_sampled_starter_report_does_not_claim_unlimited_run(tmp_path):
     assert summary["configurations"]["gemma4-e4b-nf4"]["gates"]["unlimited_run"] is False
 
 
-def test_stratification_covers_every_available_rule_status_before_repeating():
+def test_stratification_covers_every_available_rule_status_before_repeating() -> None:
     cases = generate_cases(RuleContext.from_rules_dir(RULES_DIR), variants=1)
     selected = stratified_cases(cases, per_stratum=1)
 
-    def key(case):
+    def key(case: dict[str, Any]) -> tuple[str, str]:
         return case["finding"]["rule_id"], case["finding"]["status"]
 
     assert {key(case) for case in selected} == {key(case) for case in cases}
@@ -50,7 +52,7 @@ def test_stratification_covers_every_available_rule_status_before_repeating():
     assert stratified_cases(cases, per_stratum=0) == cases
 
 
-def test_pack_gold_is_checked_but_not_used_to_construct_model_finding(tmp_path):
+def test_pack_gold_is_checked_but_not_used_to_construct_model_finding(tmp_path: Path) -> None:
     source = generate_cases(RuleContext.from_rules_dir(RULES_DIR), variants=1)[:15]
     folder = tmp_path / "data" / "validation"
     folder.mkdir(parents=True)
@@ -86,7 +88,7 @@ def test_pack_gold_is_checked_but_not_used_to_construct_model_finding(tmp_path):
         starter_cases(tmp_path, "validation", RuleContext.from_rules_dir(RULES_DIR))
 
 
-def test_pack_missing_gold_pair_is_not_silently_accepted(tmp_path):
+def test_pack_missing_gold_pair_is_not_silently_accepted(tmp_path: Path) -> None:
     source = generate_cases(RuleContext.from_rules_dir(RULES_DIR), variants=1)[:15]
     folder = tmp_path / "data" / "stress"
     folder.mkdir(parents=True)
