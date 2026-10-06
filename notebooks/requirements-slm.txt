@@ -2,6 +2,7 @@
 transformers==5.18.0
 accelerate==1.15.0
 bitsandbytes==0.50.2
-huggingface-hub==2.1.1
+# Tokenizers 0.23.x requires hub <2.0; Transformers 5.18 requires >=1.31.
+huggingface-hub==1.31.0
 sentencepiece==0.2.2
 # Keep Colab's CUDA-compatible torch (>=2.5); capture its exact version in the manifest.
