@@ -11,6 +11,13 @@ Read [the full protocol, setup, review rubric and release gates](../docs/26-Prod
 before declaring a winner. The notebook defaults to a small screening smoke run. Held-out release
 execution is deliberately opt-in. **No candidate is newly selected for deployment.**
 
+The recommended organizer-data section now checks all 9,000 supplied synthetic
+gold pairs, then compares six checkpoints on 92 stratified validation findings.
+Upload the private synthetic data archive to your own Colab runtime first.
+See [organizer-data protocol](../docs/27-Organizer-Data-SLM-Evaluation.md) for stress,
+conversation and paired precision checks. Research selection is distinct from
+deployment approval; sampled studies cannot bypass the full-release gates.
+
 `slm_benchmark_runner.py` is the common resumable CLI. Run it as a module from the repository
 root: `python -m notebooks.slm_benchmark_runner --help`.
 `requirements-slm.txt` contains GPU-only dependency pins; backend dependencies remain locked separately.
