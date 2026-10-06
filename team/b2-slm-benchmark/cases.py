@@ -34,8 +34,7 @@ CASES: list[dict[str, Any]] = [
         "severity": "blocking",
         "status": "needs_correction",
         "finding": (
-            "The plan record and the claim line disagree on whether the "
-            "procedure is covered."
+            "The plan record and the claim line disagree on whether the procedure is covered."
         ),
         "evidence": {
             "E1": {"path": "plan.coverage_flags.CPT_93000", "value": "covered"},
