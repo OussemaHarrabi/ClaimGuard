@@ -87,8 +87,12 @@ assistant scope behavior, not database tenant isolation; the separate clinic/API
 Open [`notebooks/slm_explanation_benchmark_colab.ipynb`](../notebooks/slm_explanation_benchmark_colab.ipynb)
 in Colab. The notebook clones the repository, records the resolved commit, installs the experiment
 requirements and project, runs regression checks, then attempts six models. For published research,
-set `REPO_REF` to a full commit SHA. The notebook defaults to the B2 integration branch while its
-protected PR is pending; after merging, `main` may be used for exploration.
+set `REPO_REF` to a full commit SHA. The notebook defaults to `main` for exploration.
+Setup explicitly fetches `REPO_REF` and checks out its resolved commit, even when retrying in an
+existing `/content/ClaimGuard` checkout. It refuses tracked local edits instead of overwriting them.
+The resolved commit is printed and frozen in each run manifest. If `main` advances, use a new output
+directory for that source: the runner refuses to mix outputs whose fingerprints differ. Pin a full
+commit SHA to resume an unchanged published experiment.
 Keep outputs in a mounted Drive directory if runs must survive
 runtime resets. Do not point different runs at the same directory.
 
@@ -98,6 +102,20 @@ Colab's CUDA-compatible PyTorch is retained and its exact version recorded. Inst
 compatibility and actual generation still require the GPU execution; CPU regression tests do not
 prove they work on every accelerator. Remote model code is disabled, safetensors required, and
 models are kept on a single CUDA device rather than silently CPU-offloaded.
+
+### Colab installation regression, 6 October 2026
+
+The original Hub 2.1.1 pin conflicted with Tokenizers 0.23.x's `<2.0` constraint, despite
+Transformers 5.18 accepting Hub `<3.0`. We reproduced the exact pip failure in a Python 3.13
+T4 runtime and verified installation with Hub 1.31.0, which satisfies both packages.
+Subprocess output now streams into the notebook, including stderr and unbuffered benchmark
+progress, rather than hiding the real error behind `CalledProcessError`. Regression tests
+cover the shared version constraints and visible failure/success output. This setup verification
+is not a model-quality result.
+
+PyTorch's default BF16 capability probe includes emulation and reports `True` on this T4.
+The runner and notebook now explicitly pass `including_emulation=False`, so the native-BF16
+gate does not mislabel emulated support. FP16 remains the T4 reference precision.
 
 Model-free local verification, from the repository root with the dev environment activated:
 

@@ -133,7 +133,7 @@ def load_gpu(candidate, precision, revision, max_new_tokens):
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU required. Use prepare/report for model-free checks.")
-    if precision == "bf16" and not torch.cuda.is_bf16_supported():
+    if precision == "bf16" and not torch.cuda.is_bf16_supported(including_emulation=False):
         raise RuntimeError("Native BF16 unsupported on this GPU. Use FP16 as a named reference.")
     spec = CANDIDATES[candidate]
     dtype = torch.bfloat16 if precision == "bf16" else torch.float16

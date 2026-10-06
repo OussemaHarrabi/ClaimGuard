@@ -43,7 +43,7 @@ def test_colab_benchmark_retains_original_families_and_adds_challengers() -> Non
 
 def test_precision_protocol_records_unsupported_native_bf16_and_uses_official_loaders() -> None:
     source = (ROOT / "notebooks/slm_benchmark_runner.py").read_text(encoding="utf-8")
-    assert "torch.cuda.is_bf16_supported()" in source
+    assert "torch.cuda.is_bf16_supported(including_emulation=False)" in source
     assert "BitsAndBytesConfig" in source and 'bnb_4bit_quant_type="nf4"' in source
     assert "trust_remote_code=False" in source and "use_safetensors=True" in source
     assert "AutoModelForCausalLM" in source and "AutoModelForMultimodalLM" in source
