@@ -6,7 +6,7 @@ Import this module from the notebook (or anywhere) instead of redefining
 CASES inline, so the notebook and the automated tests always use the exact
 same, hash-verifiable corpus.
 """
-from __future__ import annotations
+
 import hashlib
 import json
 from typing import Any
@@ -33,7 +33,10 @@ CASES: list[dict[str, Any]] = [
         "rule_id": "coverage.procedure",
         "severity": "blocking",
         "status": "needs_correction",
-        "finding": "The plan record and the claim line disagree on whether the procedure is covered.",
+        "finding": (
+            "The plan record and the claim line disagree on whether the "
+            "procedure is covered."
+        ),
         "evidence": {
             "E1": {"path": "plan.coverage_flags.CPT_93000", "value": "covered"},
             "E2": {"path": "plan.exclusions[2]", "value": "CPT 93000"},
@@ -129,7 +132,8 @@ def corpus_hash(cases: list[dict[str, Any]] = CASES) -> str:
     return hashlib.sha256(json.dumps(cases, sort_keys=True).encode("utf-8")).hexdigest()[:16]
 
 
-EXPECTED_CORPUS_HASH = "4f85e01314a84214"  # pinned from the 2026-10-06 run; update deliberately if CASES changes
+# Pinned from the 2026-10-06 run; update deliberately if CASES changes.
+EXPECTED_CORPUS_HASH = "4f85e01314a84214"
 
 if __name__ == "__main__":
-    print(f"{len(CASES)} cases, hash={corpus_hash()}")
+    print(f"{len(CASES)} cases, hash={corpus_hash()}")  # noqa: T201

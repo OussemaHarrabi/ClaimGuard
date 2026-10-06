@@ -7,11 +7,13 @@ These check the harness itself (corpus integrity + verifier logic), not
 model quality — model quality is judged from the notebook's scored runs
 in RESULTS.md. Keeping these model-free means they run in CI with no GPU.
 """
+
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from cases import CASES, corpus_hash, EXPECTED_CORPUS_HASH  # noqa: E402
+
+from cases import CASES, EXPECTED_CORPUS_HASH, corpus_hash
 
 
 def get_case(case_id: str) -> dict:
