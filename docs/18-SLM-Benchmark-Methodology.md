@@ -1,5 +1,10 @@
 # 18 — Small-model explanation benchmark methodology
 
+> **Historical protocol:** the measured September artifacts below are preserved unchanged.
+> The active notebook now implements the [production-aligned six-candidate protocol](26-Production-SLM-Benchmark.md).
+> Its expanded corpus, actual application verifier/graph and new GPU runs must be reported separately;
+> do not compare their percentages directly with this small exploratory study.
+
 > **Status:** first Colab run completed on 2026-09-25. No candidate cleared the safety gate, so the
 > deterministic explanation provider remains selected. The executable protocol is
 > `notebooks/slm_explanation_benchmark_colab.ipynb`; exact artifacts are preserved under
